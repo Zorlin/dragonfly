@@ -1,3 +1,9 @@
+# pyinfra inventory
+inventory.py
+inventory.py.prod
+inventory.py.test
+inventory.py.dev
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
