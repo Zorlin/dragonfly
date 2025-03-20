@@ -18,6 +18,8 @@ from textual import events
 from textual.message import Message
 from textual.validation import Length, Number, Function
 from textual.keys import Keys
+import threading
+import time
 
 WELCOME_MD = """
 # Sparx
@@ -31,6 +33,7 @@ Sparx is awesome!
 class Host:
     name: str
     enabled: bool = True
+    connection_status: str = "⏳"  # Default to "checking"
     
     def __str__(self) -> str:
         return self.name
@@ -54,9 +57,9 @@ class HostTable(DataTable):
         super().__init__()
         self.cursor_type = "row"
         self.zebra_stripes = True
-        self.add_column("Enabled", width=7)
-        self.add_column("Status", width=6)
-        self.add_column("Hostname", width=92)
+        self.add_column("☑️", width=2)  # Green tick emoji for Enabled column
+        self.add_column("🌐", width=2)  # Globe emoji for connection status
+        self.add_column("Hostname", width=84)
     
     def compose(self) -> ComposeResult:
         return []
@@ -64,8 +67,13 @@ class HostTable(DataTable):
     def update_hosts(self, hosts: List[Host]) -> None:
         self.clear()
         for host in hosts:
+            # Use checkbox symbols for enabled status
+            enabled_status = "✅" if host.enabled else "☐"
+            # Default to "checking" status - will be updated by ping check
+            connection_status = "⏳"
             self.add_row(
-                "✓" if host.enabled else "✗",
+                enabled_status,
+                connection_status,
                 host.name,
             )
         
@@ -239,6 +247,9 @@ class HostManager(Static):
         table = self.query_one(HostTable)
         table.update_hosts(self.hosts)
         
+        # Start connectivity checks in background
+        self.check_host_connectivity()
+        
         # Restore selection if needed
         if preserve_selection is not None and 0 <= preserve_selection < len(self.hosts):
             self.selected_index = preserve_selection
@@ -312,6 +323,19 @@ class HostManager(Static):
                 except Exception as e:
                     self.notify(f"Error expanding host pattern: {str(e)}", severity="error")
                     
+            # When toggling a host's enabled status
+            if button_id == "toggle-host":
+                if self.selected_index is not None and 0 <= self.selected_index < len(self.hosts):
+                    host = self.hosts[self.selected_index]
+                    host.enabled = not host.enabled
+                    
+                    # Update just the enabled cell
+                    table = self.query_one(HostTable)
+                    enabled_status = "☑️" if host.enabled else "☐"
+                    table.update_cell(self.selected_index, 0, enabled_status)
+                    
+                    self.save_hosts()
+
         except Exception as e:
             print(f"Error in button press handler: {e}")
             self.notify(f"Error processing button: {str(e)}", severity="error")
@@ -468,6 +492,50 @@ class HostManager(Static):
             # Save and update with preserved selection
             self.save_hosts()
             self.update_table(preserve_selection=current_selection)
+
+    def check_host_connectivity(self) -> None:
+        """Check SSH connectivity for all hosts in a background thread"""
+        # Create a new thread to not block the UI
+        threading.Thread(target=self._check_connectivity, daemon=True).start()
+
+    def _check_connectivity(self) -> None:
+        """Background thread to check connectivity for all hosts"""
+        table = self.query_one(HostTable)
+        
+        for idx, host in enumerate(self.hosts):
+            # Try DNS lookup first
+            try:
+                ip = socket.gethostbyname(host.name)
+                
+                # Try connecting to SSH port (22)
+                try:
+                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    s.settimeout(1.0)  # 1 second timeout
+                    result = s.connect_ex((ip, 22))
+                    s.close()
+                    
+                    # Update the status based on connection result
+                    if result == 0:
+                        host.connection_status = "✅"  # Connected successfully
+                    else:
+                        host.connection_status = "❌"  # Failed to connect
+                except:
+                    host.connection_status = "❌"  # Exception during connection
+            except:
+                # DNS lookup failed
+                host.connection_status = "🗺️"
+            
+            # Update the table row with the new status
+            # Need to use call_from_thread since we're in a background thread
+            self.app.call_from_thread(self._update_host_status, idx, host)
+        
+    def _update_host_status(self, idx, host):
+        """Update a single host's status in the table (called from main thread)"""
+        if idx < len(self.hosts):
+            table = self.query_one(HostTable)
+            enabled_status = "☑️" if host.enabled else "☐"
+            table.update_cell(idx, 0, enabled_status)
+            table.update_cell(idx, 1, host.connection_status)
 
 class SparxApp(App):
     host_username: str = ""
