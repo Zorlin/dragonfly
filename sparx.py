@@ -54,7 +54,8 @@ class HostTable(DataTable):
         super().__init__()
         self.cursor_type = "row"
         self.zebra_stripes = True
-        self.add_column("Status", width=8)
+        self.add_column("Enabled", width=7)
+        self.add_column("Status", width=6)
         self.add_column("Hostname", width=92)
     
     def compose(self) -> ComposeResult:
@@ -79,6 +80,22 @@ class HostTable(DataTable):
                 row, _ = self.cursor_coordinate
                 if 0 <= row < len(manager.hosts):
                     manager.selected_index = row
+
+    def on_mount(self) -> None:
+        """When table is mounted, connect to cursor changes"""
+        self.watch(self, "cursor_coordinate", self._on_cursor_changed)
+    
+    def _on_cursor_changed(self, cursor) -> None:
+        """React when the cursor position changes in the table"""
+        if cursor is not None:
+            row, _ = cursor
+            # Get the host manager and update its selected index
+            try:
+                manager = self.app.query_one(HostManager)
+                if 0 <= row < len(manager.hosts):
+                    manager.selected_index = row
+            except Exception:
+                pass
 
 class HostInput(Input):
     """An input field for hostnames with validation"""
@@ -217,10 +234,21 @@ class HostManager(Static):
                         f.write(f"    '{host.name}',\n")
             f.write("]\n")
     
-    def update_table(self) -> None:
+    def update_table(self, preserve_selection=None) -> None:
+        """Update the host table and preserve selection if specified"""
         table = self.query_one(HostTable)
         table.update_hosts(self.hosts)
-        self.update_buttons()
+        
+        # Restore selection if needed
+        if preserve_selection is not None and 0 <= preserve_selection < len(self.hosts):
+            self.selected_index = preserve_selection
+            table.cursor_coordinate = (preserve_selection, 0)
+        # Otherwise, only update if needed
+        elif self.selected_index is not None and self.selected_index >= len(self.hosts):
+            # Selection was out of bounds, fix it
+            self.selected_index = len(self.hosts) - 1 if self.hosts else None
+            if self.selected_index is not None:
+                table.cursor_coordinate = (self.selected_index, 0)
     
     def update_buttons(self) -> None:
         # No visible buttons to update, but we keep the method for future use
@@ -421,6 +449,26 @@ class HostManager(Static):
             table.cursor_coordinate = (0, 0)
             self.selected_index = 0
 
+    def update_selection(self):
+        """Ensure the table cursor position matches selected_index"""
+        table = self.query_one(HostTable)
+        if self.selected_index is not None and 0 <= self.selected_index < len(self.hosts):
+            table.cursor_coordinate = (self.selected_index, 0)
+
+    def action_toggle_host(self) -> None:
+        """Enable/disable the selected host"""
+        if self.selected_index is not None and 0 <= self.selected_index < len(self.hosts):
+            # Store the current selection before making changes
+            current_selection = self.selected_index
+            
+            # Toggle the host
+            host = self.hosts[self.selected_index]
+            host.enabled = not host.enabled
+            
+            # Save and update with preserved selection
+            self.save_hosts()
+            self.update_table(preserve_selection=current_selection)
+
 class SparxApp(App):
     host_username: str = ""
     install_type: str = "remote"  # Keep this for backward compatibility
@@ -554,13 +602,17 @@ class SparxApp(App):
                 manager.update_table()
     
     def action_toggle_host(self) -> None:
+        """Enable/disable the selected host"""
+        # Get the host manager
         manager = self.query_one(HostManager)
         if manager.selected_index is not None and 0 <= manager.selected_index < len(manager.hosts):
-            # Toggle enabled status
+            # Toggle the host
             host = manager.hosts[manager.selected_index]
             host.enabled = not host.enabled
+            
+            # Save and update with preserved selection
             manager.save_hosts()
-            manager.update_table()
+            manager.update_table(preserve_selection=manager.selected_index)
 
     def action_press_continue(self) -> None:
         """Simulate pressing the continue button"""
