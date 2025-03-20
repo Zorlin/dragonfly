@@ -11,6 +11,9 @@ for arg in "$@"; do
     esac
 done
 
+# Print a welcome message and what we're about to do
+echo "Welcome to Sparx! We'll install any necessary dependencies, including k0sctl, then deploy your cluster automatically."
+
 # Setup output redirection based on verbosity
 if [ "$SHOW_INSTALL" = true ]; then
     # When showing install, just run commands normally
@@ -45,18 +48,18 @@ else
     }
 fi
 
-# Check that Python3 and pip are installed
-if ! command -v python3 &> /dev/null && ! command -v pip &> /dev/null; then
-    # Detect OS and install Python3 and pip
+# Check for Python3 and pip separately
+if ! command -v python3 &> /dev/null; then
+    # Detect OS and install Python3
     if [ -f /etc/lsb-release ]; then
         # Ubuntu/Debian
-        echo "Installing Python3 and pip..."
+        echo "Installing Python3..."
         run_cmd sudo apt update
-        run_cmd sudo apt install -y python3 python3-pip
+        run_cmd sudo apt install -y python3 python3-pip python3-venv
     elif [ -f /etc/redhat-release ]; then
         # AlmaLinux/RockyLinux/Fedora
-        echo "Installing Python3 and pip..."
-        run_cmd sudo dnf install -y python3 python3-pip
+        echo "Installing Python3..."
+        run_cmd sudo dnf install -y python3 python3-pip python3-venv
     elif [[ "$OSTYPE" == "darwin"* ]]; then
         # macOS
         if ! command -v brew &> /dev/null; then
@@ -69,7 +72,7 @@ if ! command -v python3 &> /dev/null && ! command -v pip &> /dev/null; then
                     exit 1
                 fi
             else
-                echo "Please install Python3 and pip manually and rerun this script."
+                echo "Please install Python3 manually and rerun this script."
                 exit 1
             fi
         fi
@@ -81,13 +84,57 @@ if ! command -v python3 &> /dev/null && ! command -v pip &> /dev/null; then
     fi
 fi
 
-# Upgrade pip
-echo "Upgrading pip..."
-run_cmd python3 -m pip install --user --upgrade pip
+if ! command -v pip &> /dev/null && ! command -v pip3 &> /dev/null; then
+    # Detect OS and install pip
+    if [ -f /etc/lsb-release ]; then
+        # Ubuntu/Debian
+        echo "Installing pip..."
+        run_cmd sudo apt install -y python3-pip python3-venv
+    elif [ -f /etc/redhat-release ]; then
+        # AlmaLinux/RockyLinux/Fedora
+        echo "Installing pip..."
+        run_cmd sudo dnf install -y python3-pip python3-venv
+    elif [[ "$OSTYPE" == "darwin"* ]]; then
+        echo "Installing pip..."
+        run_cmd python3 -m ensurepip --upgrade
+    else
+        echo "Unsupported OS"
+        exit 1
+    fi
+fi
+
+# Check if python3-venv is installed
+if ! python3 -c "import venv" &> /dev/null; then
+    # Detect OS and install venv
+    if [ -f /etc/lsb-release ]; then
+        # Ubuntu/Debian
+        echo "Installing python3-venv..."
+        run_cmd sudo apt install -y python3-venv
+    elif [ -f /etc/redhat-release ]; then
+        # AlmaLinux/RockyLinux/Fedora
+        echo "Installing python3-venv..."
+        run_cmd sudo dnf install -y python3-venv
+    elif [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS already includes venv with Python3
+        echo "venv module not working. Please check your Python installation"
+        exit 1
+    else
+        echo "Unsupported OS"
+        exit 1
+    fi
+fi
+
+if [ ! -d "venv" ]; then
+    # Create a venv
+    run_cmd python3 -m venv venv
+fi
+
+# Activate the venv
+source venv/bin/activate
+run_cmd python3 -m pip install --upgrade pip
 
 # Install pyinfra
-echo "Installing pyinfra..."
-run_cmd python3 -m pip install --user pyinfra
+run_cmd python3 -m pip install pyinfra textual
 
 # Get Python user bin path directly from Python
 PYTHON_USER_BIN=$(python3 -c 'import site; print(site.USER_BASE + "/bin")')

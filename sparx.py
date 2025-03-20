@@ -4,30 +4,65 @@ import subprocess
 import re
 from pathlib import Path
 import socket
+from textual.app import App, ComposeResult
+from textual.widgets import Welcome, Header
+from textual import events
 
-# ANSI color codes
-class Colors:
-    ORANGE = '\033[0;33m'
-    CYAN = '\033[0;36m'
-    GREEN = '\033[0;32m'
-    GRAY = '\033[0;90m'
-    RED = '\033[0;31m'
-    NC = '\033[0m'  # No Color
+WELCOME_MD = """
+# Sparx
 
-# Emoji symbols
-class Symbols:
-    CHECK = "✅"
-    CROSS = "❌"
-    EDIT = "✏️ "
-    PLUS = "➕"
-    LIST = "📋"
-    STOP = "🚫"
+Sparx is awesome!
+
+> Hello world!
+"""
+
+class SparxApp(App):
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Container(Static(Markdown(WELCOME_MD), id="text"), id="md")
+        yield Button("Continue", id="continue")
+
+    def on_mount(self) -> None:
+        self.title = "Sparx"
+        self.sub_title = "systems management software"
+        self.screen.styles.background = "darkblue"
+
+    def on_button_pressed(self) -> None:
+        self.exit()
+
+    COLORS = [
+        "white",
+        "maroon",
+        "red",
+        "purple",
+        "fuchsia",
+        "olive",
+        "yellow",
+        "navy",
+        "teal",
+        "aqua",
+    ]
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key.isdecimal():
+            self.screen.styles.background = self.COLORS[int(event.key)]
+    pass
 
 def is_darwin():
     return sys.platform == 'darwin'
 
-def run_cmd(cmd):
-    subprocess.run(cmd, shell=True, check=True)
+def run_cmd(cmd, mode="normal"):
+    # If silent is True, collect command output but only print it if we hit an error.
+    # If forceSilent is True, we don't print anything even in the event of an error.
+    if mode == "silent":
+        output = subprocess.run(cmd, shell=True, check=True, capture_output=True, text=True)
+        if output.returncode != 0:
+            print(output.stdout)
+    elif mode == "forceSilent":
+        subprocess.run(cmd, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        subprocess.run(cmd, shell=True, check=True)
 
 def check_ssh_keys():
     try:
@@ -100,122 +135,51 @@ def expand_host_pattern(pattern):
     
     return [pattern]
 
-def manage_hosts():
-    hosts = []
-    while True:
-        os.system('clear')
-        print(f"\n{Colors.CYAN}=== Host Management {Symbols.LIST} ==={Colors.NC}")
-        print("\nCurrent hosts:")
-        if not hosts:
-            print(f"{Colors.CYAN}  No hosts added yet{Colors.NC}")
+def is_k0sctl_installed():
+    try:
+
+        run_cmd('k0sctl version', mode="forceSilent")
+        return True
+    except subprocess.CalledProcessError:
+        return False
+    
+def install_k0sctl():
+    # Install k0sctl
+    # If we're on Linux or WSL, install from the latest GitHub release
+    # If we're on macOS, install from Homebrew
+    if is_darwin():
+        run_cmd('brew install k0sproject/tap/k0sctl')
+    else:
+        # Parse the latest release from GitHub
+        import requests
+        import json
+
+        # Get the latest release information
+        response = requests.get('https://api.github.com/repos/k0sproject/k0sctl/releases/latest')
+        
+        if response.status_code == 200:
+            data = json.loads(response.text)
+            latest_release = data['tag_name']
         else:
-            for i, host in enumerate(hosts, 1):
-                print(f"{Colors.GREEN}  {i}. {host}{Colors.NC}")
-        
-        print("\nOptions:")
-        print(f"{Symbols.PLUS} [a] add host    {Symbols.EDIT} [e] edit host")
-        print(f"{Symbols.CROSS} [r] remove host {Symbols.CHECK} [d] finish editing")
-        print(f"{Symbols.STOP} [q] quit")
-        print(f"{Colors.CYAN}Choose an option:{Colors.NC}")
-        
-        option = input().lower()
-        
-        if option == 'q':
-            print(f"\n{Colors.CYAN}Thanks for using Sparx. Quitting...{Colors.NC}")
-            sys.exit(0)
-        
-        elif option == 'a':
-            print(f"\n{Colors.CYAN}Enter host (supports patterns like chaos[1-9] or chaos[01:10].riff.cc):{Colors.NC}")
-            while True:
-                new_host = input()
-                print(f"\n{Colors.CYAN}Checking host connectivity...{Colors.NC}")
-                if new_host == 'cancel':
-                    break
-                if check_host_connectivity(new_host.split('[')[0]):
-                    hosts.extend(expand_host_pattern(new_host))
-                    break
-                print(f"{Colors.RED}Host is not contactable.{Colors.NC}")
-                print(f"{Colors.ORANGE}Would you like to add it anyways? (y/n){Colors.NC}")
-                add_host = input().lower()
-                if add_host == 'y':
-                    hosts.extend(expand_host_pattern(new_host))
-                    break
-                print(f"{Colors.CYAN}Enter host again or enter 'cancel' to cancel.{Colors.NC}")
-        
-        elif option == 'r':
-            if not hosts:
-                print(f"\n{Colors.CYAN}No hosts to remove{Colors.NC}")
-                input()
-                continue
-            print(f"\n{Colors.CYAN}Enter number to remove:{Colors.NC}")
-            try:
-                num = int(input())
-                if 1 <= num <= len(hosts):
-                    hosts.pop(num - 1)
-            except ValueError:
-                pass
-        
-        elif option == 'e':
-            if not hosts:
-                print(f"\n{Colors.CYAN}No hosts to edit{Colors.NC}")
-                input()
-                continue
-            print(f"\n{Colors.CYAN}Enter number to edit:{Colors.NC}")
-            try:
-                num = int(input())
-                if 1 <= num <= len(hosts):
-                    print(f"{Colors.CYAN}Enter new value:{Colors.NC}")
-                    new_value = input()
-                    hosts[num - 1] = new_value
-            except ValueError:
-                pass
-        
-        elif option == 'd':
-            if not hosts:
-                print(f"\n{Colors.CYAN}Please add at least one host{Colors.NC}")
-                input()
-                continue
-            return hosts
+            print(f"Failed to fetch latest release of k0sctl: {response.status_code}")
+            sys.exit(1)
+
+        # Download the latest release
+        run_cmd(f'sudo curl -sSfL https://github.com/k0sproject/k0sctl/releases/download/{latest_release}/k0sctl-linux-amd64 -o /usr/local/bin/k0sctl')
+        run_cmd('sudo chmod +x /usr/local/bin/k0sctl')
+
+def build_main_interface():
+    app = SparxApp()
+    app.run()
 
 def main():
-    if is_darwin():
-        print(f"\n{Colors.ORANGE}Friendly notice: running locally is not supported on macOS as it lacks k0s support{Colors.NC}")
-        print("Will assume you want to install remotely.")
-        install_type = 'remote'
-    else:
-        print("\nChoose installation type:")
-        print(f"{Colors.CYAN}[l] local{Colors.NC}")
-        print(f"{Colors.CYAN}[r] remote{Colors.NC}")
-        
-        while True:
-            choice = input("Enter your choice: ").lower()
-            if choice in ['l', 'local', 'r', 'remote']:
-                install_type = 'local' if choice in ['l', 'local'] else 'remote'
-                break
-            print("Invalid choice. Please enter 'l' or 'r', or 'local' or 'remote'.")
+    # Check if k0sctl is installed
+    if not is_k0sctl_installed():
+        print("Installing k0sctl...")
+        install_k0sctl()
 
-    if install_type == 'local':
-        if is_darwin():
-            print(f"{Colors.RED}Error: Local installation is not supported on macOS.{Colors.NC}")
-            print("Please choose remote installation instead.")
-            return
-        run_cmd('pyinfra inventories/local.py bootstrap/k0s.py')
-    else:
-        username = input("Enter the username for the machine (default: your username): ") or os.getlogin()
-        check_ssh_keys()
-        configure_ssh()
-        hosts = manage_hosts()
-
-        # Create inventory file for pyinfra
-        with open('inventories/remote.py', 'w') as f:
-            f.write("hosts = [\n")
-            for host in hosts:
-                f.write(f"    '{username}@{host}',\n")
-            f.write("]\n")
-
-        os.environ['SHOW_INSTALL'] = 'true'
-        run_cmd(f"pyinfra --ssh-user {username} inventories/remote.py bootstrap/k0s.py")
-        os.environ['SHOW_INSTALL'] = 'false'
+    # Show the main interface
+    build_main_interface()
 
 if __name__ == "__main__":
     main()

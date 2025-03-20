@@ -13,7 +13,7 @@ systems management software
 * Run `bash bootstrap.sh`.
 * Follow the prompts.
 
-That's it.
+That's it. This script will make sure Python and other dependencies are installed, then setup Sparx.
 
 ## what does it do?
 * Installs k0s, either locally or on a remote machine or set of machines.

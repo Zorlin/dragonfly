@@ -29,6 +29,11 @@ if not is_k0s_installed:
         _sudo=True
     )
 
+    server.shell(
+        'k0s start',
+        _sudo=True
+    )
+
 # Only check status and start if k0s is now installed
 if host.get_fact(Which, command='k0s'):
     if not host.get_fact(k0sStarted):
