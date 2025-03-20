@@ -17,6 +17,7 @@ from textual.reactive import reactive
 from textual import events
 from textual.message import Message
 from textual.validation import Length, Number, Function
+from textual.keys import Keys
 
 WELCOME_MD = """
 # Sparx
@@ -150,6 +151,13 @@ class HostInput(Input):
             add_btn.press()
             # Then refocus on self
             self.focus()
+        elif event.key == "right":
+            # If right arrow is pressed and cursor is at the end of the input
+            if self.cursor_position >= len(self.value):
+                # Move to Add button
+                self.app.query_one("#add-btn").focus()
+                event.prevent_default()
+                event.stop()
 
 class HostManager(Static):
     """The main host management interface"""
@@ -335,9 +343,34 @@ class HostManager(Static):
                 table = self.query_one(HostTable)
                 table.focus()
                 if len(self.hosts) > 0:
-                    table.cursor_coordinate = (0, 0)
-                    self.selected_index = 0
-        
+                    self.call_after_refresh(self._set_table_cursor_to_first)
+                
+        elif event.key == "down":
+            # Navigate down between fields
+            if focused:
+                if focused.id == "username-input":
+                    # From username to table - just set focus
+                    table = self.query_one(HostTable)
+                    table.focus()
+                    # Set cursor position in a separate call after focus change
+                    self.call_after_refresh(self._set_table_cursor_to_first)
+                    event.prevent_default()
+                    event.stop()
+                elif focused.id == "add-btn":
+                    # From add button to continue button
+                    self.query_one("#continue").focus()
+                elif isinstance(focused, HostInput):
+                    # From host input to add button (changed from continue button)
+                    self.query_one("#add-btn").focus()
+                elif isinstance(focused, DataTable) or (hasattr(focused, "parent") and isinstance(focused.parent, DataTable)):
+                    # Check if we just got focus from the username field (within last few ticks)
+                    if self.selected_index == len(self.hosts) - 1 or self.selected_index is None:
+                        # If at the bottom, go to host input field
+                        self.query_one(HostInput).focus()
+                    else:
+                        # Let the table handle normal navigation
+                        event.prevent_default(False)
+                
         elif event.key == "up":
             # Navigate up between fields
             if focused:
@@ -350,6 +383,13 @@ class HostManager(Static):
                         idx = len(self.hosts) - 1
                         table.cursor_coordinate = (idx, 0)
                         self.selected_index = idx
+                elif focused.id == "add-btn":
+                    # From add button to host input
+                    self.query_one(HostInput).focus()
+                elif focused.id == "continue":
+                    # From continue button to either add button or host input (whichever is last)
+                    add_btn = self.query_one("#add-btn")
+                    add_btn.focus()
                 elif isinstance(focused, DataTable) or (hasattr(focused, "parent") and isinstance(focused.parent, DataTable)):
                     # We're in the table - check if we're at the first row
                     if self.selected_index == 0 or self.selected_index is None:
@@ -359,24 +399,27 @@ class HostManager(Static):
                         # Let the table handle it
                         event.prevent_default(False)
                 
-        elif event.key == "down":
-            # Navigate down between fields
-            if focused:
-                if focused.id == "username-input":
-                    # From username to table
-                    table = self.query_one(HostTable)
-                    table.focus()
-                    if len(self.hosts) > 0:
-                        table.cursor_coordinate = (0, 0)
-                        self.selected_index = 0
-                elif isinstance(focused, DataTable) or (hasattr(focused, "parent") and isinstance(focused.parent, DataTable)):
-                    # We're in the table - check if we're at the last row
-                    if self.selected_index == len(self.hosts) - 1 or self.selected_index is None:
-                        # If at the bottom, go to host input field
-                        self.query_one(HostInput).focus()
-                    else:
-                        # Let the table handle it
-                        event.prevent_default(False)
+        elif event.key == "right":
+            # Right arrow navigation
+            if focused and focused.id == "add-btn":
+                # From add button to continue button
+                self.query_one("#continue").focus()
+                
+        elif event.key == "left":
+            # Left arrow navigation
+            if focused and focused.id == "add-btn":
+                # From add button to host input
+                self.query_one(HostInput).focus()
+            elif focused and focused.id == "continue":
+                # From continue button to add button
+                self.query_one("#add-btn").focus()
+
+    def _set_table_cursor_to_first(self):
+        """Helper to set the table cursor to the first row after focus change"""
+        table = self.query_one(HostTable)
+        if len(self.hosts) > 0:
+            table.cursor_coordinate = (0, 0)
+            self.selected_index = 0
 
 class SparxApp(App):
     host_username: str = ""
@@ -483,7 +526,7 @@ class SparxApp(App):
         Binding("e", "toggle_host", "Enable/Disable Host"),
         Binding("tab", "focus_next", "Next Field"),
         Binding("shift+tab", "focus_previous", "Previous Field"),
-        Binding("c", "press_continue", "Continue"),
+        Binding("c", "press_continue", "Continue")
     ]
     
     def compose(self) -> ComposeResult:
@@ -563,6 +606,14 @@ class SparxApp(App):
                 table.cursor_coordinate = (idx, 0)
                 manager.selected_index = idx
             return
+        elif focused and focused.id == "add-btn":
+            # From add button to host input
+            self.query_one(HostInput).focus()
+            return
+        elif focused and focused.id == "continue":
+            # From continue button to add button
+            self.query_one("#add-btn").focus()
+            return
         # Let default navigation handle it if no specific case was matched
         self.screen.focus_previous()
     
@@ -604,8 +655,44 @@ class SparxApp(App):
                 manager.selected_index = new_index
                 manager.update_buttons()
                 return
+        # From host input to add button
+        elif isinstance(focused, HostInput):
+            # From host input to add button
+            self.query_one("#add-btn").focus()
+            return
+        elif focused and focused.id == "add-btn":
+            # From add button to continue button
+            self.query_one("#continue").focus()
+            return
         # Otherwise let default navigation handle it if no specific case was matched
         self.screen.focus_next()
+        
+    def action_move_right(self) -> None:
+        """Handle right arrow navigation"""
+        focused = self.screen.focused
+        
+        if isinstance(focused, HostInput) and hasattr(focused, "cursor_position") and hasattr(focused, "value"):
+            # If cursor is at the end of input, move to add button
+            if focused.cursor_position >= len(focused.value):
+                self.query_one("#add-btn").focus()
+                return
+        elif focused and focused.id == "add-btn":
+            # From add button to continue button
+            self.query_one("#continue").focus()
+            return
+        
+    def action_move_left(self) -> None:
+        """Handle left arrow navigation"""
+        focused = self.screen.focused
+        
+        if focused and focused.id == "add-btn":
+            # From add button to host input
+            self.query_one(HostInput).focus()
+            return
+        elif focused and focused.id == "continue":
+            # From continue button to add button
+            self.query_one("#add-btn").focus()
+            return
 
 def is_darwin():
     return sys.platform == 'darwin'
@@ -680,11 +767,20 @@ def expand_host_pattern(pattern):
     if '[' not in pattern or ']' not in pattern:
         return [pattern]
     
+    # Handle pattern with numeric range like server[1-10].example.com
     match = re.search(r'(.*)\[(\d+)-(\d+)\](.*)', pattern)
     if match:
         prefix, start, end, suffix = match.groups()
-        return [f"{prefix}{i}{suffix}" for i in range(int(start), int(end) + 1)]
+        # Check if we need to preserve leading zeros
+        if start.startswith('0') and len(start) > 1:
+            # Preserve leading zeros
+            width = len(start)
+            return [f"{prefix}{str(i).zfill(width)}{suffix}" for i in range(int(start), int(end) + 1)]
+        else:
+            # No leading zeros
+            return [f"{prefix}{i}{suffix}" for i in range(int(start), int(end) + 1)]
     
+    # Handle pattern with explicit zero-padding format like server[01:10].example.com
     match = re.search(r'(.*)\[(\d+):(\d+)\](.*)', pattern)
     if match:
         prefix, start, end, suffix = match.groups()
