@@ -73,7 +73,7 @@ class HostTable(DataTable):
             connection_status = "⏳"
             self.add_row(
                 enabled_status,
-                connection_status,
+                host.connection_status,  # This ensures the column exists right away
                 host.name,
             )
         
@@ -205,10 +205,25 @@ class HostManager(Static):
                 yield HostInput()
                 yield Button("Add", id="add-btn", variant="primary")
             yield Button("Continue", id="continue", variant="primary")
+        
+        # Load hosts when the component is created
+        self.load_hosts()
+        
+        return [
+            # Return the child components
+        ]
     
     def on_mount(self) -> None:
+        """Called when the widget is mounted"""
+        # Load hosts first
         self.load_hosts()
-        self.update_table()
+        
+        # Then update the table
+        table = self.query_one(HostTable)
+        table.update_hosts(self.hosts)
+        
+        # Schedule connectivity check after hosts are loaded and table is updated
+        self.app.call_later(self.check_host_connectivity)
     
     def load_hosts(self) -> None:
         try:
@@ -247,9 +262,6 @@ class HostManager(Static):
         table = self.query_one(HostTable)
         table.update_hosts(self.hosts)
         
-        # Start connectivity checks in background
-        self.check_host_connectivity()
-        
         # Restore selection if needed
         if preserve_selection is not None and 0 <= preserve_selection < len(self.hosts):
             self.selected_index = preserve_selection
@@ -260,6 +272,9 @@ class HostManager(Static):
             self.selected_index = len(self.hosts) - 1 if self.hosts else None
             if self.selected_index is not None:
                 table.cursor_coordinate = (self.selected_index, 0)
+        
+        # Don't automatically start connectivity checks to avoid circular reference
+        # We'll explicitly call it instead
     
     def update_buttons(self) -> None:
         # No visible buttons to update, but we keep the method for future use
@@ -319,7 +334,7 @@ class HostManager(Static):
                     self.hosts.extend([Host(name=h) for h in hosts_to_add])
                     input_widget.value = ""
                     self.save_hosts()
-                    self.update_table()
+                    self.update_table()  # This will also trigger connectivity checks
                 except Exception as e:
                     self.notify(f"Error expanding host pattern: {str(e)}", severity="error")
                     
@@ -494,14 +509,29 @@ class HostManager(Static):
             self.update_table(preserve_selection=current_selection)
 
     def check_host_connectivity(self) -> None:
-        """Check SSH connectivity for all hosts in a background thread"""
-        # Create a new thread to not block the UI
+        """Check connectivity for all hosts"""
+        # Make sure the hosts list is not empty
+        if not self.hosts:
+            return
+            
+        # Mark all hosts as being checked
+        for host in self.hosts:
+            host.connection_status = "⏳"  # Start with hourglass
+        
+        # Update the table to show hourglasses
+        table = self.query_one(HostTable)
+        for idx, host in enumerate(self.hosts):
+            if idx < table.row_count:
+                try:
+                    table.update_cell(idx, 1, host.connection_status)
+                except Exception as e:
+                    print(f"Error updating cell: {e}")
+        
+        # Run checks in background thread
         threading.Thread(target=self._check_connectivity, daemon=True).start()
-
+    
     def _check_connectivity(self) -> None:
         """Background thread to check connectivity for all hosts"""
-        table = self.query_one(HostTable)
-        
         for idx, host in enumerate(self.hosts):
             # Try DNS lookup first
             try:
@@ -523,19 +553,20 @@ class HostManager(Static):
                     host.connection_status = "❌"  # Exception during connection
             except:
                 # DNS lookup failed
-                host.connection_status = "🗺️"
+                host.connection_status = "⚠️"  # Warning symbol for DNS failure
             
             # Update the table row with the new status
             # Need to use call_from_thread since we're in a background thread
             self.app.call_from_thread(self._update_host_status, idx, host)
-        
+    
     def _update_host_status(self, idx, host):
         """Update a single host's status in the table (called from main thread)"""
-        if idx < len(self.hosts):
+        try:
             table = self.query_one(HostTable)
-            enabled_status = "☑️" if host.enabled else "☐"
-            table.update_cell(idx, 0, enabled_status)
-            table.update_cell(idx, 1, host.connection_status)
+            if idx < table.row_count:
+                table.update_cell(idx, 1, host.connection_status)
+        except Exception as e:
+            print(f"Error updating host status: {e}")
 
 class SparxApp(App):
     host_username: str = ""
