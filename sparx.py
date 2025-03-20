@@ -53,9 +53,8 @@ class HostTable(DataTable):
         super().__init__()
         self.cursor_type = "row"
         self.zebra_stripes = True
-        self.add_column("Enabled", width=7)
-        self.add_column("Reachable", width=9)
-        self.add_column("Hostname", width=84)
+        self.add_column("Status", width=8)
+        self.add_column("Hostname", width=92)
     
     def compose(self) -> ComposeResult:
         return []
@@ -67,6 +66,18 @@ class HostTable(DataTable):
                 "✓" if host.enabled else "✗",
                 host.name,
             )
+        
+    def on_key(self, event: events.Key) -> None:
+        """Handle table-specific keyboard navigation"""
+        if event.key == "up" or event.key == "down":
+            # Don't call super().on_key since it doesn't exist
+            # Just update the manager's selected_index based on cursor position
+            manager = self.app.query_one(HostManager)
+            # Update manager's selection index based on cursor position
+            if hasattr(self, "cursor_coordinate") and self.cursor_coordinate is not None:
+                row, _ = self.cursor_coordinate
+                if 0 <= row < len(manager.hosts):
+                    manager.selected_index = row
 
 class HostInput(Input):
     """An input field for hostnames with validation"""
@@ -236,8 +247,29 @@ class HostManager(Static):
                     if not new_hosts:
                         self.notify("No hosts generated from pattern", severity="error")
                         return
-                        
-                    self.hosts.extend([Host(name=h) for h in new_hosts])
+                    
+                    # Check for duplicates
+                    existing_hostnames = [h.name.lower() for h in self.hosts]
+                    duplicates = []
+                    
+                    # Filter out duplicates
+                    hosts_to_add = []
+                    for host in new_hosts:
+                        if host.lower() in existing_hostnames:
+                            duplicates.append(host)
+                        else:
+                            hosts_to_add.append(host)
+                    
+                    # Notify about duplicates if any were found
+                    if duplicates:
+                        if len(duplicates) == len(new_hosts):
+                            self.notify(f"All hosts already exist: {', '.join(duplicates)}", severity="error")
+                            return
+                        else:
+                            self.notify(f"Skipping duplicate hosts: {', '.join(duplicates)}", severity="warning")
+                    
+                    # Add the non-duplicate hosts
+                    self.hosts.extend([Host(name=h) for h in hosts_to_add])
                     input_widget.value = ""
                     self.save_hosts()
                     self.update_table()
@@ -293,10 +325,58 @@ class HostManager(Static):
     
     def on_key(self, event: events.Key) -> None:
         """Handle keyboard navigation"""
+        # Get the currently focused widget
+        focused = self.screen.focused
+        
         if event.key == "enter":
             # If enter is pressed in username field, move focus to host input
-            if self.screen.focused.id == "username-input":
-                self.query_one(HostInput).focus()
+            if focused and focused.id == "username-input":
+                # First focus the table
+                table = self.query_one(HostTable)
+                table.focus()
+                if len(self.hosts) > 0:
+                    table.cursor_coordinate = (0, 0)
+                    self.selected_index = 0
+        
+        elif event.key == "up":
+            # Navigate up between fields
+            if focused:
+                if isinstance(focused, HostInput):
+                    # From host input field to host table
+                    table = self.query_one(HostTable)
+                    table.focus()
+                    if len(self.hosts) > 0:
+                        # Select last row
+                        idx = len(self.hosts) - 1
+                        table.cursor_coordinate = (idx, 0)
+                        self.selected_index = idx
+                elif isinstance(focused, DataTable) or (hasattr(focused, "parent") and isinstance(focused.parent, DataTable)):
+                    # We're in the table - check if we're at the first row
+                    if self.selected_index == 0 or self.selected_index is None:
+                        # If at the top, go to username field
+                        self.query_one("#username-input").focus()
+                    else:
+                        # Let the table handle it
+                        event.prevent_default(False)
+                
+        elif event.key == "down":
+            # Navigate down between fields
+            if focused:
+                if focused.id == "username-input":
+                    # From username to table
+                    table = self.query_one(HostTable)
+                    table.focus()
+                    if len(self.hosts) > 0:
+                        table.cursor_coordinate = (0, 0)
+                        self.selected_index = 0
+                elif isinstance(focused, DataTable) or (hasattr(focused, "parent") and isinstance(focused.parent, DataTable)):
+                    # We're in the table - check if we're at the last row
+                    if self.selected_index == len(self.hosts) - 1 or self.selected_index is None:
+                        # If at the bottom, go to host input field
+                        self.query_one(HostInput).focus()
+                    else:
+                        # Let the table handle it
+                        event.prevent_default(False)
 
 class SparxApp(App):
     host_username: str = ""
@@ -326,16 +406,6 @@ class SparxApp(App):
         border: none;
         margin: 0;
         padding: 0;
-    }
-    
-    DataTable > .datatable--header {
-        background: $boost;
-        color: $text;
-    }
-    
-    DataTable > .datatable--header-cursor {
-        background: $boost;
-        color: $text;
     }
     
     Horizontal {
@@ -453,6 +523,89 @@ class SparxApp(App):
         """Simulate pressing the continue button"""
         self.user_confirmed_continue = True
         self.exit()
+
+    def action_move_up(self) -> None:
+        """Move selection up in the host table"""
+        # Get the focused element
+        focused = self.screen.focused
+        
+        # If we're already in the table or table is focused, navigate within table
+        if isinstance(focused, DataTable) or (hasattr(focused, "parent") and isinstance(focused.parent, DataTable)):
+            table = self.query_one(HostTable)
+            manager = self.query_one(HostManager)
+            
+            if len(manager.hosts) == 0:
+                # No hosts, move to username field
+                self.query_one("#username-input").focus()
+                return
+                
+            # If at the top of the list, move to username field
+            if manager.selected_index == 0 or manager.selected_index is None:
+                self.query_one("#username-input").focus()
+                return
+            
+            # Otherwise move up one in the table
+            if isinstance(manager.selected_index, int):
+                new_index = (manager.selected_index - 1) % len(manager.hosts)
+                # Update selection
+                table.cursor_coordinate = (new_index, 0)
+                manager.selected_index = new_index
+                manager.update_buttons()
+                return
+        # Otherwise use normal field navigation
+        elif isinstance(focused, HostInput):
+            # Move from hostname input to host table
+            manager = self.query_one(HostManager)
+            table = self.query_one(HostTable)
+            table.focus()
+            if len(manager.hosts) > 0:
+                idx = len(manager.hosts) - 1
+                table.cursor_coordinate = (idx, 0)
+                manager.selected_index = idx
+            return
+        # Let default navigation handle it if no specific case was matched
+        self.screen.focus_previous()
+    
+    def action_move_down(self) -> None:
+        """Move selection down in the host table"""
+        # Get the focused element
+        focused = self.screen.focused
+        
+        # If username is focused, move to table
+        if focused and focused.id == "username-input":
+            manager = self.query_one(HostManager)
+            table = self.query_one(HostTable)
+            table.focus()
+            if len(manager.hosts) > 0:
+                table.cursor_coordinate = (0, 0)
+                manager.selected_index = 0
+            return
+        
+        # If we're already in the table or table is focused, navigate within table
+        if isinstance(focused, DataTable) or (hasattr(focused, "parent") and isinstance(focused.parent, DataTable)):
+            table = self.query_one(HostTable)
+            manager = self.query_one(HostManager)
+            
+            if len(manager.hosts) == 0:
+                # If no hosts, move to hostname input
+                self.query_one(HostInput).focus()
+                return
+                
+            # If at the bottom of the list, move to hostname input
+            if manager.selected_index == len(manager.hosts) - 1 or manager.selected_index is None:
+                self.query_one(HostInput).focus()
+                return
+            
+            # Otherwise move down one in the table
+            if isinstance(manager.selected_index, int):
+                new_index = (manager.selected_index + 1) % len(manager.hosts)
+                # Update selection
+                table.cursor_coordinate = (new_index, 0)
+                manager.selected_index = new_index
+                manager.update_buttons()
+                return
+        # Otherwise let default navigation handle it if no specific case was matched
+        self.screen.focus_next()
 
 def is_darwin():
     return sys.platform == 'darwin'

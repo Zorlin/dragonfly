@@ -11,9 +11,6 @@ for arg in "$@"; do
     esac
 done
 
-# Print a welcome message and what we're about to do
-echo "Welcome to Sparx! We'll install any necessary dependencies, including k0sctl, then deploy your cluster automatically."
-
 # Setup output redirection based on verbosity
 if [ "$SHOW_INSTALL" = true ]; then
     # When showing install, just run commands normally
