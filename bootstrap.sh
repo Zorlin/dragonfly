@@ -133,8 +133,8 @@ fi
 source venv/bin/activate
 run_cmd python3 -m pip install --upgrade pip
 
-# Install pyinfra
-run_cmd python3 -m pip install pyinfra textual
+# Install dependencies
+run_cmd python3 -m pip install pyinfra textual pytest
 
 # Get Python user bin path directly from Python
 PYTHON_USER_BIN=$(python3 -c 'import site; print(site.USER_BASE + "/bin")')
