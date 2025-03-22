@@ -32,10 +32,12 @@ Sparx is awesome!
 
 @dataclass
 class Host:
+    """Host data class"""
     name: str
     enabled: bool = True
-    connection_status: str = "⏳"  # Default to "checking"
-    role: str = "both"  # Default role: "worker", "controller", or "both"
+    connection_status: bool = None  # None means unknown, True means up, False means down
+    role: str = "both"
+    ip_address: str = ""  # Add the missing ip_address attribute
     
     def __str__(self) -> str:
         return self.name
@@ -46,12 +48,13 @@ class Host:
         
     @property
     def role_emoji(self) -> str:
+        """Return emoji for role"""
         if self.role == "worker":
-            return "💪"  # Worker emoji
+            return "💪"  # Worker role
         elif self.role == "controller":
-            return "🧠"  # Control plane emoji
+            return "🧠"  # Controller role
         elif self.role == "both":
-            return "🤹"  # Both roles emoji
+            return "🤹"  # Both roles
         else:
             return "❓"  # Unknown role
 
@@ -247,15 +250,29 @@ class HostManager(Static):
     
     def on_mount(self) -> None:
         """Called when the widget is mounted"""
-        # Get the virtual IP from the app
-        if hasattr(self.app, 'virtual_ip'):
+        # Load values from existing k0sctl.yaml
+        k0sctl_values = self.load_k0sctl_config()
+        
+        # Get the virtual IP - prioritize existing file over app config
+        if 'virtual_ip' in k0sctl_values:
+            self.virtual_ip = k0sctl_values['virtual_ip']
+            if hasattr(self.app, 'virtual_ip'):
+                self.app.virtual_ip = self.virtual_ip
+            print(f"Loaded virtual IP {self.virtual_ip} from existing k0sctl.yaml")
+        elif hasattr(self.app, 'virtual_ip'):
             self.virtual_ip = self.app.virtual_ip
-            # Set the value in the input field
-            try:
-                vip_input = self.query_one("#vip-input")
-                vip_input.value = self.virtual_ip
-            except Exception as e:
-                print(f"Error setting virtual IP field: {e}")
+        
+        # Set the virtual IP input field
+        try:
+            vip_input = self.query_one("#vip-input")
+            vip_input.value = self.virtual_ip
+        except Exception as e:
+            print(f"Error setting virtual IP field: {e}")
+        
+        # Store auth_pass if found
+        if 'auth_pass' in k0sctl_values:
+            self.auth_pass = k0sctl_values['auth_pass']
+            print(f"Loaded auth_pass from existing k0sctl.yaml")
         
         # Load hosts first
         self.load_hosts()
@@ -280,9 +297,12 @@ class HostManager(Static):
                         username, hostname = match.split('@', 1)
                         if not self.username:
                             self.username = username
-                        self.hosts.append(Host(name=hostname))
+                        self.hosts.append(Host(name=hostname, ip_address=hostname))
                     else:
-                        self.hosts.append(Host(name=match))
+                        self.hosts.append(Host(name=match, ip_address=match))
+            
+            # Schedule a DNS resolution for all hosts
+            threading.Thread(target=self._resolve_all_hosts, daemon=True).start()
         except FileNotFoundError:
             self.hosts = []
     
@@ -337,6 +357,22 @@ class HostManager(Static):
         # Create k0sctl config directory if it doesn't exist
         os.makedirs('k0sctl', exist_ok=True)
         
+        # Load auth_pass and other values from existing config if available
+        k0sctl_values = self.load_k0sctl_config()
+        
+        # Use existing auth_pass or generate a new one
+        if 'auth_pass' in k0sctl_values:
+            self.auth_pass = k0sctl_values['auth_pass']
+        elif not hasattr(self, 'auth_pass') or not self.auth_pass:
+            try:
+                import secrets
+                self.auth_pass = secrets.token_hex(4)
+            except ImportError:
+                import random
+                import string
+                random.seed(time.time())
+                self.auth_pass = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
+        
         # Detect the best SSH key to use
         ssh_key_path = self.detect_ssh_key_path()
         print(f"Using SSH key: {ssh_key_path}")
@@ -359,19 +395,13 @@ class HostManager(Static):
                         f.write(f"  - role: controller\n")
                     elif host.role == "both":
                         f.write(f"  - role: controller+worker\n")
-                    
-                    # Add debug flags
-                    f.write(f"    installFlags:\n")
-                    f.write(f"    - --debug\n")
-                    
-                    # Add SSH configuration with detected key path and appropriate host key checking
+
+                    # Add SSH configuration with IP address
                     f.write(f"    ssh:\n")
-                    f.write(f"      address: {host.name}\n")
+                    f.write(f"      address: {host.ip_address}\n")
                     f.write(f"      user: {self.username}\n")
                     f.write(f"      port: 22\n")
                     f.write(f"      keyPath: {ssh_key_path}\n")
-                    f.write(f"      options:\n")
-                    f.write(f"        StrictHostKeyChecking: accept-new\n")
             
             self.k0s_version = "v1.31.6+k0s.0"
 
@@ -393,7 +423,8 @@ class HostManager(Static):
             f.write("            keepalived:\n")
             f.write("              vrrpInstances:\n")
             f.write(f"                - virtualIPs: [\"{self.virtual_ip}\"]\n")
-            f.write("                  authPass: Example\n")
+            f.write(f"                  authPass: {self.auth_pass}\n")
+            f.write(f"                  virtualRouterID: 78\n")
             f.write("          nodeLocalLoadBalancing:\n")
             f.write("            enabled: true\n")
             f.write("            type: EnvoyProxy\n")
@@ -473,8 +504,24 @@ class HostManager(Static):
                         else:
                             self.notify(f"Skipping duplicate hosts: {', '.join(duplicates)}", severity="warning")
                     
-                    # Add the non-duplicate hosts
-                    self.hosts.extend([Host(name=h) for h in hosts_to_add])
+                    # Add the hosts that aren't duplicates
+                    for host_name in hosts_to_add:
+                        # Try to resolve the hostname to an IP immediately
+                        ip_address = host_name  # Default to hostname
+                        try:
+                            # Check if it's an IP first
+                            if re.match(r'^(\d{1,3}\.){3}\d{1,3}$', host_name):
+                                ip_address = host_name
+                            else:
+                                # Try to resolve hostname to IP
+                                ip_address = socket.gethostbyname(host_name)
+                                print(f"Resolved {host_name} to {ip_address}")
+                        except Exception as e:
+                            print(f"Could not resolve {host_name}: {e}")
+                            # Keep using hostname as IP address if resolution fails
+                        
+                        self.hosts.append(Host(name=host_name, ip_address=ip_address))
+
                     input_widget.value = ""
                     self.save_hosts()
                     self.update_table()  # This will also trigger connectivity checks
@@ -562,87 +609,74 @@ class HostManager(Static):
                 print(f"Error saving config: {e}")
     
     def on_key(self, event: events.Key) -> None:
-        """Handle keyboard navigation"""
-        # Get the currently focused widget
-        focused = self.screen.focused
+        """Handle key events"""
+        key = event.key
         
-        if event.key == "enter":
-            # If enter is pressed in username field, move focus to host input
-            if focused and focused.id == "username-input":
-                # First focus the table
-                table = self.query_one(HostTable)
-                table.focus()
-                if len(self.hosts) > 0:
-                    self.call_after_refresh(self._set_table_cursor_to_first)
+        # If we're in the host table
+        if self.query_one(HostTable).has_focus:
+            table = self.query_one(HostTable)
+            
+            # If up key is pressed and we're at the top of the list
+            if key == "up" and (self.selected_index is None or self.selected_index == 0):
+                # Move focus to the username field
+                self.query_one("#username-input").focus()
+                event.stop()
+                return
                 
-        elif event.key == "down":
-            # Navigate down between fields
-            if focused:
-                if focused.id == "username-input":
-                    # From username to table - just set focus
-                    table = self.query_one(HostTable)
-                    table.focus()
-                    # Set cursor position in a separate call after focus change
-                    self.call_after_refresh(self._set_table_cursor_to_first)
-                    event.prevent_default()
-                    event.stop()
-                elif focused.id == "add-btn":
-                    # From add button to continue button
-                    self.query_one("#continue").focus()
-                elif isinstance(focused, HostInput):
-                    # From host input to add button (changed from continue button)
-                    self.query_one("#add-btn").focus()
-                elif isinstance(focused, DataTable) or (hasattr(focused, "parent") and isinstance(focused.parent, DataTable)):
-                    # Check if we just got focus from the username field (within last few ticks)
-                    if self.selected_index == len(self.hosts) - 1 or self.selected_index is None:
-                        # If at the bottom, go to host input field
-                        self.query_one(HostInput).focus()
-                    else:
-                        # Let the table handle normal navigation
-                        event.prevent_default(False)
-                
-        elif event.key == "up":
-            # Navigate up between fields
-            if focused:
-                if isinstance(focused, HostInput):
-                    # From host input field to host table
-                    table = self.query_one(HostTable)
-                    table.focus()
-                    if len(self.hosts) > 0:
-                        # Select last row
-                        idx = len(self.hosts) - 1
-                        table.cursor_coordinate = (idx, 0)
-                        self.selected_index = idx
-                elif focused.id == "add-btn":
-                    # From add button to host input
-                    self.query_one(HostInput).focus()
-                elif focused.id == "continue":
-                    # From continue button to either add button or host input (whichever is last)
-                    add_btn = self.query_one("#add-btn")
-                    add_btn.focus()
-                elif isinstance(focused, DataTable) or (hasattr(focused, "parent") and isinstance(focused.parent, DataTable)):
-                    # We're in the table - check if we're at the first row
-                    if self.selected_index == 0 or self.selected_index is None:
-                        # If at the top, go to username field
-                        self.query_one("#username-input").focus()
-                    else:
-                        # Let the table handle it
-                        event.prevent_default(False)
-                
-        elif event.key == "right":
-            # Right arrow navigation
-            if focused and focused.id == "add-btn":
-                # From add button to continue button
-                self.query_one("#continue").focus()
-                
-        elif event.key == "left":
-            # Left arrow navigation
-            if focused and focused.id == "add-btn":
-                # From add button to host input
+            # If down key is pressed and we're at the bottom of the list
+            if key == "down" and self.selected_index is not None and self.selected_index >= len(self.hosts) - 1:
+                # Move focus to the hostname input field
                 self.query_one(HostInput).focus()
-            elif focused and focused.id == "continue":
-                # From continue button to add button
-                self.query_one("#add-btn").focus()
+                event.stop()
+                return
+        
+        # If we're in the hostname input and up is pressed
+        if self.query_one(HostInput).has_focus and key == "up":
+            # Move focus to the bottom of the host table
+            table = self.query_one(HostTable)
+            if len(self.hosts) > 0:
+                self.selected_index = len(self.hosts) - 1
+                table.focus()
+                event.stop()
+                return
+        
+        # If we're in the username input and down is pressed
+        if self.query_one("#username-input").has_focus and key == "down":
+            # Move focus to the host table
+            table = self.query_one(HostTable)
+            if len(self.hosts) > 0:
+                self.selected_index = 0
+                table.focus()
+                event.stop()
+                return
+                
+        # If we're in the Add button and down is pressed
+        if self.query_one("#add-btn").has_focus and key == "down":
+            # Move focus to the virtual IP field
+            self.query_one("#vip-input").focus()
+            event.stop()
+            return
+            
+        # If we're in the Virtual IP field and up is pressed
+        if self.query_one("#vip-input").has_focus and key == "up":
+            # Move focus to the Add button
+            self.query_one("#add-btn").focus()
+            event.stop()
+            return
+            
+        # If we're in the Virtual IP field and down is pressed
+        if self.query_one("#vip-input").has_focus and key == "down":
+            # Move focus to the Continue button
+            self.query_one("#continue").focus()
+            event.stop()
+            return
+            
+        # If we're in the Continue button and up is pressed
+        if self.query_one("#continue").has_focus and key == "up":
+            # Move focus to the Virtual IP field
+            self.query_one("#vip-input").focus()
+            event.stop()
+            return
 
     def _set_table_cursor_to_first(self):
         """Helper to set the table cursor to the first row after focus change"""
@@ -699,6 +733,9 @@ class HostManager(Static):
                 ip = socket.gethostbyname(host.name)
                 print(f"DNS lookup for {host.name} succeeded: {ip}")
                 
+                # Store the resolved IP address in the host
+                host.ip_address = ip
+                
                 # Try connecting to SSH port (22)
                 try:
                     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -720,6 +757,8 @@ class HostManager(Static):
                 # DNS lookup failed
                 print(f"DNS lookup failed for {host.name}: {str(e)}")
                 host.connection_status = "⚠️"  # Warning symbol for DNS failure
+                # Keep the hostname as IP if resolution fails
+                host.ip_address = host.name
             
             # Update the UI with the new status
             try:
@@ -803,6 +842,57 @@ class HostManager(Static):
             except Exception as e:
                 print(f"Error updating role cell: {e}")
                 # Full table update already happened above, so we'll still see the change
+
+    def load_k0sctl_config(self):
+        """Load values from existing k0sctl.yaml if it exists"""
+        try:
+            if os.path.exists('k0sctl/k0sctl.yaml'):
+                with open('k0sctl/k0sctl.yaml', 'r') as f:
+                    yaml_content = f.read()
+                    # Dictionary to store found values
+                    found_values = {}
+                    
+                    # Look for the virtualIPs line
+                    for line in yaml_content.split('\n'):
+                        line = line.strip()
+                        if 'virtualIPs:' in line:
+                            # Extract the IP address from the line
+                            # Format should be like: - virtualIPs: ["192.168.122.200/24"]
+                            start = line.find('"')
+                            if start != -1:
+                                end = line.find('"', start + 1)
+                                if end != -1:
+                                    found_values['virtual_ip'] = line[start + 1:end]
+                    
+                        if 'authPass:' in line:
+                            # Extract the auth password
+                            # Format should be like: authPass: SomePassword
+                            parts = line.split('authPass:')
+                            if len(parts) > 1:
+                                found_values['auth_pass'] = parts[1].strip()
+                    
+                    return found_values
+        except Exception as e:
+            print(f"Error loading values from k0sctl.yaml: {e}")
+        
+        return {}
+
+    def _resolve_all_hosts(self):
+        """Background thread to resolve all hostnames to IPs"""
+        for host in self.hosts:
+            if host.ip_address == host.name:  # Only resolve if not already an IP
+                try:
+                    # Check if it's an IP already
+                    if re.match(r'^(\d{1,3}\.){3}\d{1,3}$', host.name):
+                        continue  # Already an IP
+                    
+                    # Try to resolve hostname to IP
+                    ip = socket.gethostbyname(host.name)
+                    print(f"Resolved {host.name} to {ip}")
+                    host.ip_address = ip
+                except Exception as e:
+                    print(f"Could not resolve {host.name}: {e}")
+                    # Keep using hostname as fallback
 
 class SparxApp(App):
     host_username: str = ""
