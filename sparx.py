@@ -20,6 +20,7 @@ from textual.validation import Length, Number, Function
 from textual.keys import Keys
 import threading
 import time
+import json
 
 WELCOME_MD = """
 # Sparx
@@ -34,6 +35,7 @@ class Host:
     name: str
     enabled: bool = True
     connection_status: str = "⏳"  # Default to "checking"
+    role: str = "both"  # Default role: "worker", "controller", or "both"
     
     def __str__(self) -> str:
         return self.name
@@ -41,6 +43,17 @@ class Host:
     @property
     def display_name(self) -> str:
         return f"{'✓' if self.enabled else '✗'} {self.name}"
+        
+    @property
+    def role_emoji(self) -> str:
+        if self.role == "worker":
+            return "💪"  # Worker emoji
+        elif self.role == "controller":
+            return "🧠"  # Control plane emoji
+        elif self.role == "both":
+            return "🤹"  # Both roles emoji
+        else:
+            return "❓"  # Unknown role
 
 class Colors:
     ORANGE = '\033[0;33m'
@@ -57,24 +70,38 @@ class HostTable(DataTable):
         super().__init__()
         self.cursor_type = "row"
         self.zebra_stripes = True
-        # Make sure to add all columns in initialization
-        self.add_column("✅", width=8)  # Green tick emoji for Enabled column
-        self.add_column("🌐", width=8)  # Globe emoji for connection status
-        self.add_column("Hostname", width=84)  # Adjusted width for the new column
+        self.add_column("✅", width=8)  # Checkbox column
+        self.add_column("🌐", width=8)  # Connection status column
+        self.add_column("Role", width=8)  # Role column
+        self.add_column("Hostname", width=76)  # Adjusted width for new column
     
     def compose(self) -> ComposeResult:
         return []
     
     def update_hosts(self, hosts: List[Host]) -> None:
+        """Update the table with host information"""
         self.clear()
+        
+        # First ensure table has all required columns
+        if len(self.columns) < 4:  # Now we need 4 columns
+            # Clear any existing columns
+            self.columns.clear()
+            # Add required columns
+            self.add_column("✅", width=8)
+            self.add_column("🌐", width=8)
+            self.add_column("Role", width=8)
+            self.add_column("Hostname", width=76)
+        
+        # Then add each host row
         for host in hosts:
             # Use checkbox symbols for enabled status
             enabled_status = "☑️" if host.enabled else "☐"
             
-            # Make sure we're setting all cells in all columns
+            # Add row with all four columns
             self.add_row(
                 enabled_status,
-                host.connection_status,  # Set the connectivity status
+                host.connection_status,
+                host.role_emoji,
                 host.name,
             )
     
@@ -191,6 +218,7 @@ class HostManager(Static):
     hosts: reactive[List[Host]] = reactive(list)
     selected_index: reactive[Optional[int]] = reactive(None)
     username: str = ""
+    virtual_ip: str = "192.168.122.200/24"  # Default virtual IP
     
     def __init__(self, username: str = "") -> None:
         super().__init__()
@@ -205,6 +233,9 @@ class HostManager(Static):
             with Horizontal(id="host-input-row"):
                 yield HostInput()
                 yield Button("Add", id="add-btn", variant="primary")
+            with Horizontal(id="vip-row"):
+                yield Label("Virtual IP:", id="vip-label")
+                yield Input(value=self.virtual_ip, id="vip-input", placeholder="192.168.122.200/24")
             yield Button("Continue", id="continue", variant="primary")
         
         # Load hosts when the component is created
@@ -216,6 +247,16 @@ class HostManager(Static):
     
     def on_mount(self) -> None:
         """Called when the widget is mounted"""
+        # Get the virtual IP from the app
+        if hasattr(self.app, 'virtual_ip'):
+            self.virtual_ip = self.app.virtual_ip
+            # Set the value in the input field
+            try:
+                vip_input = self.query_one("#vip-input")
+                vip_input.value = self.virtual_ip
+            except Exception as e:
+                print(f"Error setting virtual IP field: {e}")
+        
         # Load hosts first
         self.load_hosts()
         
@@ -246,17 +287,118 @@ class HostManager(Static):
             self.hosts = []
     
     def save_hosts(self) -> None:
+        """Save hosts to the inventory file"""
         os.makedirs('inventories', exist_ok=True)
         with open('inventories/remote.py', 'w') as f:
             f.write("hosts = [\n")
             for host in self.hosts:
                 if host.enabled:
-                    # Include username if provided
-                    if self.username:
-                        f.write(f"    '{self.username}@{host.name}',\n")
-                    else:
-                        f.write(f"    '{host.name}',\n")
+                    f.write(f"    '{host.name}',  # Role: {host.role}\n")
             f.write("]\n")
+        
+        # Also save a k0sctl.yaml file for the actual deployment
+        self.generate_k0sctl_config()
+    
+    def detect_ssh_key_path(self):
+        """Detect available SSH keys and return the best one based on priority."""
+        # Define key types in order of preference
+        key_preferences = [
+            "id_ed25519",  # Best - modern and secure
+            "id_ecdsa",    # Good - still secure but not as modern
+            "id_rsa",      # Acceptable if 4096+ bits
+            "identity"     # Generic key
+        ]
+        
+        # Check for keys in ~/.ssh/
+        ssh_dir = Path.home() / ".ssh"
+        if not ssh_dir.exists():
+            print(f"SSH directory not found at {ssh_dir}")
+            return "~/.ssh/id_rsa"  # Default fallback
+        
+        # Look for keys in order of preference
+        for key_name in key_preferences:
+            key_path = ssh_dir / key_name
+            if key_path.exists():
+                return f"~/.ssh/{key_name}"
+        
+        # If no well-known keys found, look for any private key files (without .pub extension)
+        for file in ssh_dir.glob("*"):
+            if file.is_file() and not file.name.endswith(".pub") and not file.name == "known_hosts" and not file.name == "config":
+                return f"~/.ssh/{file.name}"
+        
+        # Default fallback
+        return "~/.ssh/id_rsa"
+
+    def generate_k0sctl_config(self) -> None:
+        """Generate k0sctl configuration file"""
+        if not self.hosts:
+            return
+        
+        # Create k0sctl config directory if it doesn't exist
+        os.makedirs('k0sctl', exist_ok=True)
+        
+        # Detect the best SSH key to use
+        ssh_key_path = self.detect_ssh_key_path()
+        print(f"Using SSH key: {ssh_key_path}")
+        
+        with open('k0sctl/k0sctl.yaml', 'w') as f:
+            f.write("apiVersion: k0sctl.k0sproject.io/v1beta1\n")
+            f.write("kind: Cluster\n")
+            f.write("metadata:\n")
+            f.write("  name: k0s-cluster\n")
+            f.write("  user: admin\n")
+            f.write("spec:\n")
+            f.write("  hosts:\n")
+            
+            for host in self.hosts:
+                if host.enabled:
+                    # First determine the role
+                    if host.role == "worker":
+                        f.write(f"  - role: worker\n")
+                    elif host.role == "controller":
+                        f.write(f"  - role: controller\n")
+                    elif host.role == "both":
+                        f.write(f"  - role: controller+worker\n")
+                    
+                    # Add debug flags
+                    f.write(f"    installFlags:\n")
+                    f.write(f"    - --debug\n")
+                    
+                    # Add SSH configuration with detected key path and appropriate host key checking
+                    f.write(f"    ssh:\n")
+                    f.write(f"      address: {host.name}\n")
+                    f.write(f"      user: {self.username}\n")
+                    f.write(f"      port: 22\n")
+                    f.write(f"      keyPath: {ssh_key_path}\n")
+                    f.write(f"      options:\n")
+                    f.write(f"        StrictHostKeyChecking: accept-new\n")
+            
+            self.k0s_version = "v1.31.6+k0s.0"
+
+            # Add k0s configuration
+            f.write("  k0s:\n")
+            f.write("    version: " + self.k0s_version + "\n")
+            f.write("    config:\n")
+            f.write("      apiVersion: k0s.k0sproject.io/v1beta1\n")
+            f.write("      kind: ClusterConfig\n")
+            f.write("      metadata:\n")
+            f.write("        name: k0s-cluster\n")
+            f.write("      spec:\n")
+            f.write("        telemetry:\n")
+            f.write("          enabled: false\n")
+            f.write("        network:\n")
+            f.write("          controlPlaneLoadBalancing:\n")
+            f.write("            enabled: true\n")
+            f.write("            type: Keepalived\n")
+            f.write("            keepalived:\n")
+            f.write("              vrrpInstances:\n")
+            f.write(f"                - virtualIPs: [\"{self.virtual_ip}\"]\n")
+            f.write("                  authPass: Example\n")
+            f.write("          nodeLocalLoadBalancing:\n")
+            f.write("            enabled: true\n")
+            f.write("            type: EnvoyProxy\n")
+            
+            print(f"K0sctl configuration saved to k0sctl/k0sctl.yaml")
     
     def update_table(self, preserve_selection=None) -> None:
         """Update the host table and preserve selection if specified"""
@@ -398,6 +540,26 @@ class HostManager(Static):
         if event.input.id == "username-input":
             self.username = event.value
             self.app.host_username = event.value
+            
+            # Save the updated username to config immediately
+            try:
+                config = load_config()
+                config["username"] = event.value
+                save_config(config)
+            except Exception as e:
+                print(f"Error saving config: {e}")
+                # Don't notify the user as this is non-critical
+        elif event.input.id == "vip-input":
+            self.virtual_ip = event.value
+            self.app.virtual_ip = event.value
+            
+            # Save the virtual IP to config
+            try:
+                config = load_config()
+                config["virtual_ip"] = event.value
+                save_config(config)
+            except Exception as e:
+                print(f"Error saving config: {e}")
     
     def on_key(self, event: events.Key) -> None:
         """Handle keyboard navigation"""
@@ -595,11 +757,59 @@ class HostManager(Static):
         except Exception as e:
             print(f"Error in _update_host_status: {str(e)}")
 
+    def action_toggle_role(self) -> None:
+        """Toggle the role of the selected host"""
+        if self.selected_index is not None and 0 <= self.selected_index < len(self.hosts):
+            # Store the current selection before making changes
+            current_selection = self.selected_index
+            
+            # Cycle through roles: worker -> controller -> both -> worker
+            host = self.hosts[self.selected_index]
+            if host.role == "worker":
+                host.role = "controller"
+            elif host.role == "controller":
+                host.role = "both"
+            else:
+                host.role = "worker"
+            
+            # Save and update with preserved selection
+            self.save_hosts()
+            self.update_table(preserve_selection=current_selection)
+            
+            # Try to update just the role cell using a more robust approach
+            try:
+                table = self.query_one(HostTable)
+                try:
+                    # Try with explicit coordinates first
+                    table.update_cell_at((self.selected_index, 2), host.role_emoji)
+                except Exception as e:
+                    print(f"Couldn't update role cell at coordinates: {e}")
+                    try:
+                        # Alternative approach
+                        row = table.get_row_at(self.selected_index)
+                        # Find the role column index by checking column labels
+                        role_column = None
+                        for idx, column in enumerate(table.columns):
+                            if column.label.plain == "Role" or column.label.plain == "👤":
+                                role_column = idx
+                                break
+                        
+                        if role_column is not None:
+                            table.update_cell(row.key, role_column, host.role_emoji)
+                        else:
+                            print("Role column not found, table update will use default refresh")
+                    except Exception as e2:
+                        print(f"Alternative approach for role update failed: {e2}")
+            except Exception as e:
+                print(f"Error updating role cell: {e}")
+                # Full table update already happened above, so we'll still see the change
+
 class SparxApp(App):
     host_username: str = ""
     install_type: str = "remote"  # Keep this for backward compatibility
     # Flag to track if user clicked Continue
     user_confirmed_continue: bool = False
+    virtual_ip: str = "192.168.122.200/24"  # Default virtual IP
     
     CSS = """
     Screen {
@@ -619,7 +829,7 @@ class SparxApp(App):
     }
     
     DataTable {
-        height: 75%;
+        height: 70%;  /* Reduced to make room for VIP row */
         border: none;
         margin: 0;
         padding: 0;
@@ -638,6 +848,32 @@ class SparxApp(App):
         background: $background;
         border: none;
         align-horizontal: left;
+    }
+    
+    #vip-row {
+        height: 1;
+        padding: 0 0;
+        background: $background;
+        border: none;
+        align-horizontal: left;
+        margin-bottom: 0;
+    }
+    
+    #vip-label {
+        width: 14;
+        height: 1;
+        padding: 0 0 0 2;
+        content-align: left middle;
+        margin-right: 0;
+    }
+    
+    #vip-input {
+        width: 20;
+        height: 1;
+        border: none;
+        padding: 0 0;
+        background: $surface;
+        margin-left: 0;
     }
     
     #username-label {
@@ -687,9 +923,18 @@ class SparxApp(App):
         background: $boost;
         color: $text;
         dock: bottom;
-        height: 1;
+        height: 2;
         border-top: none;
         padding: 0;
+    }
+    
+    #footer-roles {
+        background: $boost;
+        color: $text;
+        dock: bottom;
+        height: 1;
+        width: 100%;
+        content-align: center middle;
     }
     """
     
@@ -698,6 +943,7 @@ class SparxApp(App):
         Binding("a", "add_host", "Add Host"),
         Binding("r", "remove_host", "Remove Host"),
         Binding("e", "toggle_host", "Enable/Disable Host"),
+        Binding("t", "toggle_role", "Toggle Role"),
         Binding("tab", "focus_next", "Next Field"),
         Binding("shift+tab", "focus_previous", "Previous Field"),
         Binding("c", "press_continue", "Continue"),
@@ -710,6 +956,8 @@ class SparxApp(App):
     def compose(self) -> ComposeResult:
         yield Header()
         yield HostManager(username=self.host_username)
+        with Container(id="footer-roles"):
+            yield Label("Role Key - Worker 💪 - Control Plane 🧠 - Both 🤹")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -884,6 +1132,11 @@ class SparxApp(App):
             self.query_one("#add-btn").focus()
             return
 
+    def action_toggle_role(self) -> None:
+        """Toggle the role of the selected host"""
+        manager = self.query_one(HostManager)
+        manager.action_toggle_role()
+
 def is_darwin():
     return sys.platform == 'darwin'
 
@@ -1012,17 +1265,42 @@ def install_k0sctl():
         run_cmd(f'sudo curl -sSfL https://github.com/k0sproject/k0sctl/releases/download/{latest_release}/k0sctl-linux-amd64 -o /usr/local/bin/k0sctl')
         run_cmd('sudo chmod +x /usr/local/bin/k0sctl')
 
+def get_config_path():
+    """Get the path to the config file."""
+    config_dir = Path.home() / '.config' / 'sparx'
+    config_dir.mkdir(parents=True, exist_ok=True)
+    return config_dir / 'sparx.json'
+
+def load_config():
+    """Load the config from the file."""
+    config_path = get_config_path()
+    if config_path.exists():
+        try:
+            with open(config_path, 'r') as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            # If the file is corrupted, return default config
+            return {"username": os.getlogin()}
+    return {"username": os.getlogin()}
+
+def save_config(config):
+    """Save the config to the file."""
+    config_path = get_config_path()
+    with open(config_path, 'w') as f:
+        json.dump(config, f)
+
 def main():
     # Check if k0sctl is installed
     if not is_k0sctl_installed():
         print("Installing k0sctl...")
         install_k0sctl()
 
-    # Set default username (for remote installations)
-    username = os.getlogin()
+    # Load config to get the saved username
+    config = load_config()
+    username = config.get("username", os.getlogin())
     
-    # Set install type based on platform
-    default_install_type = 'remote' if is_darwin() else 'local'
+    # Always use remote deployment as default (user can add localhost if they want local)
+    default_install_type = 'remote'
     
     # Show the host management UI
     app = SparxApp()
@@ -1033,12 +1311,19 @@ def main():
         # Run the app
         app.run()
         
+        # Save the username after the app exits
+        config["username"] = app.host_username
+        save_config(config)
+        
         # Check if the user explicitly confirmed continuation via Continue button
         if not app.user_confirmed_continue:
             print(f"{Colors.ORANGE}Thanks for using Sparx!{Colors.NC}")
             return
         
     except KeyboardInterrupt:
+        # Save the username even on keyboard interrupt
+        config["username"] = app.host_username
+        save_config(config)
         print(f"{Colors.ORANGE}Thanks for using Sparx!{Colors.NC}")
         return
     except Exception as e:
@@ -1048,69 +1333,40 @@ def main():
     
     # We only get here if the user explicitly confirmed by clicking Continue
     
-    # Double-check the deployment is possible
-    if app.install_type == 'local':
-        if is_darwin():
-            print(f"{Colors.RED}Error: Local installation is not supported on macOS.{Colors.NC}")
-            print(f"{Colors.RED}Cannot continue with deployment.{Colors.NC}")
-            return
-            
-        # Check local inventory exists
-        if not os.path.exists('inventories/local.py'):
-            print(f"{Colors.RED}Error: Local inventory file not found.{Colors.NC}")
-            print(f"{Colors.RED}Cannot continue with deployment.{Colors.NC}")
-            return
-            
-        print(f"{Colors.GREEN}Running local deployment...{Colors.NC}")
-        run_cmd('pyinfra inventories/local.py bootstrap/k0s.py')
+    # Check if the k0sctl config file exists
+    if not os.path.exists('k0sctl/k0sctl.yaml'):
+        print(f"{Colors.RED}Error: k0sctl configuration file not found.{Colors.NC}")
+        print(f"{Colors.RED}Cannot continue with deployment.{Colors.NC}")
+        return
         
-    else:  # Remote installation
-        # Verify we have a valid hosts file
-        try:
-            if not os.path.exists('inventories/remote.py'):
-                print(f"{Colors.RED}Error: Host inventory file not found.{Colors.NC}")
-                print(f"{Colors.RED}Cannot continue with deployment.{Colors.NC}")
-                return
-                
-            with open('inventories/remote.py', 'r') as f:
-                content = f.read()
-                
-            # Count the number of hosts
-            host_matches = re.findall(r"'([^']+)'", content)
-            if not host_matches:
-                print(f"{Colors.RED}Error: No hosts configured in inventory.{Colors.NC}")
-                print(f"{Colors.RED}Cannot continue with deployment.{Colors.NC}")
-                return
-                
-            print(f"{Colors.GREEN}Found {len(host_matches)} hosts in inventory.{Colors.NC}")
-                
-            # Check SSH prerequisites before deployment
-            try:
-                check_ssh_keys()
-                configure_ssh()
-            except Exception as e:
-                print(f"{Colors.RED}Error during SSH setup: {str(e)}{Colors.NC}")
-                print(f"{Colors.RED}Cannot continue with deployment due to SSH configuration issue.{Colors.NC}")
-                return
-            
-            # Final confirmation
-            print(f"{Colors.GREEN}All prerequisites met. Ready to run deployment.{Colors.NC}")
-            confirm = input(f"{Colors.CYAN}Are you ABSOLUTELY sure you want to run the deployment now? (yes/no): {Colors.NC}")
-            
-            if confirm.lower() != "yes":
-                print(f"{Colors.ORANGE}Deployment cancelled by user.{Colors.NC}")
-                return
-                
-            # Run the deployment
-            print(f"{Colors.GREEN}Running remote deployment...{Colors.NC}")
-            os.environ['SHOW_INSTALL'] = 'true'
-            run_cmd(f"pyinfra --ssh-user {username} inventories/remote.py bootstrap/k0s.py")
-            os.environ['SHOW_INSTALL'] = 'false'
-            
-        except Exception as e:
-            print(f"{Colors.RED}Error during deployment preparation: {str(e)}{Colors.NC}")
-            print(f"{Colors.RED}Cannot continue with deployment.{Colors.NC}")
-            return
+    # Final confirmation
+    print(f"{Colors.GREEN}All prerequisites met. Ready to run deployment.{Colors.NC}")
+    confirm = input(f"{Colors.CYAN}Are you ABSOLUTELY sure you want to run the deployment now? (yes/no): {Colors.NC}")
+    
+    if confirm.lower() != "yes":
+        print(f"{Colors.ORANGE}Deployment cancelled by user.{Colors.NC}")
+        return
+        
+    # Run k0sctl
+    print(f"{Colors.GREEN}Running k0s deployment with k0sctl...{Colors.NC}")
+    try:
+        run_cmd("k0sctl apply --config k0sctl/k0sctl.yaml")
+        print(f"{Colors.GREEN}Deployment completed successfully!{Colors.NC}")
+        
+        # Get kubeconfig for the user
+        print(f"{Colors.GREEN}Retrieving kubeconfig...{Colors.NC}")
+        kubeconfig_dir = os.path.expanduser("~/.kube")
+        os.makedirs(kubeconfig_dir, exist_ok=True)
+        
+        run_cmd("k0sctl kubeconfig --config k0sctl/k0sctl.yaml > ~/.kube/config")
+        os.chmod(os.path.expanduser("~/.kube/config"), 0o600)
+        
+        print(f"{Colors.GREEN}Kubeconfig saved to ~/.kube/config{Colors.NC}")
+        print(f"{Colors.GREEN}You can now use kubectl to interact with your cluster!{Colors.NC}")
+        
+    except subprocess.CalledProcessError as e:
+        print(f"{Colors.RED}Error during deployment: {str(e)}{Colors.NC}")
+        return
 
 def test_host_validation():
     """Test hostname validation logic"""

@@ -16,7 +16,14 @@ class k0sStarted(FactBase):
         return 'not running' not in output.lower() and output.strip() != ''
 
 # Main logic
+is_curl_installed = host.get_fact(Which, command='curl')
 is_k0s_installed = host.get_fact(Which, command='k0s')
+
+if not is_curl_installed:
+    server.shell(
+        'apt-get install -y curl',
+        _sudo=True
+    )
 
 if not is_k0s_installed:
     server.shell(
