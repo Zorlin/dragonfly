@@ -4,6 +4,9 @@ inventory.py.prod
 inventory.py.test
 inventory.py.dev
 
+# inventories
+inventories/**
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
