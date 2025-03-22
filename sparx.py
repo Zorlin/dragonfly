@@ -57,9 +57,10 @@ class HostTable(DataTable):
         super().__init__()
         self.cursor_type = "row"
         self.zebra_stripes = True
-        self.add_column("☑️", width=2)  # Green tick emoji for Enabled column
-        self.add_column("🌐", width=2)  # Globe emoji for connection status
-        self.add_column("Hostname", width=84)
+        # Make sure to add all columns in initialization
+        self.add_column("✅", width=8)  # Green tick emoji for Enabled column
+        self.add_column("🌐", width=8)  # Globe emoji for connection status
+        self.add_column("Hostname", width=84)  # Adjusted width for the new column
     
     def compose(self) -> ComposeResult:
         return []
@@ -68,15 +69,15 @@ class HostTable(DataTable):
         self.clear()
         for host in hosts:
             # Use checkbox symbols for enabled status
-            enabled_status = "✅" if host.enabled else "☐"
-            # Default to "checking" status - will be updated by ping check
-            connection_status = "⏳"
+            enabled_status = "☑️" if host.enabled else "☐"
+            
+            # Make sure we're setting all cells in all columns
             self.add_row(
                 enabled_status,
-                host.connection_status,  # This ensures the column exists right away
+                host.connection_status,  # Set the connectivity status
                 host.name,
             )
-        
+    
     def on_key(self, event: events.Key) -> None:
         """Handle table-specific keyboard navigation"""
         if event.key == "up" or event.key == "down":
@@ -513,29 +514,28 @@ class HostManager(Static):
         # Make sure the hosts list is not empty
         if not self.hosts:
             return
-            
+        
+        print("Starting connectivity checks for", len(self.hosts), "hosts")    
         # Mark all hosts as being checked
         for host in self.hosts:
             host.connection_status = "⏳"  # Start with hourglass
         
-        # Update the table to show hourglasses
-        table = self.query_one(HostTable)
-        for idx, host in enumerate(self.hosts):
-            if idx < table.row_count:
-                try:
-                    table.update_cell(idx, 1, host.connection_status)
-                except Exception as e:
-                    print(f"Error updating cell: {e}")
+        # Update table to show hourglasses
+        self.update_table(preserve_selection=self.selected_index)
         
         # Run checks in background thread
-        threading.Thread(target=self._check_connectivity, daemon=True).start()
+        thread = threading.Thread(target=self._check_connectivity, daemon=True)
+        thread.start()
     
     def _check_connectivity(self) -> None:
         """Background thread to check connectivity for all hosts"""
+        print("Connectivity check thread started")
         for idx, host in enumerate(self.hosts):
+            print(f"Checking host {idx+1}/{len(self.hosts)}: {host.name}")
             # Try DNS lookup first
             try:
                 ip = socket.gethostbyname(host.name)
+                print(f"DNS lookup for {host.name} succeeded: {ip}")
                 
                 # Try connecting to SSH port (22)
                 try:
@@ -546,27 +546,54 @@ class HostManager(Static):
                     
                     # Update the status based on connection result
                     if result == 0:
+                        print(f"SSH connection to {host.name} succeeded")
                         host.connection_status = "✅"  # Connected successfully
                     else:
+                        print(f"SSH connection to {host.name} failed with code {result}")
                         host.connection_status = "❌"  # Failed to connect
-                except:
+                except Exception as e:
+                    print(f"Exception during SSH connection to {host.name}: {str(e)}")
                     host.connection_status = "❌"  # Exception during connection
-            except:
+            except Exception as e:
                 # DNS lookup failed
+                print(f"DNS lookup failed for {host.name}: {str(e)}")
                 host.connection_status = "⚠️"  # Warning symbol for DNS failure
             
-            # Update the table row with the new status
-            # Need to use call_from_thread since we're in a background thread
-            self.app.call_from_thread(self._update_host_status, idx, host)
+            # Update the UI with the new status
+            try:
+                self.app.call_from_thread(self._update_host_status, idx, host)
+                print(f"Updated status for {host.name} to {host.connection_status}")
+            except Exception as e:
+                print(f"Error updating UI for {host.name}: {str(e)}")
     
     def _update_host_status(self, idx, host):
         """Update a single host's status in the table (called from main thread)"""
         try:
+            # First update our data model
+            if idx < len(self.hosts):
+                self.hosts[idx].connection_status = host.connection_status
+            
+            # Then update the UI
             table = self.query_one(HostTable)
+            # Verify both row and column exist before updating
             if idx < table.row_count:
-                table.update_cell(idx, 1, host.connection_status)
+                try:
+                    # Try with explicit coordinates first
+                    table.update_cell_at((idx, 1), host.connection_status)
+                except Exception as e:
+                    print(f"Couldn't update at coordinates, trying with get_cell: {e}")
+                    try:
+                        # Alternative approach
+                        row = table.get_row_at(idx)
+                        # Update the connection status column (column index 1)
+                        table.update_cell(row.key, 1, host.connection_status)
+                    except Exception as e2:
+                        print(f"Alternative approach failed too: {e2}")
+                print(f"UI cell updated for {host.name}: {host.connection_status}")
+            else:
+                print(f"Row {idx} doesn't exist in table with {table.row_count} rows")
         except Exception as e:
-            print(f"Error updating host status: {e}")
+            print(f"Error in _update_host_status: {str(e)}")
 
 class SparxApp(App):
     host_username: str = ""
@@ -673,19 +700,31 @@ class SparxApp(App):
         Binding("e", "toggle_host", "Enable/Disable Host"),
         Binding("tab", "focus_next", "Next Field"),
         Binding("shift+tab", "focus_previous", "Previous Field"),
-        Binding("c", "press_continue", "Continue")
+        Binding("c", "press_continue", "Continue"),
+        Binding(Keys.Up, "move_up", "Arrow keys to navigate"),
+        Binding(Keys.Down, "move_down", ""),
+        Binding(Keys.Right, "move_right", ""),
+        Binding(Keys.Left, "move_left", "")
     ]
-    
+
     def compose(self) -> ComposeResult:
         yield Header()
         yield HostManager(username=self.host_username)
         yield Footer()
-    
+
     def on_mount(self) -> None:
         self.title = "Sparx"
         self.sub_title = "systems management software"
         # Set initial focus to the username field
         self.set_focus(self.query_one("#username-input"))
+        
+        # Start connectivity checks after a short delay
+        def check_connectivity(_timer=None):
+            manager = self.query_one(HostManager)
+            manager.check_host_connectivity()
+        
+        # Schedule the check after UI is fully loaded
+        self.call_later(check_connectivity, 0.5)
     
     def action_add_host(self) -> None:
         self.query_one(HostInput).focus()
@@ -996,11 +1035,11 @@ def main():
         
         # Check if the user explicitly confirmed continuation via Continue button
         if not app.user_confirmed_continue:
-            print(f"{Colors.ORANGE}TUI closed without explicit continuation. Exiting without running deployment.{Colors.NC}")
+            print(f"{Colors.ORANGE}Thanks for using Sparx!{Colors.NC}")
             return
         
     except KeyboardInterrupt:
-        print(f"{Colors.ORANGE}TUI cancelled by user. Exiting without running deployment.{Colors.NC}")
+        print(f"{Colors.ORANGE}Thanks for using Sparx!{Colors.NC}")
         return
     except Exception as e:
         print(f"{Colors.RED}Error running the UI: {str(e)}{Colors.NC}")
