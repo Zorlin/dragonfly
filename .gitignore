@@ -4,11 +4,11 @@ inventory.py.prod
 inventory.py.test
 inventory.py.dev
 
-# k0sctl/
-k0sctl/**
-
 # inventories
 inventories/**
+
+# secrets
+kubeconfig
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
