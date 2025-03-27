@@ -1,0 +1,33 @@
+[package]
+name = "dragonfly-server"
+version = "0.1.0"
+edition = "2021"
+authors = ["Sparx"]
+description = "API server for Dragonfly bare metal infrastructure management"
+
+[dependencies]
+dragonfly-common = { path = "../dragonfly-common" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Web Framework
+axum = "0.7"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["trace", "auth"] }
+hyper = { version = "1.1", features = ["server"] }
+
+# Template Engine
+askama = { version = "0.12", features = ["with-axum"] }
+askama_axum = "0.4"
+
+# Database
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "migrate"] }
+
+# Kubernetes integration can be added if needed 

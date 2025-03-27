@@ -1,0 +1,5 @@
+[general]
+# The directory where templates are found
+dir = "templates"
+# Extension of the templates
+extension = "html" 

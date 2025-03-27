@@ -9,6 +9,7 @@ inventories/**
 
 # secrets
 kubeconfig
+k3s.yaml
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

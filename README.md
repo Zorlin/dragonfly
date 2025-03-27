@@ -10,13 +10,14 @@ systems management software
 - customisable
 
 ## getting started
+Pick a node to be your bootstrap machine.
+
 * Run `bash bootstrap.sh`.
 * Follow the prompts.
 
 That's it. This script will make sure Python and other dependencies are installed, then setup Sparx.
 
 ## what does it do?
-* Installs k0s, either locally or on a remote machine or set of machines.
-* Configures the k0s cluster with Antrea CNI.
-* Installs Tinkerbell (https://tinkerbell.org/)
+* Installs k3s on a bootstrap machine
+* Sets up Tinkerbell to adopt and manage additional machines automatically
 * Configures Tinkerbell to deploy to any node that PXE boots from it.

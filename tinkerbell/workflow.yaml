@@ -1,0 +1,8 @@
+apiVersion: "tinkerbell.org/v1alpha1"
+kind: Workflow
+metadata:
+  name: example
+  namespace: tink
+spec:
+  templateRef: autoregister
+  hardwareRef: unprovisioned-machine

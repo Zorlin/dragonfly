@@ -1,0 +1,17 @@
+apiVersion: tinkerbell.org/v1alpha1
+kind: Hardware
+metadata:
+  name: unprovisioned-machine
+  namespace: tink
+spec:
+  interfaces:
+  - dhcp:
+      arch: x86_64
+      hostname: unprovisioned-machine
+      name_servers:
+      - 1.1.1.1
+      - 8.8.8.8
+      uefi: true
+    netboot:
+      allowPXE: true
+      allowWorkflow: true

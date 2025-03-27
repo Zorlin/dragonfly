@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+
+{% block title %}Dragonfly - Dashboard{% endblock %}
+
+{% block content %}
+<div class="bg-white shadow overflow-hidden sm:rounded-lg">
+    <div class="px-4 py-5 sm:px-6">
+        <h3 class="text-lg leading-6 font-medium text-gray-900">
+            Dashboard Overview
+        </h3>
+        <p class="mt-1 max-w-2xl text-sm text-gray-500">
+            Overview of your bare metal infrastructure
+        </p>
+    </div>
+    <div class="border-t border-gray-200">
+        <dl>
+            <div class="bg-gray-50 px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                <dt class="text-sm font-medium text-gray-500">
+                    Total Machines
+                </dt>
+                <dd class="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
+                    {{ machines|length }}
+                </dd>
+            </div>
+            <div class="bg-white px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                <dt class="text-sm font-medium text-gray-500">
+                    Machines Awaiting OS
+                </dt>
+                <dd class="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
+                    0
+                </dd>
+            </div>
+            <div class="bg-gray-50 px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                <dt class="text-sm font-medium text-gray-500">
+                    Machines Installing OS
+                </dt>
+                <dd class="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
+                    0
+                </dd>
+            </div>
+            <div class="bg-white px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                <dt class="text-sm font-medium text-gray-500">
+                    Ready Machines
+                </dt>
+                <dd class="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
+                    0
+                </dd>
+            </div>
+        </dl>
+    </div>
+</div>
+
+<div class="mt-8">
+    <div class="flex justify-between items-center">
+        <h2 class="text-lg font-medium text-gray-900">Recent Machines</h2>
+        <a href="/machines" class="text-sm font-medium text-indigo-600 hover:text-indigo-500">
+            View all machines
+        </a>
+    </div>
+    <div class="mt-4 bg-white shadow overflow-hidden sm:rounded-md">
+        <ul class="divide-y divide-gray-200">
+            {% for machine in machines %}
+            <li>
+                <div class="px-4 py-4 sm:px-6">
+                    <div class="flex items-center justify-between">
+                        <p class="text-sm font-medium text-indigo-600 truncate">
+                            {% match machine.hostname %}
+                                {% when Some with (hostname) %}
+                                    {{ hostname }}
+                                {% when None %}
+                                    Unnamed Machine
+                            {% endmatch %}
+                        </p>
+                        <div class="ml-2 flex-shrink-0 flex">
+                            <p class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full 
+                                {% if machine.status == MachineStatus::Ready %}
+                                    bg-green-100 text-green-800
+                                {% else if machine.status == MachineStatus::InstallingOs %}
+                                    bg-yellow-100 text-yellow-800
+                                {% else if machine.status == MachineStatus::AwaitingOsAssignment %}
+                                    bg-blue-100 text-blue-800
+                                {% else %}
+                                    bg-red-100 text-red-800
+                                {% endif %}">
+                                {{ machine.status }}
+                            </p>
+                        </div>
+                    </div>
+                    <div class="mt-2 sm:flex sm:justify-between">
+                        <div class="sm:flex">
+                            <p class="flex items-center text-sm text-gray-500">
+                                MAC: {{ machine.mac_address }}
+                            </p>
+                            <p class="mt-2 flex items-center text-sm text-gray-500 sm:mt-0 sm:ml-6">
+                                IP: {{ machine.ip_address }}
+                            </p>
+                        </div>
+                        <div class="mt-2 flex items-center text-sm text-gray-500 sm:mt-0">
+                            <p>
+                                Registered {{ machine.created_at }}
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+</div>
+{% endblock %} 

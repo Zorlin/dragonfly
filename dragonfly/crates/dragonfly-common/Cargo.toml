@@ -1,0 +1,14 @@
+[package]
+name = "dragonfly-common"
+version = "0.1.0"
+edition = "2021"
+authors = ["Sparx"]
+description = "Common models and utilities for Dragonfly"
+
+[dependencies]
+serde = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+
+# Define the models and shared types here 
