@@ -11,6 +11,27 @@ Dragonfly is a Rust web application that enables simple management of bare metal
 - Real-time machine status monitoring
 - SQLite for lightweight, embedded storage
 
+## User stories
+
+### User story 1: Register a machine
+
+As a user, I want to register a machine so that I can manage it.
+
+I boot the machine, and select the first PXE option that comes up.
+
+The machine boots an Alpine Linux minimal image with the Dragonfly agent embedded in it,
+then connects to the local Dragonfly instance.
+
+The agent reports the machine's hardware details to the server, and the server assigns an OS to the machine.
+
+The agent, knowing it's booted into the Dragonfly image, will then chainload IPXE and load the standard Tinkerbell.org boot process.
+
+```
+kexec -l /usr/share/ipxe/ipxe.lkrn --command-line="dhcp && chain http://10.7.1.30:8080/hookos.ipxe"
+```
+
+The hookos.ipxe script will then download the OS image and install it to the machine.
+
 ## Technical Stack
 
 - **Backend**: Axum (async web framework)
