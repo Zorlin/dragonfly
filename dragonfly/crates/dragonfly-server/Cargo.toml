@@ -20,7 +20,7 @@ tracing-subscriber = { workspace = true }
 # Web Framework
 axum = "0.7"
 tower = "0.4"
-tower-http = { version = "0.5", features = ["trace", "auth"] }
+tower-http = { version = "0.5", features = ["trace", "auth", "fs"] }
 hyper = { version = "1.1", features = ["server"] }
 
 # Template Engine
@@ -31,3 +31,5 @@ askama_axum = "0.4"
 sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "migrate"] }
 
 # Kubernetes integration can be added if needed 
+kube = { version = "0.87.1", features = ["client", "derive", "runtime"] }
+k8s-openapi = { version = "0.20.0", features = ["v1_28"] } 

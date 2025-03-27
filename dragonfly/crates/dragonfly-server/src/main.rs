@@ -1,10 +1,14 @@
-use dragonfly_server::run_server;
+use dragonfly_server;
+use tracing::error;
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() {
     // Initialize tracing
     tracing_subscriber::fmt::init();
     
-    // Run the server
-    run_server().await
+    // Start the server
+    if let Err(e) = dragonfly_server::start().await {
+        error!("Server error: {}", e);
+        std::process::exit(1);
+    }
 } 

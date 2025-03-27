@@ -6,6 +6,7 @@ use tracing::{error, info};
 use uuid::Uuid;
 use std::fs::{File, OpenOptions};
 use std::path::Path;
+use serde_json;
 
 use dragonfly_common::models::{Machine, MachineStatus, RegisterRequest};
 
@@ -49,6 +50,8 @@ pub async fn init_db() -> Result<()> {
             hostname TEXT,
             os_choice TEXT,
             status TEXT NOT NULL,
+            disks TEXT, -- JSON array of disk info
+            nameservers TEXT, -- JSON array of nameservers
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
@@ -73,24 +76,71 @@ async fn get_pool() -> Result<&'static Pool<Sqlite>> {
 
 // Register a new machine
 pub async fn register_machine(req: &RegisterRequest) -> Result<Uuid> {
-    let machine_id = Uuid::new_v4();
+    let pool = get_pool().await?;
     let now = Utc::now();
     let now_str = now.to_rfc3339();
     
-    let pool = get_pool().await?;
+    // First check if a machine with this MAC address already exists
+    let existing_machine = sqlx::query(
+        r#"
+        SELECT id FROM machines WHERE mac_address = ?
+        "#,
+    )
+    .bind(&req.mac_address)
+    .fetch_optional(pool)
+    .await?;
+    
+    if let Some(row) = existing_machine {
+        // Machine already exists, update it
+        let machine_id_str: String = row.get(0);
+        let machine_id = Uuid::parse_str(&machine_id_str)?;
+        
+        // Serialize disks and nameservers as JSON
+        let disks_json = serde_json::to_string(&req.disks)?;
+        let nameservers_json = serde_json::to_string(&req.nameservers)?;
+        
+        // Update the existing machine's IP, hostname, disks, and nameservers
+        sqlx::query(
+            r#"
+            UPDATE machines 
+            SET ip_address = ?, hostname = ?, disks = ?, nameservers = ?, updated_at = ?
+            WHERE id = ?
+            "#,
+        )
+        .bind(&req.ip_address)
+        .bind(&req.hostname)
+        .bind(&disks_json)
+        .bind(&nameservers_json)
+        .bind(&now_str)
+        .bind(machine_id.to_string())
+        .execute(pool)
+        .await?;
+        
+        info!("Updated existing machine with ID: {}", machine_id);
+        return Ok(machine_id);
+    }
+    
+    // Machine doesn't exist, create a new one
+    let machine_id = Uuid::new_v4();
+    
+    // Serialize disks and nameservers as JSON
+    let disks_json = serde_json::to_string(&req.disks)?;
+    let nameservers_json = serde_json::to_string(&req.nameservers)?;
     
     // Insert the new machine
     let result = sqlx::query(
         r#"
-        INSERT INTO machines (id, mac_address, ip_address, hostname, os_choice, status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, NULL, ?, ?, ?)
+        INSERT INTO machines (id, mac_address, ip_address, hostname, os_choice, status, disks, nameservers, created_at, updated_at)
+        VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(machine_id.to_string())
     .bind(&req.mac_address)
     .bind(&req.ip_address)
     .bind(&req.hostname)
-    .bind(MachineStatus::Registered.to_string())
+    .bind(MachineStatus::ReadyForAdoption.to_string())
+    .bind(&disks_json)
+    .bind(&nameservers_json)
     .bind(&now_str)
     .bind(&now_str)
     .execute(pool)
@@ -114,7 +164,7 @@ pub async fn get_all_machines() -> Result<Vec<Machine>> {
     
     let rows = sqlx::query(
         r#"
-        SELECT id, mac_address, ip_address, hostname, os_choice, status, created_at, updated_at 
+        SELECT id, mac_address, ip_address, hostname, os_choice, status, disks, nameservers, created_at, updated_at 
         FROM machines
         "#,
     )
@@ -124,17 +174,54 @@ pub async fn get_all_machines() -> Result<Vec<Machine>> {
     let mut machines = Vec::new();
     for row in rows {
         let id: String = row.get(0);
+        let mac_address: String = row.get(1);
         let status: String = row.get(5);
+        let disks_json: Option<String> = row.get(6);
+        let nameservers_json: Option<String> = row.get(7);
+        
+        // Generate memorable name from MAC address
+        let memorable_name = dragonfly_common::mac_to_words::mac_to_words_safe(&mac_address);
+        
+        // Deserialize disks and nameservers from JSON or use empty vectors if null
+        let mut disks = if let Some(json) = disks_json {
+            serde_json::from_str::<Vec<dragonfly_common::models::DiskInfo>>(&json).unwrap_or_else(|_| Vec::new())
+        } else {
+            Vec::new()
+        };
+        
+        // Calculate precise disk sizes with 2 decimal places
+        for disk in &mut disks {
+            if disk.size_bytes > 1099511627776 {
+                disk.calculated_size = Some(format!("{:.2} TB", disk.size_bytes as f64 / 1099511627776.0));
+            } else if disk.size_bytes > 1073741824 {
+                disk.calculated_size = Some(format!("{:.2} GB", disk.size_bytes as f64 / 1073741824.0));
+            } else if disk.size_bytes > 1048576 {
+                disk.calculated_size = Some(format!("{:.2} MB", disk.size_bytes as f64 / 1048576.0));
+            } else if disk.size_bytes > 1024 {
+                disk.calculated_size = Some(format!("{:.2} KB", disk.size_bytes as f64 / 1024.0));
+            } else {
+                disk.calculated_size = Some(format!("{} bytes", disk.size_bytes));
+            }
+        }
+        
+        let nameservers = if let Some(json) = nameservers_json {
+            serde_json::from_str::<Vec<String>>(&json).unwrap_or_else(|_| Vec::new())
+        } else {
+            Vec::new()
+        };
         
         machines.push(Machine {
             id: Uuid::parse_str(&id).unwrap_or_default(),
-            mac_address: row.get(1),
+            mac_address,
             ip_address: row.get(2),
             hostname: row.get(3),
             os_choice: row.get(4),
             status: parse_status(&status),
-            created_at: parse_datetime(&row.get::<String, _>(6)),
-            updated_at: parse_datetime(&row.get::<String, _>(7)),
+            disks,
+            nameservers,
+            created_at: parse_datetime(&row.get::<String, _>(8)),
+            updated_at: parse_datetime(&row.get::<String, _>(9)),
+            memorable_name: Some(memorable_name),
         });
     }
     
@@ -148,7 +235,7 @@ pub async fn get_machine_by_id(id: &Uuid) -> Result<Option<Machine>> {
     
     let result = sqlx::query(
         r#"
-        SELECT id, mac_address, ip_address, hostname, os_choice, status, created_at, updated_at 
+        SELECT id, mac_address, ip_address, hostname, os_choice, status, disks, nameservers, created_at, updated_at 
         FROM machines 
         WHERE id = ?
         "#,
@@ -159,20 +246,55 @@ pub async fn get_machine_by_id(id: &Uuid) -> Result<Option<Machine>> {
     
     if let Some(row) = result {
         let id: String = row.get(0);
+        let mac_address: String = row.get(1);
         let status: String = row.get(5);
+        let disks_json: Option<String> = row.get(6);
+        let nameservers_json: Option<String> = row.get(7);
         
-        let machine = Machine {
+        // Generate memorable name from MAC address
+        let memorable_name = dragonfly_common::mac_to_words::mac_to_words_safe(&mac_address);
+        
+        // Deserialize disks and nameservers from JSON or use empty vectors if null
+        let mut disks = if let Some(json) = disks_json {
+            serde_json::from_str::<Vec<dragonfly_common::models::DiskInfo>>(&json).unwrap_or_else(|_| Vec::new())
+        } else {
+            Vec::new()
+        };
+        
+        // Calculate precise disk sizes with 2 decimal places
+        for disk in &mut disks {
+            if disk.size_bytes > 1099511627776 {
+                disk.calculated_size = Some(format!("{:.2} TB", disk.size_bytes as f64 / 1099511627776.0));
+            } else if disk.size_bytes > 1073741824 {
+                disk.calculated_size = Some(format!("{:.2} GB", disk.size_bytes as f64 / 1073741824.0));
+            } else if disk.size_bytes > 1048576 {
+                disk.calculated_size = Some(format!("{:.2} MB", disk.size_bytes as f64 / 1048576.0));
+            } else if disk.size_bytes > 1024 {
+                disk.calculated_size = Some(format!("{:.2} KB", disk.size_bytes as f64 / 1024.0));
+            } else {
+                disk.calculated_size = Some(format!("{} bytes", disk.size_bytes));
+            }
+        }
+        
+        let nameservers = if let Some(json) = nameservers_json {
+            serde_json::from_str::<Vec<String>>(&json).unwrap_or_else(|_| Vec::new())
+        } else {
+            Vec::new()
+        };
+        
+        Ok(Some(Machine {
             id: Uuid::parse_str(&id).unwrap_or_default(),
-            mac_address: row.get(1),
+            mac_address,
             ip_address: row.get(2),
             hostname: row.get(3),
             os_choice: row.get(4),
             status: parse_status(&status),
-            created_at: parse_datetime(&row.get::<String, _>(6)),
-            updated_at: parse_datetime(&row.get::<String, _>(7)),
-        };
-        
-        Ok(Some(machine))
+            disks,
+            nameservers,
+            created_at: parse_datetime(&row.get::<String, _>(8)),
+            updated_at: parse_datetime(&row.get::<String, _>(9)),
+            memorable_name: Some(memorable_name),
+        }))
     } else {
         Ok(None)
     }
@@ -192,7 +314,7 @@ pub async fn assign_os(id: &Uuid, os_choice: &str) -> Result<bool> {
         "#,
     )
     .bind(os_choice)
-    .bind(MachineStatus::InstallingOs.to_string())
+    .bind(MachineStatus::InstallingOS.to_string())
     .bind(&now_str)
     .bind(id.to_string())
     .execute(pool)
@@ -237,18 +359,52 @@ pub async fn update_status(id: &Uuid, status: MachineStatus) -> Result<bool> {
     Ok(success)
 }
 
+// Update machine hostname
+pub async fn update_hostname(id: &Uuid, hostname: &str) -> Result<bool> {
+    let pool = get_pool().await?;
+    let now = Utc::now();
+    let now_str = now.to_rfc3339();
+    
+    let result = sqlx::query(
+        r#"
+        UPDATE machines 
+        SET hostname = ?, updated_at = ? 
+        WHERE id = ?
+        "#,
+    )
+    .bind(hostname)
+    .bind(&now_str)
+    .bind(id.to_string())
+    .execute(pool)
+    .await?;
+    
+    let success = result.rows_affected() > 0;
+    if success {
+        info!("Hostname updated for machine {}: {}", id, hostname);
+    } else {
+        info!("No machine found with ID {} to update hostname", id);
+    }
+    
+    Ok(success)
+}
+
 // Helper function to parse status from string
 fn parse_status(status_str: &str) -> MachineStatus {
+    if status_str.starts_with("ExistingOS: ") {
+        let os = status_str.trim_start_matches("ExistingOS: ").to_string();
+        return MachineStatus::ExistingOS(os);
+    }
+    
     match status_str {
-        "Registered" => MachineStatus::Registered,
-        "AwaitingOsAssignment" => MachineStatus::AwaitingOsAssignment,
-        "InstallingOs" => MachineStatus::InstallingOs,
+        "ReadyForAdoption" => MachineStatus::ReadyForAdoption,
+        "InstallingOS" => MachineStatus::InstallingOS,
         "Ready" => MachineStatus::Ready,
-        s if s.starts_with("Error:") => {
+        "Offline" => MachineStatus::Offline,
+        s if s.starts_with("Error: ") => {
             let message = s.trim_start_matches("Error: ").to_string();
             MachineStatus::Error(message)
         },
-        _ => MachineStatus::Error("Unknown status".to_string()),
+        _ => MachineStatus::Error(format!("Unknown status: {}", status_str)),
     }
 }
 

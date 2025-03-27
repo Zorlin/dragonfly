@@ -7,7 +7,8 @@ use axum::{
 };
 use uuid::Uuid;
 use dragonfly_common::*;
-use tracing::{error, info};
+use dragonfly_common::models::{HostnameUpdateRequest, HostnameUpdateResponse};
+use tracing::{error, info, warn};
 
 use crate::db;
 
@@ -18,6 +19,8 @@ pub fn api_router() -> Router {
         .route("/api/machines/:id", get(get_machine))
         .route("/api/machines/:id/os", post(assign_os))
         .route("/api/machines/:id/status", post(update_status))
+        .route("/api/machines/:id/hostname", post(update_hostname))
+        .route("/api/machines/:id/hostname", get(get_hostname_form))
 }
 
 async fn register_machine(
@@ -27,6 +30,14 @@ async fn register_machine(
     
     match db::register_machine(&payload).await {
         Ok(machine_id) => {
+            // Get the new machine to register with Tinkerbell
+            if let Ok(Some(machine)) = db::get_machine_by_id(&machine_id).await {
+                // Register with Tinkerbell (don't fail if this fails)
+                if let Err(e) = crate::tinkerbell::register_machine(&machine).await {
+                    warn!("Failed to register machine with Tinkerbell (continuing anyway): {}", e);
+                }
+            }
+            
             let response = RegisterResponse {
                 machine_id,
                 next_step: "awaiting_os_assignment".to_string(),
@@ -125,6 +136,14 @@ async fn update_status(
     
     match db::update_status(&id, payload.status).await {
         Ok(true) => {
+            // Get the updated machine to update Tinkerbell
+            if let Ok(Some(machine)) = db::get_machine_by_id(&id).await {
+                // Update the machine in Tinkerbell (don't fail if this fails)
+                if let Err(e) = crate::tinkerbell::register_machine(&machine).await {
+                    warn!("Failed to update machine in Tinkerbell (continuing anyway): {}", e);
+                }
+            }
+            
             let response = StatusUpdateResponse {
                 success: true,
                 message: format!("Status updated for machine {}", id),
@@ -145,6 +164,100 @@ async fn update_status(
                 message: e.to_string(),
             };
             (StatusCode::INTERNAL_SERVER_ERROR, Json(error_response)).into_response()
+        }
+    }
+}
+
+async fn update_hostname(
+    Path(id): Path<Uuid>,
+    Json(payload): Json<HostnameUpdateRequest>,
+) -> Response {
+    info!("Updating hostname for machine {} to {}", id, payload.hostname);
+    
+    match db::update_hostname(&id, &payload.hostname).await {
+        Ok(true) => {
+            // Get the updated machine to update Tinkerbell
+            if let Ok(Some(machine)) = db::get_machine_by_id(&id).await {
+                // Update the machine in Tinkerbell (don't fail if this fails)
+                if let Err(e) = crate::tinkerbell::register_machine(&machine).await {
+                    warn!("Failed to update machine in Tinkerbell (continuing anyway): {}", e);
+                }
+            }
+            
+            let response = HostnameUpdateResponse {
+                success: true,
+                message: format!("Hostname updated for machine {}", id),
+            };
+            (StatusCode::OK, Json(response)).into_response()
+        },
+        Ok(false) => {
+            let error_response = ErrorResponse {
+                error: "Not Found".to_string(),
+                message: format!("Machine with ID {} not found", id),
+            };
+            (StatusCode::NOT_FOUND, Json(error_response)).into_response()
+        },
+        Err(e) => {
+            error!("Failed to update hostname for machine {}: {}", id, e);
+            let error_response = ErrorResponse {
+                error: "Database Error".to_string(),
+                message: e.to_string(),
+            };
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(error_response)).into_response()
+        }
+    }
+}
+
+// Handler to get the hostname edit form
+async fn get_hostname_form(
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    match db::get_machine_by_id(&id).await {
+        Ok(Some(machine)) => {
+            let current_hostname = machine.hostname.unwrap_or_default();
+            // Use raw string literals to avoid escaping issues
+            let html = format!(
+                r###"
+                <div class="sm:flex sm:items-start">
+                    <div class="mt-3 text-center sm:mt-0 sm:text-left w-full">
+                        <h3 class="text-base font-semibold leading-6 text-gray-900">
+                            Update Machine Hostname
+                        </h3>
+                        <div class="mt-2">
+                            <form hx-post="/api/machines/{}/hostname" hx-target="#hostname-modal">
+                                <label for="hostname" class="block text-sm font-medium text-gray-700">Hostname</label>
+                                <input type="text" name="hostname" id="hostname" value="{}" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm" placeholder="Enter hostname">
+                                <div class="mt-5 sm:mt-4 sm:flex sm:flex-row-reverse">
+                                    <button type="submit" class="inline-flex w-full justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 sm:ml-3 sm:w-auto">
+                                        Update
+                                    </button>
+                                    <button type="button" class="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 sm:mt-0 sm:w-auto" onclick="document.getElementById('hostname-modal').classList.add('hidden')">
+                                        Cancel
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+                "###,
+                id, current_hostname
+            );
+            
+            (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/html")], html)
+        },
+        Ok(None) => {
+            let error_html = format!(
+                r###"<div class="p-4 text-red-500">Machine with ID {} not found</div>"###,
+                id
+            );
+            (StatusCode::NOT_FOUND, [(axum::http::header::CONTENT_TYPE, "text/html")], error_html)
+        },
+        Err(e) => {
+            let error_html = format!(
+                r###"<div class="p-4 text-red-500">Error: {}</div>"###,
+                e
+            );
+            (StatusCode::INTERNAL_SERVER_ERROR, [(axum::http::header::CONTENT_TYPE, "text/html")], error_html)
         }
     }
 }

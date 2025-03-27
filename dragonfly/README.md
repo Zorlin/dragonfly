@@ -9,12 +9,12 @@ Dragonfly is a Rust web application that enables simple management of bare metal
 - Integration with Tinkerbell.org infrastructure
 - Simple, secure authentication system
 - Real-time machine status monitoring
-- rqlite for durable, distributed SQLite storage
+- SQLite for lightweight, embedded storage
 
 ## Technical Stack
 
 - **Backend**: Axum (async web framework)
-- **Database**: rqlite (distributed SQLite database)
+- **Database**: SQLite (embedded SQL database)
 - **Frontend**: Askama (compile-time templating)
 - **Data Format**: JSON for API communication
 - **Optional Frontend Enhancements**: 
@@ -29,7 +29,7 @@ Dragonfly is a Rust web application that enables simple management of bare metal
   api.rs           # JSON API endpoints
   ui.rs            # HTML UI routes
   models.rs        # Shared data structures
-  db.rs            # rqlite integration
+  db.rs            # SQLite integration
 /templates
   index.html       # Main dashboard
   machine_list.html # Machine management view
@@ -39,13 +39,9 @@ Dragonfly is a Rust web application that enables simple management of bare metal
 
 ## Configuration
 
-Dragonfly uses rqlite for data storage, which provides distributed SQLite capabilities. By default, it connects to a rqlite instance at localhost:4001. You can configure the rqlite host using the environment variable:
+Dragonfly uses SQLite for data storage, which provides a lightweight, embedded database solution. By default, it stores data in a local file named `sqlite.db`.
 
-```bash
-export RQLITE_HOST="your-rqlite-host:4001"
-```
-
-Other configuration options include:
+Configuration options include:
 - Authentication settings
 - API endpoints
 - UI customization
@@ -102,37 +98,19 @@ For development:
 cargo run
 ```
 
-## rqlite Integration
+## Database Integration
 
-Dragonfly uses rqlite, a distributed database built on SQLite. Key benefits include:
+Dragonfly uses SQLite, an embedded database engine. Key benefits include:
 
-- **Simplicity**: Familiar SQL syntax and SQLite compatibility
-- **Distributed**: Built-in consensus and cluster management
-- **Reliability**: Robust replication via the Raft consensus algorithm
-- **Performance**: High-speed reads and consistent writes
+- **Simplicity**: Familiar SQL syntax
+- **Zero Configuration**: No separate server process required
+- **Reliability**: ACID-compliant transactions
+- **Performance**: Efficient for moderate workloads
 - **Lightweight**: Minimal resource requirements
-
-The database schema creates a straightforward `machines` table for tracking machine registration, OS assignments, and status updates. The implementation includes an in-memory fallback mechanism for resilience if the database connection fails.
-
-## Setting Up rqlite
-
-To run rqlite locally for development:
-
-```bash
-# Download and start rqlite
-wget https://github.com/rqlite/rqlite/releases/download/v7.19.0/rqlite-v7.19.0-linux-amd64.tar.gz
-tar xvfz rqlite-v7.19.0-linux-amd64.tar.gz
-cd rqlite-v7.19.0-linux-amd64
-./rqlited -node-id 1 ~/node.1
-```
-
-For production deployments, consider using a multi-node cluster for high availability.
-
-## Development
 
 The project uses:
 - Axum for the web framework
-- rqlite for data storage
+- SQLite for data storage
 - Askama for HTML templating
 - Serde for JSON serialization
 - Kubernetes integration for Tinkerbell.org compatibility
