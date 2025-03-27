@@ -13,17 +13,15 @@
         <div class="p-6">
             <div class="flex justify-between items-center mb-4">
                 <h2 class="text-xl font-semibold">
-                    {% match machine.memorable_name %}
-                        {% when Some with (name) %}
-                            {{ name }}
-                        {% when None %}
-                            {% match machine.hostname %}
-                                {% when Some with (hostname) %}
-                                    {{ hostname }}
-                                {% when None %}
-                                    Unnamed Machine
-                            {% endmatch %}
-                        {% endmatch %}
+                    {% if machine.hostname.is_some() %}
+                        {{ machine.hostname.as_ref().unwrap() }}
+                    {% else %}
+                        {% if machine.memorable_name.is_some() %}
+                            {{ machine.memorable_name.as_ref().unwrap() }}
+                        {% else %}
+                            Unnamed Machine
+                        {% endif %}
+                    {% endif %}
                 </h2>
                 <span class="px-3 py-1 rounded-full text-sm font-semibold 
                     {% match machine.status %}
@@ -76,22 +74,29 @@
                         <div class="grid grid-cols-2">
                             <span class="text-gray-600">Hostname:</span>
                             <span>
-                                {% match machine.hostname %}
-                                    {% when Some with (hostname) %}
-                                        {{ hostname }}
-                                    {% when None %}
-                                        Not set
-                                {% endmatch %}
+                                {% if machine.hostname.is_some() %}
+                                    {{ machine.hostname.as_ref().unwrap() }}
+                                {% else %}
+                                    Not set
+                                {% endif %}
                             </span>
                         </div>
-                        {% match machine.os_choice %}
-                            {% when Some with (os) %}
-                            <div class="grid grid-cols-2">
-                                <span class="text-gray-600">OS Choice:</span>
-                                <span>{{ os }}</span>
-                            </div>
-                            {% when None %}
-                            {% endmatch %}
+                        <div class="grid grid-cols-2">
+                            <span class="text-gray-600">Machine Name:</span>
+                            <span>
+                                {% if machine.memorable_name.is_some() %}
+                                    {{ machine.memorable_name.as_ref().unwrap() }}
+                                {% else %}
+                                    Not available
+                                {% endif %}
+                            </span>
+                        </div>
+                        {% if machine.os_choice.is_some() %}
+                        <div class="grid grid-cols-2">
+                            <span class="text-gray-600">OS Choice:</span>
+                            <span>{{ machine.os_choice.as_ref().unwrap() }}</span>
+                        </div>
+                        {% endif %}
                         <div class="grid grid-cols-2">
                             <span class="text-gray-600">Created:</span>
                             <span>{{ machine.created_at.format("%Y-%m-%d %H:%M:%S") }}</span>
@@ -141,20 +146,18 @@
                                 <tr>
                                     <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{{ disk.device }}</td>
                                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                        {% match disk.calculated_size %}
-                                            {% when Some with (size) %}
-                                                {{ size }}
-                                            {% when None %}
-                                                {{ disk.size_bytes }} bytes
-                                        {% endmatch %}
+                                        {% if disk.calculated_size.is_some() %}
+                                            {{ disk.calculated_size.as_ref().unwrap() }}
+                                        {% else %}
+                                            {{ disk.size_bytes }} bytes
+                                        {% endif %}
                                     </td>
                                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                        {% match disk.model %}
-                                            {% when Some with (model) %}
-                                                {{ model }}
-                                            {% when None %}
-                                                Unknown
-                                        {% endmatch %}
+                                        {% if disk.model.is_some() %}
+                                            {{ disk.model.as_ref().unwrap() }}
+                                        {% else %}
+                                            Unknown
+                                        {% endif %}
                                     </td>
                                 </tr>
                                 {% endfor %}
