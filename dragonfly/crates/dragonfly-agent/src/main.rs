@@ -1,7 +1,7 @@
 use reqwest::Client;
 use anyhow::{Result, Context};
 use dragonfly_common::*;
-use dragonfly_common::models::{MachineStatus, DiskInfo};
+use dragonfly_common::models::{MachineStatus, DiskInfo, Machine, RegisterRequest, RegisterResponse, StatusUpdateRequest, OsInstalledUpdateRequest};
 use std::env;
 use std::fs;
 use std::path::Path;
@@ -381,13 +381,13 @@ async fn main() -> Result<()> {
     tracing::info!("Detected OS: {} {}", os_name, os_version);
     
     // Determine machine status based on OS detection
-    let current_status = if !os_name.is_empty() && os_name != "Unknown" {
+    let (current_status, os_info) = if !os_name.is_empty() && os_name != "Unknown" {
         let os_full_name = format!("{} {}", os_name, os_version);
         tracing::info!("Found existing OS: {}", os_full_name);
-        MachineStatus::ExistingOS(os_full_name)
+        (MachineStatus::ExistingOS, Some(os_full_name))
     } else {
         tracing::info!("Unable to detect OS, marking as ready for adoption");
-        MachineStatus::ReadyForAdoption
+        (MachineStatus::ReadyForAdoption, None)
     };
     
     // Check if this machine already exists in the database
@@ -432,6 +432,27 @@ async fn main() -> Result<()> {
             }
             
             tracing::info!("Machine status updated successfully!");
+            
+            // If we detected an OS, also update the os_installed field
+            if let Some(os_name) = &os_info {
+                tracing::info!("Updating OS installed to: {}", os_name);
+                let os_installed_update = OsInstalledUpdateRequest {
+                    os_installed: os_name.clone(),
+                };
+                
+                let os_installed_response = client.post(format!("{}/api/machines/{}/os_installed", api_url, machine.id))
+                    .json(&os_installed_update)
+                    .send()
+                    .await
+                    .context("Failed to send OS installed update")?;
+                
+                if !os_installed_response.status().is_success() {
+                    let error_text = os_installed_response.text().await?;
+                    anyhow::bail!("Failed to update OS installed: {}", error_text);
+                }
+                
+                tracing::info!("OS installed updated successfully!");
+            }
         },
         None => {
             // Machine doesn't exist, register it
@@ -484,6 +505,27 @@ async fn main() -> Result<()> {
             }
             
             tracing::info!("Machine status updated successfully!");
+            
+            // If we detected an OS, also update the os_installed field
+            if let Some(os_name) = &os_info {
+                tracing::info!("Updating OS installed to: {}", os_name);
+                let os_installed_update = OsInstalledUpdateRequest {
+                    os_installed: os_name.clone(),
+                };
+                
+                let os_installed_response = client.post(format!("{}/api/machines/{}/os_installed", api_url, register_response.machine_id))
+                    .json(&os_installed_update)
+                    .send()
+                    .await
+                    .context("Failed to send OS installed update")?;
+                
+                if !os_installed_response.status().is_success() {
+                    let error_text = os_installed_response.text().await?;
+                    anyhow::bail!("Failed to update OS installed: {}", error_text);
+                }
+                
+                tracing::info!("OS installed updated successfully!");
+            }
         }
     }
     

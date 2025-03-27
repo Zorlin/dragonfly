@@ -10,6 +10,7 @@ pub struct Machine {
     pub ip_address: String,
     pub hostname: Option<String>,
     pub os_choice: Option<String>,
+    pub os_installed: Option<String>,
     pub status: MachineStatus,
     pub disks: Vec<DiskInfo>,
     pub nameservers: Vec<String>,
@@ -21,7 +22,7 @@ pub struct Machine {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum MachineStatus {
-    ExistingOS(String),    // Foreign existing OS (with OS name)
+    ExistingOS,             // Foreign existing OS (name stored in os_installed field)
     ReadyForAdoption,      // Blank machine ready to be adopted
     InstallingOS,          // Installing an OS via tinkerbell
     Ready,                 // Part of the cluster, serving K8s workloads
@@ -32,7 +33,7 @@ pub enum MachineStatus {
 impl fmt::Display for MachineStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            MachineStatus::ExistingOS(os) => write!(f, "ExistingOS: {}", os),
+            MachineStatus::ExistingOS => write!(f, "Existing OS"),
             MachineStatus::ReadyForAdoption => write!(f, "ReadyForAdoption"),
             MachineStatus::InstallingOS => write!(f, "InstallingOS"),
             MachineStatus::Ready => write!(f, "Ready"),
@@ -102,6 +103,17 @@ pub struct HostnameUpdateRequest {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HostnameUpdateResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OsInstalledUpdateRequest {
+    pub os_installed: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OsInstalledUpdateResponse {
     pub success: bool,
     pub message: String,
 } 

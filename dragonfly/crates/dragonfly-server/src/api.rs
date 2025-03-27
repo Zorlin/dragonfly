@@ -7,7 +7,7 @@ use axum::{
 };
 use uuid::Uuid;
 use dragonfly_common::*;
-use dragonfly_common::models::{HostnameUpdateRequest, HostnameUpdateResponse};
+use dragonfly_common::models::{HostnameUpdateRequest, HostnameUpdateResponse, OsInstalledUpdateRequest, OsInstalledUpdateResponse};
 use tracing::{error, info, warn};
 
 use crate::db;
@@ -21,6 +21,7 @@ pub fn api_router() -> Router {
         .route("/api/machines/:id/status", post(update_status))
         .route("/api/machines/:id/hostname", post(update_hostname))
         .route("/api/machines/:id/hostname", get(get_hostname_form))
+        .route("/api/machines/:id/os_installed", post(update_os_installed))
 }
 
 async fn register_machine(
@@ -199,6 +200,46 @@ async fn update_hostname(
         },
         Err(e) => {
             error!("Failed to update hostname for machine {}: {}", id, e);
+            let error_response = ErrorResponse {
+                error: "Database Error".to_string(),
+                message: e.to_string(),
+            };
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(error_response)).into_response()
+        }
+    }
+}
+
+async fn update_os_installed(
+    Path(id): Path<Uuid>,
+    Json(payload): Json<OsInstalledUpdateRequest>,
+) -> Response {
+    info!("Updating OS installed for machine {} to {}", id, payload.os_installed);
+    
+    match db::update_os_installed(&id, &payload.os_installed).await {
+        Ok(true) => {
+            // Get the updated machine to update Tinkerbell
+            if let Ok(Some(machine)) = db::get_machine_by_id(&id).await {
+                // Update the machine in Tinkerbell (don't fail if this fails)
+                if let Err(e) = crate::tinkerbell::register_machine(&machine).await {
+                    warn!("Failed to update machine in Tinkerbell (continuing anyway): {}", e);
+                }
+            }
+            
+            let response = OsInstalledUpdateResponse {
+                success: true,
+                message: format!("OS installed updated for machine {}", id),
+            };
+            (StatusCode::OK, Json(response)).into_response()
+        },
+        Ok(false) => {
+            let error_response = ErrorResponse {
+                error: "Not Found".to_string(),
+                message: format!("Machine with ID {} not found", id),
+            };
+            (StatusCode::NOT_FOUND, Json(error_response)).into_response()
+        },
+        Err(e) => {
+            error!("Failed to update OS installed for machine {}: {}", id, e);
             let error_response = ErrorResponse {
                 error: "Database Error".to_string(),
                 message: e.to_string(),

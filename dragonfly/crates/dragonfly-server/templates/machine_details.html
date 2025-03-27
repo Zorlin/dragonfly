@@ -25,7 +25,7 @@
                 </h2>
                 <span class="px-3 py-1 rounded-full text-sm font-semibold 
                     {% match machine.status %}
-                        {% when MachineStatus::ExistingOS(_) %}
+                        {% when MachineStatus::ExistingOS %}
                             bg-blue-100 text-blue-800
                         {% when MachineStatus::ReadyForAdoption %}
                             bg-yellow-100 text-yellow-800
@@ -39,8 +39,8 @@
                             bg-red-100 text-red-800
                     {% endmatch %}">
                     {% match machine.status %}
-                        {% when MachineStatus::ExistingOS(os) %}
-                            Existing OS: {{ os }}
+                        {% when MachineStatus::ExistingOS %}
+                            Existing OS
                         {% when MachineStatus::ReadyForAdoption %}
                             Ready for Adoption
                         {% when MachineStatus::InstallingOS %}
@@ -95,6 +95,12 @@
                         <div class="grid grid-cols-2">
                             <span class="text-gray-600">OS Choice:</span>
                             <span>{{ machine.os_choice.as_ref().unwrap() }}</span>
+                        </div>
+                        {% endif %}
+                        {% if machine.os_installed.is_some() %}
+                        <div class="grid grid-cols-2">
+                            <span class="text-gray-600">Detected OS:</span>
+                            <span>{{ machine.os_installed.as_ref().unwrap() }}</span>
                         </div>
                         {% endif %}
                         <div class="grid grid-cols-2">

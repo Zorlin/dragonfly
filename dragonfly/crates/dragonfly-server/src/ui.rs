@@ -85,7 +85,7 @@ fn count_machines_by_status(machines: &[Machine]) -> HashMap<String, usize> {
     // Count actual statuses
     for machine in machines {
         let status_key = match &machine.status {
-            MachineStatus::ExistingOS(_) => "Existing OS",
+            MachineStatus::ExistingOS => "Existing OS",
             MachineStatus::ReadyForAdoption => "Ready for Adoption",
             MachineStatus::InstallingOS => "Installing OS",
             MachineStatus::Ready => "Ready",

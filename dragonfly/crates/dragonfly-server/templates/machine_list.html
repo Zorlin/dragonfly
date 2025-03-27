@@ -39,25 +39,25 @@
             <tbody class="bg-white divide-y divide-gray-200">
                 {% for machine in machines %}
                 <tr class="hover:bg-gray-50 cursor-pointer" onclick="window.location='/machines/{{ machine.id }}'">
-                    <td class="px-6 py-4 whitespace-nowrap">
-                        <div class="text-sm font-medium text-gray-900">
-                            {% if machine.hostname.is_some() %}
+                    <td class="px-6 py-4">
+                        {% if machine.hostname.is_some() %}
+                            <div class="text-sm font-bold text-gray-900">
                                 {{ machine.hostname.as_ref().unwrap() }}
-                            {% else %}
+                            </div>
+                            {% if machine.memorable_name.is_some() %}
+                                <div class="text-sm text-gray-500">
+                                    {{ machine.memorable_name.as_ref().unwrap() }}
+                                </div>
+                            {% endif %}
+                        {% else %}
+                            <div class="text-sm font-bold text-gray-900">
                                 {% if machine.memorable_name.is_some() %}
                                     {{ machine.memorable_name.as_ref().unwrap() }}
                                 {% else %}
                                     {{ machine.id }}
                                 {% endif %}
-                            {% endif %}
-                        </div>
-                        <div class="text-xs text-gray-500">
-                            {% if machine.hostname.is_some() %}
-                                {% if machine.memorable_name.is_some() %}
-                                    {{ machine.memorable_name.as_ref().unwrap() }}
-                                {% endif %}
-                            {% endif %}
-                        </div>
+                            </div>
+                        {% endif %}
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap">
                         <div class="text-sm text-gray-500">{{ machine.mac_address }}</div>

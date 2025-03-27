@@ -49,6 +49,7 @@ pub async fn init_db() -> Result<()> {
             ip_address TEXT NOT NULL,
             hostname TEXT,
             os_choice TEXT,
+            os_installed TEXT,
             status TEXT NOT NULL,
             disks TEXT, -- JSON array of disk info
             nameservers TEXT, -- JSON array of nameservers
@@ -59,6 +60,9 @@ pub async fn init_db() -> Result<()> {
     )
     .execute(&pool)
     .await?;
+    
+    // Run database migrations
+    migrate_db(&pool).await?;
     
     // Store the pool globally
     if let Err(_) = DB_POOL.set(pool) {
@@ -130,8 +134,8 @@ pub async fn register_machine(req: &RegisterRequest) -> Result<Uuid> {
     // Insert the new machine
     let result = sqlx::query(
         r#"
-        INSERT INTO machines (id, mac_address, ip_address, hostname, os_choice, status, disks, nameservers, created_at, updated_at)
-        VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)
+        INSERT INTO machines (id, mac_address, ip_address, hostname, os_choice, os_installed, status, disks, nameservers, created_at, updated_at)
+        VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(machine_id.to_string())
@@ -164,7 +168,7 @@ pub async fn get_all_machines() -> Result<Vec<Machine>> {
     
     let rows = sqlx::query(
         r#"
-        SELECT id, mac_address, ip_address, hostname, os_choice, status, disks, nameservers, created_at, updated_at 
+        SELECT id, mac_address, ip_address, hostname, os_choice, os_installed, status, disks, nameservers, created_at, updated_at 
         FROM machines
         "#,
     )
@@ -175,9 +179,9 @@ pub async fn get_all_machines() -> Result<Vec<Machine>> {
     for row in rows {
         let id: String = row.get(0);
         let mac_address: String = row.get(1);
-        let status: String = row.get(5);
-        let disks_json: Option<String> = row.get(6);
-        let nameservers_json: Option<String> = row.get(7);
+        let status_str: String = row.get(6);
+        let disks_json: Option<String> = row.get(7);
+        let nameservers_json: Option<String> = row.get(8);
         
         // Generate memorable name from MAC address
         let memorable_name = dragonfly_common::mac_to_words::mac_to_words_safe(&mac_address);
@@ -210,17 +214,24 @@ pub async fn get_all_machines() -> Result<Vec<Machine>> {
             Vec::new()
         };
         
+        // Parse status and ensure os_choice is set when we have ExistingOS
+        let status = parse_status(&status_str);
+        
+        // os_choice is separate from status now
+        let os_choice: Option<String> = row.get(4);
+        
         machines.push(Machine {
             id: Uuid::parse_str(&id).unwrap_or_default(),
             mac_address,
             ip_address: row.get(2),
             hostname: row.get(3),
-            os_choice: row.get(4),
-            status: parse_status(&status),
+            os_choice,
+            os_installed: row.get(5),
+            status,
             disks,
             nameservers,
-            created_at: parse_datetime(&row.get::<String, _>(8)),
-            updated_at: parse_datetime(&row.get::<String, _>(9)),
+            created_at: parse_datetime(&row.get::<String, _>(9)),
+            updated_at: parse_datetime(&row.get::<String, _>(10)),
             memorable_name: Some(memorable_name),
         });
     }
@@ -235,7 +246,7 @@ pub async fn get_machine_by_id(id: &Uuid) -> Result<Option<Machine>> {
     
     let result = sqlx::query(
         r#"
-        SELECT id, mac_address, ip_address, hostname, os_choice, status, disks, nameservers, created_at, updated_at 
+        SELECT id, mac_address, ip_address, hostname, os_choice, os_installed, status, disks, nameservers, created_at, updated_at 
         FROM machines 
         WHERE id = ?
         "#,
@@ -247,9 +258,9 @@ pub async fn get_machine_by_id(id: &Uuid) -> Result<Option<Machine>> {
     if let Some(row) = result {
         let id: String = row.get(0);
         let mac_address: String = row.get(1);
-        let status: String = row.get(5);
-        let disks_json: Option<String> = row.get(6);
-        let nameservers_json: Option<String> = row.get(7);
+        let status_str: String = row.get(6);
+        let disks_json: Option<String> = row.get(7);
+        let nameservers_json: Option<String> = row.get(8);
         
         // Generate memorable name from MAC address
         let memorable_name = dragonfly_common::mac_to_words::mac_to_words_safe(&mac_address);
@@ -282,17 +293,24 @@ pub async fn get_machine_by_id(id: &Uuid) -> Result<Option<Machine>> {
             Vec::new()
         };
         
+        // Parse status and ensure os_choice is set when we have ExistingOS
+        let status = parse_status(&status_str);
+        
+        // os_choice is separate from status now
+        let os_choice: Option<String> = row.get(4);
+        
         Ok(Some(Machine {
             id: Uuid::parse_str(&id).unwrap_or_default(),
             mac_address,
             ip_address: row.get(2),
             hostname: row.get(3),
-            os_choice: row.get(4),
-            status: parse_status(&status),
+            os_choice,
+            os_installed: row.get(5),
+            status,
             disks,
             nameservers,
-            created_at: parse_datetime(&row.get::<String, _>(8)),
-            updated_at: parse_datetime(&row.get::<String, _>(9)),
+            created_at: parse_datetime(&row.get::<String, _>(9)),
+            updated_at: parse_datetime(&row.get::<String, _>(10)),
             memorable_name: Some(memorable_name),
         }))
     } else {
@@ -336,6 +354,7 @@ pub async fn update_status(id: &Uuid, status: MachineStatus) -> Result<bool> {
     let now = Utc::now();
     let now_str = now.to_rfc3339();
     
+    // We no longer need special handling for ExistingOS since the OS info is in os_installed
     let result = sqlx::query(
         r#"
         UPDATE machines 
@@ -388,11 +407,39 @@ pub async fn update_hostname(id: &Uuid, hostname: &str) -> Result<bool> {
     Ok(success)
 }
 
+// Update OS installed on machine
+pub async fn update_os_installed(id: &Uuid, os_installed: &str) -> Result<bool> {
+    let pool = get_pool().await?;
+    let now = Utc::now();
+    let now_str = now.to_rfc3339();
+    
+    let result = sqlx::query(
+        r#"
+        UPDATE machines 
+        SET os_installed = ?, updated_at = ? 
+        WHERE id = ?
+        "#,
+    )
+    .bind(os_installed)
+    .bind(&now_str)
+    .bind(id.to_string())
+    .execute(pool)
+    .await?;
+    
+    let success = result.rows_affected() > 0;
+    if success {
+        info!("OS installed updated for machine {}: {}", id, os_installed);
+    } else {
+        info!("No machine found with ID {} to update OS installed", id);
+    }
+    
+    Ok(success)
+}
+
 // Helper function to parse status from string
 fn parse_status(status_str: &str) -> MachineStatus {
-    if status_str.starts_with("ExistingOS: ") {
-        let os = status_str.trim_start_matches("ExistingOS: ").to_string();
-        return MachineStatus::ExistingOS(os);
+    if status_str.starts_with("ExistingOS: ") || status_str == "Existing OS" {
+        return MachineStatus::ExistingOS;
     }
     
     match status_str {
@@ -413,4 +460,69 @@ fn parse_datetime(datetime_str: &str) -> chrono::DateTime<Utc> {
     chrono::DateTime::parse_from_rfc3339(datetime_str)
         .map(|dt| dt.with_timezone(&Utc))
         .unwrap_or_else(|_| Utc::now())
+}
+
+// Apply database migrations
+async fn migrate_db(pool: &Pool<Sqlite>) -> Result<()> {
+    // Check if os_installed column exists
+    let result = sqlx::query(
+        r#"
+        SELECT COUNT(*) AS count FROM pragma_table_info('machines') WHERE name = 'os_installed'
+        "#,
+    )
+    .fetch_one(pool)
+    .await?;
+    
+    let column_exists: i64 = result.get(0);
+    
+    // Add os_installed column if it doesn't exist
+    if column_exists == 0 {
+        info!("Adding os_installed column to machines table");
+        sqlx::query(
+            r#"
+            ALTER TABLE machines ADD COLUMN os_installed TEXT
+            "#,
+        )
+        .execute(pool)
+        .await?;
+        
+        // If we have ExistingOS machines, update their os_installed field
+        let existing_os_machines = sqlx::query(
+            r#"
+            SELECT id, status FROM machines WHERE status LIKE 'ExistingOS:%' OR status = 'Existing OS'
+            "#,
+        )
+        .fetch_all(pool)
+        .await?;
+        
+        let now = Utc::now();
+        let now_str = now.to_rfc3339();
+        
+        for row in existing_os_machines {
+            let id: String = row.get(0);
+            let status_str: String = row.get(1);
+            let os = if status_str.starts_with("ExistingOS: ") {
+                status_str.trim_start_matches("ExistingOS: ").to_string()
+            } else {
+                "Unknown".to_string() // Fallback for "Existing OS" format
+            };
+            
+            info!("Setting os_installed for machine {} to {}", id, os);
+            sqlx::query(
+                r#"
+                UPDATE machines 
+                SET os_installed = ?, updated_at = ?, status = ? 
+                WHERE id = ?
+                "#,
+            )
+            .bind(os)
+            .bind(&now_str)
+            .bind("Existing OS") // Update to the new format
+            .bind(id)
+            .execute(pool)
+            .await?;
+        }
+    }
+    
+    Ok(())
 } 
