@@ -91,11 +91,17 @@ async fn register_machine(
     }
 }
 
-async fn get_all_machines(req: axum::http::Request<axum::body::Body>) -> Response {
+async fn get_all_machines(
+    auth_session: AuthSession,
+    req: axum::http::Request<axum::body::Body>
+) -> Response {
     // Check if this is an HTMX request
     let is_htmx = req.headers()
         .get("HX-Request")
         .is_some();
+    
+    // Check if user is authenticated as admin
+    let is_admin = auth_session.user.is_some();
 
     match db::get_all_machines().await {
         Ok(machines) => {
@@ -140,6 +146,46 @@ async fn get_all_machines(req: axum::http::Request<axum::body::Body>) -> Respons
                             }
                         };
                         
+                        // Admin-only buttons (Assign OS, Update Status, Delete)
+                        let admin_buttons = if is_admin {
+                            format!(r#"
+                                {}
+                                <button
+                                    @click="showStatusModal('{}')"
+                                    class="px-3 py-1 inline-flex text-sm leading-5 font-semibold rounded-full bg-blue-500 text-white hover:bg-blue-600"
+                                >
+                                    Update Status
+                                </button>
+                                <button
+                                    @click="showDeleteModal('{}')"
+                                    class="text-red-600 hover:text-red-900"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M9.75 9.75l4.5 4.5m0-4.5l-4.5 4.5M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                    </svg>
+                                </button>
+                            "#,
+                            // Conditionally include the Assign OS button
+                            if machine.status == MachineStatus::AwaitingAssignment {
+                                format!(r#"
+                                    <button
+                                        @click="showOsModal('{}')"
+                                        class="px-3 py-1 inline-flex text-sm leading-5 font-semibold rounded-full bg-indigo-600 text-white hover:bg-indigo-700 cursor-pointer"
+                                    >
+                                        Assign OS
+                                    </button>
+                                "#, machine.id)
+                            } else {
+                                String::new()
+                            },
+                            machine.id,
+                            machine.id
+                            )
+                        } else {
+                            // Empty string when not admin
+                            String::new()
+                        };
+                        
                         html.push_str(&format!(r#"
                             <tr class="hover:bg-gray-50" @click="window.location='/machines/{}'">
                                 <td class="px-6 py-4 whitespace-nowrap">
@@ -169,20 +215,6 @@ async fn get_all_machines(req: axum::http::Request<axum::body::Body>) -> Respons
                                 <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
                                     <div class="flex space-x-3" @click.stop>
                                         {}
-                                        <button
-                                            @click="showStatusModal('{}')"
-                                            class="px-3 py-1 inline-flex text-sm leading-5 font-semibold rounded-full bg-blue-500 text-white hover:bg-blue-600"
-                                        >
-                                            Update Status
-                                        </button>
-                                        <button
-                                            @click="showDeleteModal('{}')"
-                                            class="text-red-600 hover:text-red-900"
-                                        >
-                                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5">
-                                                <path stroke-linecap="round" stroke-linejoin="round" d="M9.75 9.75l4.5 4.5m0-4.5l-4.5 4.5M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                            </svg>
-                                        </button>
                                     </div>
                                 </td>
                             </tr>
@@ -205,21 +237,8 @@ async fn get_all_machines(req: axum::http::Request<axum::body::Body>) -> Respons
                             _ => machine.status.to_string()
                         },
                         os_display,
-                        if machine.status == MachineStatus::AwaitingAssignment {
-                            format!(r#"
-                                <button
-                                    @click="showOsModal('{}')"
-                                    class="px-3 py-1 inline-flex text-sm leading-5 font-semibold rounded-full bg-indigo-600 text-white hover:bg-indigo-700 cursor-pointer"
-                                >
-                                    Assign OS
-                                </button>
-                            "#, machine.id)
-                        } else {
-                            String::new()
-                        },
-                        machine.id,
-                        machine.id
-                    ));
+                        admin_buttons
+                        ));
                     }
                     Html(html).into_response()
                 }

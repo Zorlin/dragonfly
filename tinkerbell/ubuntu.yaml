@@ -1,11 +1,11 @@
 apiVersion: tinkerbell.org/v1alpha1
 kind: Template
 metadata:
-  name: ubuntu
+  name: ubuntu-2204
   namespace: tink
 spec:
   data: |
-    name: ubuntu
+    name: ubuntu-2204
     version: "0.1"
     global_timeout: 9800
     tasks:
