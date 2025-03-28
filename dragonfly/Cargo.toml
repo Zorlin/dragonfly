@@ -28,7 +28,7 @@ description = "A web application for managing bare metal datacenter infrastructu
 
 [dependencies]
 # Web Framework
-axum = { version = "0.7", features = ["macros"] }
+axum = { version = "0.8", features = ["macros"] }
 tokio = { workspace = true }
 tower = "0.4"
 tower-http = { version = "0.5", features = ["trace", "auth"] }

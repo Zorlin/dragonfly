@@ -7,11 +7,11 @@ description = "API server for Dragonfly bare metal infrastructure management"
 
 [dependencies]
 # Web Framework
-axum = { version = "0.8.3", features = ["macros"] }
+axum = { version = "0.8", features = ["macros"] }
 # Authentication
-axum-login = "0.13.0"
-axum-extra = { version = "0.10.0", features = ["cookie"] }
-tower-sessions = "0.10.0"
+axum-login = { version = "0.17.0" }
+axum-extra = { version = "0.10.1", features = ["cookie"] }
+tower-sessions = { version = "0.14.0", features = ["memory-store"] }
 async-session = "3.0.0"
 async-trait = "0.1.79"
 # Password hashing
