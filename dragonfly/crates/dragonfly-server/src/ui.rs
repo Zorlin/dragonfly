@@ -7,7 +7,7 @@ use axum::{
     Form, Router,
 };
 use dragonfly_common::models::{Machine, MachineStatus};
-use tracing::{error, info, debug};
+use tracing::{error, info};
 use std::collections::HashMap;
 use serde_json;
 use uuid;
@@ -45,7 +45,6 @@ mod filters {
 
 // Extract theme from cookies
 fn get_theme_from_cookie(headers: &HeaderMap) -> String {
-    tracing::debug!("Extracting theme from cookie headers");
     if let Some(cookie_header) = headers.get(header::COOKIE) {
         if let Ok(cookie_str) = cookie_header.to_str() {
             for cookie_pair in cookie_str.split(';') {

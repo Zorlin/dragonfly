@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+
+{% block title %}Dragonfly - Settings{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+    <div class="flex justify-between items-center mb-6">
+        <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Settings</h1>
+        <a href="/" class="inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+            Back to Dashboard
+        </a>
+    </div>
+
+    <div class="bg-white dark:bg-gray-800 shadow overflow-hidden sm:rounded-lg">
+        <div class="px-4 py-5 sm:px-6">
+            <h3 class="text-lg leading-6 font-medium text-gray-900 dark:text-white">
+                Application Settings
+            </h3>
+            <p class="mt-1 max-w-2xl text-sm text-gray-500 dark:text-gray-400">
+                Configure Dragonfly settings and preferences
+            </p>
+        </div>
+
+        <!-- Settings Form -->
+        <form id="settings-form" action="/settings" method="POST">
+            <div class="border-t border-gray-200 dark:border-gray-700 px-4 py-5 sm:p-6">
+                <fieldset>
+                    <legend class="text-base font-medium text-gray-900 dark:text-white">Appearance</legend>
+                    <div class="mt-4 space-y-4">
+                        <div class="flex items-center">
+                            <label for="theme" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mr-4 w-32">
+                                Theme
+                            </label>
+                            <select 
+                                id="theme" 
+                                name="theme" 
+                                class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md"
+                            >
+                                <option value="light" {% if theme == "light" %}selected{% endif %}>Light</option>
+                                <option value="dark" {% if theme == "dark" %}selected{% endif %}>Dark</option>
+                                <option value="system" {% if theme == "system" %}selected{% endif %}>System</option>
+                            </select>
+                        </div>
+                    </div>
+                </fieldset>
+
+                <fieldset class="mt-8">
+                    <legend class="text-base font-medium text-gray-900 dark:text-white">Security</legend>
+                    <div class="mt-4 space-y-4">
+                        <div class="flex items-start">
+                            <div class="flex items-center h-5">
+                                <input 
+                                    id="require_login" 
+                                    name="require_login" 
+                                    type="checkbox" 
+                                    {% if require_login %}checked{% endif %}
+                                    class="focus:ring-indigo-500 h-4 w-4 text-indigo-600 border-gray-300 dark:border-gray-600 dark:bg-gray-700 rounded"
+                                >
+                            </div>
+                            <div class="ml-3 text-sm">
+                                <label for="require_login" class="font-medium text-gray-700 dark:text-gray-300">Always require login</label>
+                                <p class="text-gray-500 dark:text-gray-400">When enabled, the entire site will require admin login to access. API endpoints will remain accessible for machine registration.</p>
+                            </div>
+                        </div>
+                    </div>
+                </fieldset>
+
+                <fieldset class="mt-8">
+                    <legend class="text-base font-medium text-gray-900 dark:text-white">Admin Account</legend>
+                    <div class="mt-4 space-y-4">
+                        <div class="flex items-center">
+                            <label for="username" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mr-4 w-32">
+                                Username
+                            </label>
+                            <input 
+                                type="text" 
+                                name="username" 
+                                id="username" 
+                                value="{{ admin_username }}"
+                                class="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                            >
+                        </div>
+                        <div class="flex items-center">
+                            <label for="password" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mr-4 w-32">
+                                New Password
+                            </label>
+                            <input 
+                                type="password" 
+                                name="password" 
+                                id="password" 
+                                placeholder="Leave blank to keep current password"
+                                class="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                            >
+                        </div>
+                        <div class="flex items-center">
+                            <label for="password_confirm" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mr-4 w-32">
+                                Confirm Password
+                            </label>
+                            <input 
+                                type="password" 
+                                name="password_confirm" 
+                                id="password_confirm" 
+                                placeholder="Leave blank to keep current password"
+                                class="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                            >
+                        </div>
+                    </div>
+                </fieldset>
+            </div>
+
+            <div class="px-4 py-3 bg-gray-50 dark:bg-gray-700 text-right sm:px-6">
+                <button type="submit" class="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                    Save Settings
+                </button>
+            </div>
+        </form>
+    </div>
+
+    {% if has_initial_password %}
+    <div class="mt-6 bg-yellow-50 border-l-4 border-yellow-400 p-4">
+        <div class="flex">
+            <div class="flex-shrink-0">
+                <svg class="h-5 w-5 text-yellow-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                    <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd" />
+                </svg>
+            </div>
+            <div class="ml-3">
+                <h3 class="text-sm font-medium text-yellow-800">Initial Admin Password</h3>
+                <div class="mt-2 text-sm text-yellow-700">
+                    <p>Your initial admin password is: <strong>{{ rendered_password }}</strong></p>
+                    <p class="mt-1">Please change it immediately using the form above and keep it in a safe place.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.getElementById('settings-form').addEventListener('submit', function(e) {
+        const password = document.getElementById('password').value;
+        const confirmPassword = document.getElementById('password_confirm').value;
+        
+        if (password && password !== confirmPassword) {
+            e.preventDefault();
+            alert('The passwords do not match. Please try again.');
+        }
+    });
+</script>
+{% endblock %} 
