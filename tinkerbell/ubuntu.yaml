@@ -91,3 +91,14 @@ spec:
                       match:
                         name: en*
                       dhcp4: true
+
+          - name: "kexec to boot OS"
+            image: quay.io/tinkerbell/actions/kexec:latest
+            timeout: 90
+            pid: host
+            environment:
+                BLOCK_DEVICE: {{ formatPartition ( index .Hardware.Disks 0 ) 3 }}
+                FS_TYPE: ext4
+                KERNEL_PATH: /boot/vmlinuz
+                INITRD_PATH: /boot/initrd
+                CMD_LINE: "root={{ formatPartition ( index .Hardware.Disks 0 ) 3 }} ro"

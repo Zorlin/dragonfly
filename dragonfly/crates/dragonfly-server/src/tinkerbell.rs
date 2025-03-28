@@ -68,7 +68,20 @@ struct Metadata {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+struct HardwareMetadata {
+    instance: Instance,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct Instance {
+    id: String,
+    hostname: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct HardwareSpec {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metadata: Option<HardwareMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
     disks: Option<Vec<DiskSpec>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -140,7 +153,10 @@ pub async fn register_machine(machine: &Machine) -> Result<()> {
     
     // Extract hostname from machine
     let hostname = machine.hostname.clone().unwrap_or_else(|| resource_name.clone());
-    
+
+    // Extract the memorable name from the machine
+    let memorable_name = machine.memorable_name.clone().unwrap_or_else(|| resource_name.clone());
+
     info!("Registering machine {} with Tinkerbell", resource_name);
     
     // Create the Hardware resource, focusing only on the specific fields we need to set
@@ -154,6 +170,12 @@ pub async fn register_machine(machine: &Machine) -> Result<()> {
             labels: None,
         },
         spec: HardwareSpec {
+            metadata: Some(HardwareMetadata {
+                instance: Instance {
+                    id: memorable_name.clone(),
+                    hostname: hostname.clone(),
+                },
+            }),
             disks: Some(machine.disks.iter().map(|disk| DiskSpec {
                 device: disk.device.clone(),
             }).collect()),
@@ -297,19 +319,52 @@ pub async fn delete_hardware(mac_address: &str) -> Result<()> {
     let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), "tink", &api_resource);
     
     // Delete the hardware resource
-    match api.delete(&resource_name, &kube::api::DeleteParams::default()).await {
-        Ok(_) => {
-            info!("Successfully deleted hardware resource: {}", resource_name);
+    let hardware_result = api.delete(&resource_name, &kube::api::DeleteParams::default()).await;
+
+    // Also delete any associated workflow
+    let workflow_name = format!("os-install-{}", mac_address.replace(":", "-"));
+    info!("Deleting workflow resource from Tinkerbell: {}", workflow_name);
+
+    // Create the ApiResource for the Workflow CRD
+    let workflow_api_resource = kube::core::ApiResource {
+        group: "tinkerbell.org".to_string(),
+        version: "v1alpha1".to_string(),
+        kind: "Workflow".to_string(),
+        api_version: "tinkerbell.org/v1alpha1".to_string(),
+        plural: "workflows".to_string(),
+    };
+
+    // Create a dynamic API to interact with the Workflow custom resource
+    let workflow_api: Api<DynamicObject> = Api::namespaced_with(client.clone(), "tink", &workflow_api_resource);
+
+    // Delete the workflow resource
+    let workflow_result = workflow_api.delete(&workflow_name, &kube::api::DeleteParams::default()).await;
+
+    // Handle results
+    match (hardware_result, workflow_result) {
+        (Ok(_), Ok(_)) => {
+            info!("Successfully deleted hardware and workflow resources");
             Ok(())
         },
-        Err(KubeError::Api(ae)) if ae.code == 404 => {
-            // Not found is OK - the resource doesn't exist
-            info!("Hardware resource not found in Tinkerbell (already deleted): {}", resource_name);
+        (Ok(_), Err(KubeError::Api(ae))) if ae.code == 404 => {
+            info!("Successfully deleted hardware resource, workflow was not found");
             Ok(())
         },
-        Err(e) => {
+        (Err(KubeError::Api(ae)), Ok(_)) if ae.code == 404 => {
+            info!("Hardware resource not found, but successfully deleted workflow");
+            Ok(())
+        },
+        (Err(KubeError::Api(ae1)), Err(KubeError::Api(ae2))) if ae1.code == 404 && ae2.code == 404 => {
+            info!("Neither hardware nor workflow resources were found (already deleted)");
+            Ok(())
+        },
+        (Err(e), _) => {
             error!("Failed to delete hardware resource from Tinkerbell: {}", e);
             Err(anyhow!("Failed to delete hardware resource: {}", e))
+        },
+        (_, Err(e)) => {
+            error!("Failed to delete workflow resource from Tinkerbell: {}", e);
+            Err(anyhow!("Failed to delete workflow resource: {}", e))
         }
     }
 }

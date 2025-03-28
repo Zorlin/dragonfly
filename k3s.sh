@@ -51,6 +51,7 @@ cat <<EOF > values.yaml
 global:
   trustedProxies: 
     - ${trusted_proxies}
+    - "10.7.1.200/24"
   publicIP: ${BOOTSTRAP_IP}
 smee:
   # http:

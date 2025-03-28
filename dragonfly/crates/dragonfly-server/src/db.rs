@@ -143,7 +143,7 @@ pub async fn register_machine(req: &RegisterRequest) -> Result<Uuid> {
     .bind(&req.mac_address)
     .bind(&req.ip_address)
     .bind(&req.hostname)
-    .bind(MachineStatus::ReadyForAdoption.to_string())
+    .bind(serde_json::to_string(&MachineStatus::AwaitingAssignment)?)
     .bind(&disks_json)
     .bind(&nameservers_json)
     .bind(&now_str)
@@ -206,7 +206,7 @@ pub async fn get_all_machines() -> Result<Vec<Machine>> {
             } else if disk.size_bytes > 1024 {
                 disk.calculated_size = Some(format!("{:.2} KB", disk.size_bytes as f64 / 1024.0));
             } else {
-                disk.calculated_size = Some(format!("{} bytes", disk.size_bytes));
+                disk.calculated_size = Some(format!("{} B", disk.size_bytes));
             }
         }
         
@@ -216,37 +216,31 @@ pub async fn get_all_machines() -> Result<Vec<Machine>> {
             Vec::new()
         };
         
-        // Deserialize BMC credentials if present
         let bmc_credentials = if let Some(json) = bmc_credentials_json {
             serde_json::from_str::<dragonfly_common::models::BmcCredentials>(&json).ok()
         } else {
             None
         };
         
-        // Parse status and ensure os_choice is set when we have ExistingOS
-        let status = parse_status(&status_str);
-        
-        // os_choice is separate from status now
-        let os_choice: Option<String> = row.get(4);
-        
-        machines.push(Machine {
-            id: Uuid::parse_str(&id).unwrap_or_default(),
+        let machine = Machine {
+            id: Uuid::parse_str(&id)?,
             mac_address,
             ip_address: row.get(2),
             hostname: row.get(3),
-            os_choice,
+            os_choice: row.get(4),
             os_installed: row.get(5),
-            status,
+            status: parse_status(&status_str),
             disks,
             nameservers,
-            created_at: parse_datetime(&row.get::<String, _>(9)),
-            updated_at: parse_datetime(&row.get::<String, _>(10)),
             memorable_name: Some(memorable_name),
             bmc_credentials,
-        });
+            created_at: parse_datetime(&row.get::<String, _>(9)),
+            updated_at: parse_datetime(&row.get::<String, _>(10)),
+        };
+        
+        machines.push(machine);
     }
     
-    info!("Retrieved {} machines", machines.len());
     Ok(machines)
 }
 
@@ -438,7 +432,7 @@ pub async fn assign_os(id: &Uuid, os_choice: &str) -> Result<bool> {
         "#,
     )
     .bind(os_choice)
-    .bind(MachineStatus::InstallingOS.to_string())
+    .bind(serde_json::to_string(&MachineStatus::InstallingOS)?)
     .bind(&now_str)
     .bind(id.to_string())
     .execute(pool)
@@ -460,7 +454,9 @@ pub async fn update_status(id: &Uuid, status: MachineStatus) -> Result<bool> {
     let now = Utc::now();
     let now_str = now.to_rfc3339();
     
-    // We no longer need special handling for ExistingOS since the OS info is in os_installed
+    // Store the serialized enum value directly
+    let status_json = serde_json::to_string(&status)?;
+    
     let result = sqlx::query(
         r#"
         UPDATE machines 
@@ -468,7 +464,7 @@ pub async fn update_status(id: &Uuid, status: MachineStatus) -> Result<bool> {
         WHERE id = ?
         "#,
     )
-    .bind(status.to_string())
+    .bind(status_json)
     .bind(&now_str)
     .bind(id.to_string())
     .execute(pool)
@@ -684,12 +680,18 @@ pub async fn update_nameservers(id: &Uuid, nameservers: &[String]) -> Result<boo
 
 // Helper function to parse status from string
 fn parse_status(status_str: &str) -> MachineStatus {
+    // First try to deserialize from JSON
+    if let Ok(status) = serde_json::from_str::<MachineStatus>(status_str) {
+        return status;
+    }
+    
+    // Fallback for legacy data
     if status_str.starts_with("ExistingOS: ") || status_str == "Existing OS" {
         return MachineStatus::ExistingOS;
     }
     
     match status_str {
-        "ReadyForAdoption" => MachineStatus::ReadyForAdoption,
+        "AwaitingAssignment" => MachineStatus::AwaitingAssignment,
         "InstallingOS" => MachineStatus::InstallingOS,
         "Ready" => MachineStatus::Ready,
         "Offline" => MachineStatus::Offline,

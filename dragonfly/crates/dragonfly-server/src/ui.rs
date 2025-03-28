@@ -42,9 +42,21 @@ pub struct MachineListTemplate {
 }
 
 #[derive(Template)]
-#[template(path = "machine_details.html", escape = "html")]
+#[template(path = "machine_details.html")]
 pub struct MachineDetailsTemplate {
     pub machine: Machine,
+}
+
+impl IntoResponse for MachineDetailsTemplate {
+    fn into_response(self) -> axum::response::Response {
+        match self.render() {
+            Ok(html) => axum::response::Html(html).into_response(),
+            Err(err) => (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to render template: {}", err),
+            ).into_response(),
+        }
+    }
 }
 
 enum UiTemplate {
@@ -76,7 +88,7 @@ fn count_machines_by_status(machines: &[Machine]) -> HashMap<String, usize> {
     
     // Initialize counts for all statuses to ensure they're present in the chart
     counts.insert("Existing OS".to_string(), 0);
-    counts.insert("Ready for Adoption".to_string(), 0);
+    counts.insert("Awaiting OS Assignment".to_string(), 0);
     counts.insert("Installing OS".to_string(), 0);
     counts.insert("Ready".to_string(), 0);
     counts.insert("Offline".to_string(), 0);
@@ -86,7 +98,7 @@ fn count_machines_by_status(machines: &[Machine]) -> HashMap<String, usize> {
     for machine in machines {
         let status_key = match &machine.status {
             MachineStatus::ExistingOS => "Existing OS",
-            MachineStatus::ReadyForAdoption => "Ready for Adoption",
+            MachineStatus::AwaitingAssignment => "Awaiting OS Assignment",
             MachineStatus::InstallingOS => "Installing OS",
             MachineStatus::Ready => "Ready",
             MachineStatus::Offline => "Offline",
@@ -133,19 +145,13 @@ pub async fn index() -> impl IntoResponse {
 pub async fn machine_list() -> impl IntoResponse {
     match db::get_all_machines().await {
         Ok(machines) => {
-            info!("Rendering machine list page with {} machines", machines.len());
+            // Only log if we actually have machines to report
+            if !machines.is_empty() {
+                info!("Found {} machines", machines.len());
+            }
             
-            // Format machines with delete buttons
-            let machines_with_buttons = machines.into_iter()
-                .map(|machine| {
-                    // Add the delete button functionality to each machine
-                    // This will be handled by the template
-                    machine
-                })
-                .collect::<Vec<_>>();
-                
             UiTemplate::MachineList(MachineListTemplate { 
-                machines: machines_with_buttons 
+                machines
             })
         },
         Err(e) => {

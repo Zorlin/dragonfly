@@ -1,7 +1,7 @@
 use reqwest::Client;
 use anyhow::{Result, Context};
-use dragonfly_common::*;
 use dragonfly_common::models::{MachineStatus, DiskInfo, Machine, RegisterRequest, RegisterResponse, StatusUpdateRequest, OsInstalledUpdateRequest};
+use dragonfly_common::mac_to_words;
 use std::env;
 use std::fs;
 use std::path::Path;
@@ -420,10 +420,10 @@ async fn main() -> Result<()> {
         (MachineStatus::ExistingOS, Some(os_full_name))
     } else if args.setup {
         tracing::info!("No bootable OS found, marking as ready for adoption");
-        (MachineStatus::ReadyForAdoption, None)
+        (MachineStatus::AwaitingAssignment, None)
     } else {
         tracing::info!("Running in Alpine environment");
-        (MachineStatus::ReadyForAdoption, None)
+        (MachineStatus::AwaitingAssignment, None)
     };
     
     // Check if this machine already exists in the database
@@ -474,7 +474,7 @@ async fn main() -> Result<()> {
             if let Some(os_name) = &os_info {
                 tracing::info!("Updating OS installed to: {}", os_name);
                 let os_installed_update = OsInstalledUpdateRequest {
-                    os_installed: os_name.clone(),
+                    os_installed: os_name.to_string(),
                 };
                 
                 let os_installed_response = client.post(format!("{}/api/machines/{}/os_installed", api_url, machine.id))
@@ -549,7 +549,7 @@ async fn main() -> Result<()> {
             if let Some(os_name) = &os_info {
                 tracing::info!("Updating OS installed to: {}", os_name);
                 let os_installed_update = OsInstalledUpdateRequest {
-                    os_installed: os_name.clone(),
+                    os_installed: os_name.to_string(),
                 };
                 
                 let os_installed_response = client.post(format!("{}/api/machines/{}/os_installed", api_url, register_response.machine_id))

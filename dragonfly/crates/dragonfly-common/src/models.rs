@@ -25,7 +25,7 @@ pub struct Machine {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum MachineStatus {
     ExistingOS,             // Foreign existing OS (name stored in os_installed field)
-    ReadyForAdoption,      // Blank machine ready to be adopted
+    AwaitingAssignment,    // Blank machine ready for OS assignment
     InstallingOS,          // Installing an OS via tinkerbell
     Ready,                 // Part of the cluster, serving K8s workloads
     Offline,               // Machine is offline (can be WoL'd)
@@ -36,7 +36,7 @@ impl fmt::Display for MachineStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             MachineStatus::ExistingOS => write!(f, "Existing OS"),
-            MachineStatus::ReadyForAdoption => write!(f, "ReadyForAdoption"),
+            MachineStatus::AwaitingAssignment => write!(f, "Awaiting OS Assignment"),
             MachineStatus::InstallingOS => write!(f, "InstallingOS"),
             MachineStatus::Ready => write!(f, "Ready"),
             MachineStatus::Offline => write!(f, "Offline"),

@@ -1,7 +1,8 @@
 use axum::{
     extract::{Json, Path, Form, FromRequest},
     http::StatusCode,
-    response::{IntoResponse, Response, Html},
+    response::{IntoResponse, Response, Html, Sse},
+    response::sse::{Event, KeepAlive},
     routing::{post, get, delete, put},
     Router,
 };
@@ -11,8 +12,27 @@ use dragonfly_common::models::{HostnameUpdateRequest, HostnameUpdateResponse, Os
 use tracing::{error, info, warn};
 use serde_json::json;
 use serde::Deserialize;
+use futures::stream::{self, Stream};
+use std::convert::Infallible;
+use tokio_stream::StreamExt;
+use std::time::Duration;
+use tokio::sync::broadcast;
+use serde::Serialize;
 
 use crate::db;
+
+// Add this near the top with other statics/constants
+static MACHINE_EVENTS: once_cell::sync::Lazy<broadcast::Sender<MachineEvent>> = 
+    once_cell::sync::Lazy::new(|| {
+        let (tx, _) = broadcast::channel(100);
+        tx
+    });
+
+#[derive(Clone, Serialize)]
+struct MachineEvent {
+    type_: String,
+    machine_id: Option<uuid::Uuid>,
+}
 
 pub fn api_router() -> Router {
     Router::new()
@@ -21,14 +41,15 @@ pub fn api_router() -> Router {
         .route("/api/machines/:id", get(get_machine))
         .route("/api/machines/:id", delete(delete_machine))
         .route("/api/machines/:id", put(update_machine))
-        .route("/api/machines/:id/os", get(get_os_form))
+        .route("/api/machines/:id/os", get(get_machine_os))
         .route("/api/machines/:id/os", post(assign_os))
+        .route("/api/machines/:id/status", get(get_machine_status))
         .route("/api/machines/:id/status", post(update_status))
-        .route("/api/machines/:id/status", get(get_status_form))
         .route("/api/machines/:id/hostname", post(update_hostname))
         .route("/api/machines/:id/hostname", get(get_hostname_form))
         .route("/api/machines/:id/os_installed", post(update_os_installed))
         .route("/api/machines/:id/bmc", post(update_bmc))
+        .route("/api/events", get(machine_events))
         .route("/:mac", get(ipxe_script))
 }
 
@@ -47,6 +68,12 @@ async fn register_machine(
                 }
             }
             
+            // Emit machine discovered event
+            let _ = MACHINE_EVENTS.send(MachineEvent {
+                type_: "machine_discovered".to_string(),
+                machine_id: Some(machine_id),
+            });
+            
             let response = RegisterResponse {
                 machine_id,
                 next_step: "awaiting_os_assignment".to_string(),
@@ -64,10 +91,137 @@ async fn register_machine(
     }
 }
 
-async fn get_all_machines() -> Response {
+async fn get_all_machines(req: axum::http::Request<axum::body::Body>) -> Response {
+    // Check if this is an HTMX request
+    let is_htmx = req.headers()
+        .get("HX-Request")
+        .is_some();
+
     match db::get_all_machines().await {
         Ok(machines) => {
-            (StatusCode::OK, Json(machines)).into_response()
+            if is_htmx {
+                // For HTMX requests, return HTML table rows
+                if machines.is_empty() {
+                    Html(r#"<tr>
+                        <td colspan="6" class="px-6 py-8 text-center text-gray-500 italic">
+                            No machines added or discovered yet.
+                        </td>
+                    </tr>"#).into_response()
+                } else {
+                    // Return HTML rows for each machine
+                    let mut html = String::new();
+                    for machine in machines {
+                        let id_string = machine.id.to_string();
+                        let display_name = machine.hostname.as_ref()
+                            .or(machine.memorable_name.as_ref())
+                            .map(|s| s.as_str())
+                            .unwrap_or(&id_string);
+                        
+                        let secondary_name = if machine.hostname.is_some() && machine.memorable_name.is_some() {
+                            machine.memorable_name.as_ref().map(|s| s.as_str()).unwrap_or("")
+                        } else {
+                            ""
+                        };
+
+                        let os_display = match &machine.os_installed {
+                            Some(os) => os.clone(),
+                            None => {
+                                if machine.status == MachineStatus::InstallingOS {
+                                    if let Some(os) = &machine.os_choice {
+                                        format!("Installing {}", os)
+                                    } else {
+                                        "Installing OS".to_string()
+                                    }
+                                } else if let Some(os) = &machine.os_choice {
+                                    os.clone()
+                                } else {
+                                    "None".to_string()
+                                }
+                            }
+                        };
+                        
+                        html.push_str(&format!(r#"
+                            <tr class="hover:bg-gray-50" @click="window.location='/machines/{}'">
+                                <td class="px-6 py-4 whitespace-nowrap">
+                                    <div class="text-sm font-medium text-gray-900">
+                                        {}
+                                    </div>
+                                    <div class="text-xs text-gray-500">
+                                        {}
+                                    </div>
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap">
+                                    <div class="text-sm text-gray-500">{}</div>
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap">
+                                    <div class="text-sm text-gray-500">{}</div>
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap">
+                                    <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {}">
+                                        {}
+                                    </span>
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap">
+                                    <div class="text-sm text-gray-500">
+                                        {}
+                                    </div>
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                    <div class="flex space-x-3" @click.stop>
+                                        {}
+                                        <button
+                                            @click="showStatusModal('{}')"
+                                            class="px-3 py-1 inline-flex text-sm leading-5 font-semibold rounded-full bg-blue-500 text-white hover:bg-blue-600"
+                                        >
+                                            Update Status
+                                        </button>
+                                        <button
+                                            @click="showDeleteModal('{}')"
+                                            class="text-red-600 hover:text-red-900"
+                                        >
+                                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5">
+                                                <path stroke-linecap="round" stroke-linejoin="round" d="M9.75 9.75l4.5 4.5m0-4.5l-4.5 4.5M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                            </svg>
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        "#,
+                        machine.id,
+                        display_name,
+                        secondary_name,
+                        machine.mac_address,
+                        machine.ip_address,
+                        match machine.status {
+                            MachineStatus::Ready => "bg-green-100 text-green-800",
+                            MachineStatus::InstallingOS => "bg-yellow-100 text-yellow-800",
+                            MachineStatus::AwaitingAssignment => "bg-blue-100 text-blue-800",
+                            _ => "bg-red-100 text-red-800"
+                        },
+                        machine.status.to_string(),
+                        os_display,
+                        if machine.status == MachineStatus::AwaitingAssignment {
+                            format!(r#"
+                                <button
+                                    @click="showOsModal('{}')"
+                                    class="px-3 py-1 inline-flex text-sm leading-5 font-semibold rounded-full bg-indigo-600 text-white hover:bg-indigo-700 cursor-pointer"
+                                >
+                                    Assign OS
+                                </button>
+                            "#, machine.id)
+                        } else {
+                            String::new()
+                        },
+                        machine.id,
+                        machine.id
+                    ));
+                    }
+                    Html(html).into_response()
+                }
+            } else {
+                // For non-HTMX requests, return JSON
+                (StatusCode::OK, Json(machines)).into_response()
+            }
         },
         Err(e) => {
             error!("Failed to retrieve machines: {}", e);
@@ -259,11 +413,63 @@ async fn assign_os_internal(id: Uuid, os_choice: String) -> Response {
 
 async fn update_status(
     Path(id): Path<Uuid>,
-    Json(payload): Json<StatusUpdateRequest>,
+    req: axum::http::Request<axum::body::Body>,
 ) -> Response {
-    info!("Updating status for machine {} to {:?}", id, payload.status);
+    // Check content type to determine how to extract the status
+    let content_type = req.headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
     
-    match db::update_status(&id, payload.status).await {
+    info!("Content-Type received: {}", content_type);
+    
+    let status = if content_type.starts_with("application/json") {
+        // Extract JSON
+        match axum::Json::<StatusUpdateRequest>::from_request(req, &()).await {
+            Ok(Json(payload)) => Some(payload.status),
+            Err(e) => {
+                error!("Failed to parse JSON request: {}", e);
+                None
+            }
+        }
+    } else {
+        // Extract form data
+        match axum::Form::<std::collections::HashMap<String, String>>::from_request(req, &()).await {
+            Ok(form) => {
+                match form.0.get("status") {
+                    Some(status_str) => {
+                        match status_str.as_str() {
+                            "Ready" => Some(MachineStatus::Ready),
+                            "AwaitingAssignment" => Some(MachineStatus::AwaitingAssignment),
+                            "InstallingOS" => Some(MachineStatus::InstallingOS),
+                            "Error" => Some(MachineStatus::Error("Manual error state".to_string())),
+                            _ => None
+                        }
+                    },
+                    None => None
+                }
+            },
+            Err(e) => {
+                error!("Failed to parse form data: {}", e);
+                None
+            }
+        }
+    };
+
+    let status = match status {
+        Some(s) => s,
+        None => {
+            return Html(format!(r#"
+                <div class="p-4 mb-4 text-sm text-red-700 bg-red-100 rounded-lg" role="alert">
+                    <span class="font-medium">Error!</span> Invalid or missing status field.
+                </div>
+            "#)).into_response();
+        }
+    };
+
+    info!("Updating status for machine {} to {:?}", id, status);
+    
+    match db::update_status(&id, status).await {
         Ok(true) => {
             // Get the updated machine to update Tinkerbell
             if let Ok(Some(machine)) = db::get_machine_by_id(&id).await {
@@ -273,26 +479,39 @@ async fn update_status(
                 }
             }
             
-            let response = StatusUpdateResponse {
-                success: true,
-                message: format!("Status updated for machine {}", id),
-            };
-            (StatusCode::OK, Json(response)).into_response()
+            // Emit machine updated event
+            let _ = MACHINE_EVENTS.send(MachineEvent {
+                type_: "machine_updated".to_string(),
+                machine_id: Some(id),
+            });
+            
+            // Return HTML success message
+            Html(format!(r#"
+                <div class="p-4 mb-4 text-sm text-green-700 bg-green-100 rounded-lg" role="alert">
+                    <span class="font-medium">Success!</span> Machine status has been updated.
+                </div>
+                <script>
+                    // Close the modal
+                    document.getElementById('status-modal').classList.add('hidden');
+                    // Refresh the machine list
+                    htmx.trigger(document.querySelector('tbody'), 'refreshMachines');
+                </script>
+            "#)).into_response()
         },
         Ok(false) => {
-            let error_response = ErrorResponse {
-                error: "Not Found".to_string(),
-                message: format!("Machine with ID {} not found", id),
-            };
-            (StatusCode::NOT_FOUND, Json(error_response)).into_response()
+            Html(format!(r#"
+                <div class="p-4 mb-4 text-sm text-red-700 bg-red-100 rounded-lg" role="alert">
+                    <span class="font-medium">Error!</span> Machine with ID {} not found.
+                </div>
+            "#, id)).into_response()
         },
         Err(e) => {
             error!("Failed to update status for machine {}: {}", id, e);
-            let error_response = ErrorResponse {
-                error: "Database Error".to_string(),
-                message: e.to_string(),
-            };
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(error_response)).into_response()
+            Html(format!(r#"
+                <div class="p-4 mb-4 text-sm text-red-700 bg-red-100 rounded-lg" role="alert">
+                    <span class="font-medium">Error!</span> Database error: {}.
+                </div>
+            "#, e)).into_response()
         }
     }
 }
@@ -312,6 +531,12 @@ async fn update_hostname(
                     warn!("Failed to update machine in Tinkerbell (continuing anyway): {}", e);
                 }
             }
+            
+            // Emit machine updated event
+            let _ = MACHINE_EVENTS.send(MachineEvent {
+                type_: "machine_updated".to_string(),
+                machine_id: Some(id),
+            });
             
             let response = HostnameUpdateResponse {
                 success: true,
@@ -345,6 +570,12 @@ async fn update_os_installed(
     
     match db::update_os_installed(&id, &payload.os_installed).await {
         Ok(true) => {
+            // Emit machine updated event
+            let _ = MACHINE_EVENTS.send(MachineEvent {
+                type_: "machine_updated".to_string(),
+                machine_id: Some(id),
+            });
+            
             let response = OsInstalledUpdateResponse {
                 success: true,
                 message: format!("OS installed updated for machine {}", id),
@@ -391,6 +622,12 @@ async fn update_bmc(
     
     match db::update_bmc_credentials(&id, &credentials).await {
         Ok(true) => {
+            // Emit machine updated event
+            let _ = MACHINE_EVENTS.send(MachineEvent {
+                type_: "machine_updated".to_string(),
+                machine_id: Some(id),
+            });
+            
             (StatusCode::OK, Html(format!(r#"
                 <div class="p-4 mb-4 text-sm text-green-700 bg-green-100 rounded-lg" role="alert">
                     <span class="font-medium">Success!</span> BMC credentials updated.
@@ -536,6 +773,12 @@ async fn delete_machine(
                         "Machine deleted from Dragonfly but there was an issue removing it from Tinkerbell."
                     };
                     
+                    // Emit machine deleted event
+                    let _ = MACHINE_EVENTS.send(MachineEvent {
+                        type_: "machine_deleted".to_string(),
+                        machine_id: Some(id),
+                    });
+                    
                     (StatusCode::OK, Json(json!({ "success": true, "message": message }))).into_response()
                 },
                 Ok(false) => {
@@ -659,6 +902,12 @@ async fn update_machine(
     }
 
     if updated {
+        // Emit machine updated event
+        let _ = MACHINE_EVENTS.send(MachineEvent {
+            type_: "machine_updated".to_string(),
+            machine_id: Some(id),
+        });
+        
         (StatusCode::OK, Json(json!({
             "success": true,
             "message": messages.join(", ")
@@ -672,116 +921,80 @@ async fn update_machine(
 }
 
 // Handler to get the OS assignment form
-async fn get_os_form(
-    Path(id): Path<Uuid>,
-) -> impl IntoResponse {
-    match db::get_machine_by_id(&id).await {
-        Ok(Some(_machine)) => {
-            // Use raw string literals to avoid escaping issues
-            let html = format!(
-                r###"
-                <div class="sm:flex sm:items-start">
-                    <div class="mt-3 text-center sm:mt-0 sm:text-left w-full">
-                        <h3 class="text-base font-semibold leading-6 text-gray-900">
-                            Assign Operating System
-                        </h3>
-                        <div id="os-form-container" class="mt-2">
-                            <form id="os-form" hx-post="/api/machines/{}/os" hx-target="#os-form-container">
-                                <select name="os_choice" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
-                                    <option value="Debian 12">Debian 12</option>
-                                    <option value="Ubuntu 24.04">Ubuntu 24.04</option>
-                                    <option value="Flatcar Linux">Flatcar Linux</option>
-                                </select>
-                                <div class="mt-5 sm:mt-4 sm:flex sm:flex-row-reverse">
-                                    <button type="submit" class="inline-flex w-full justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 sm:ml-3 sm:w-auto">
-                                        Assign
-                                    </button>
-                                    <button type="button" class="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 sm:mt-0 sm:w-auto" onclick="document.getElementById('os-modal').classList.add('hidden')">
-                                        Cancel
-                                    </button>
-                                </div>
-                            </form>
+async fn get_machine_os(Path(id): Path<String>) -> Response {
+    Html(format!(r#"
+        <div class="sm:flex sm:items-start">
+            <div class="mt-3 text-center sm:mt-0 sm:text-left w-full">
+                <h3 class="text-lg leading-6 font-medium text-gray-900">
+                    Assign Operating System
+                </h3>
+                <div class="mt-2">
+                    <form hx-post="/api/machines/{}/os" hx-swap="none" @submit="osModal = false">
+                        <div class="mt-4">
+                            <label for="os" class="block text-sm font-medium text-gray-700">Operating System</label>
+                            <select
+                                id="os"
+                                name="os"
+                                class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md"
+                            >
+                                <option value="ubuntu">Ubuntu</option>
+                                <option value="debian">Debian</option>
+                                <option value="centos">CentOS</option>
+                            </select>
                         </div>
-                    </div>
+                        <div class="mt-5 sm:mt-4 sm:flex sm:flex-row-reverse">
+                            <button
+                                type="submit"
+                                class="inline-flex w-full justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 sm:ml-3 sm:w-auto"
+                            >
+                                Assign
+                            </button>
+                            <button
+                                type="button"
+                                class="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 sm:mt-0 sm:w-auto"
+                                @click="osModal = false"
+                            >
+                                Cancel
+                            </button>
+                        </div>
+                    </form>
                 </div>
-                "###,
-                id
-            );
-            
-            (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/html")], html)
-        },
-        Ok(None) => {
-            let error_html = format!(
-                r###"<div class="p-4 text-red-500">Machine with ID {} not found</div>"###,
-                id
-            );
-            (StatusCode::NOT_FOUND, [(axum::http::header::CONTENT_TYPE, "text/html")], error_html)
-        },
-        Err(e) => {
-            let error_html = format!(
-                r###"<div class="p-4 text-red-500">Error: {}</div>"###,
-                e
-            );
-            (StatusCode::INTERNAL_SERVER_ERROR, [(axum::http::header::CONTENT_TYPE, "text/html")], error_html)
-        }
-    }
+            </div>
+        </div>
+    "#, id)).into_response()
 }
 
 // Handler to get the status update form 
-async fn get_status_form(
-    Path(id): Path<Uuid>,
-) -> impl IntoResponse {
-    match db::get_machine_by_id(&id).await {
-        Ok(Some(_machine)) => {
-            // Use raw string literals to avoid escaping issues
-            let html = format!(
-                r###"
-                <div class="sm:flex sm:items-start">
-                    <div class="mt-3 text-center sm:mt-0 sm:text-left w-full">
-                        <h3 class="text-base font-semibold leading-6 text-gray-900">
-                            Update Machine Status
-                        </h3>
-                        <div class="mt-2">
-                            <form id="status-form" hx-post="/api/machines/{}/status" hx-target="#status-modal">
-                                <select name="status" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
-                                    <option value="ReadyForAdoption">Ready For Adoption</option>
-                                    <option value="InstallingOS">Installing OS</option>
-                                    <option value="Ready">Ready</option>
-                                    <option value="Offline">Offline</option>
-                                </select>
-                                <div class="mt-5 sm:mt-4 sm:flex sm:flex-row-reverse">
-                                    <button type="submit" class="inline-flex w-full justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 sm:ml-3 sm:w-auto">
-                                        Update
-                                    </button>
-                                    <button type="button" class="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 sm:mt-0 sm:w-auto" onclick="document.getElementById('status-modal').classList.add('hidden')">
-                                        Cancel
-                                    </button>
-                                </div>
-                            </form>
+pub async fn get_machine_status(Path(id): Path<Uuid>) -> impl IntoResponse {
+    let html = format!(r#"
+        <div class="sm:flex sm:items-start">
+            <div class="mt-3 text-center sm:mt-0 sm:text-left w-full">
+                <h3 class="text-lg leading-6 font-medium text-gray-900">
+                    Update Machine Status
+                </h3>
+                <div class="mt-2">
+                    <form hx-post="/api/machines/{}/status" hx-swap="none" @submit="showStatus = false">
+                        <div class="mb-4">
+                            <label for="status" class="block text-sm font-medium text-gray-700">Status</label>
+                            <select name="status" id="status" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md">
+                                <option value="Ready">Ready</option>
+                                <option value="AwaitingAssignment">Awaiting OS Assignment</option>
+                                <option value="InstallingOS">Installing OS</option>
+                                <option value="Error">Error</option>
+                            </select>
                         </div>
-                    </div>
+                        <div class="mt-5 sm:mt-6">
+                            <button type="submit" class="inline-flex justify-center w-full rounded-md border border-transparent shadow-sm px-4 py-2 bg-indigo-600 text-base font-medium text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:text-sm">
+                                Update Status
+                            </button>
+                        </div>
+                    </form>
                 </div>
-                "###,
-                id
-            );
-            
-            (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/html")], html)
-        },
-        Ok(None) => {
-            let error_html = format!(
-                r###"<div class="p-4 text-red-500">Machine with ID {} not found</div>"###,
-                id
-            );
-            (StatusCode::NOT_FOUND, [(axum::http::header::CONTENT_TYPE, "text/html")], error_html)
-        },
-        Err(e) => {
-            let error_html = format!(
-                r###"<div class="p-4 text-red-500">Error: {}</div>"###,
-                e
-            );
-            (StatusCode::INTERNAL_SERVER_ERROR, [(axum::http::header::CONTENT_TYPE, "text/html")], error_html)
-        }
-    }
+            </div>
+        </div>
+    "#, id);
+
+    Html(html)
 }
 
 // Error handling
@@ -793,4 +1006,28 @@ pub async fn handle_error(err: anyhow::Error) -> Response {
     };
 
     (StatusCode::INTERNAL_SERVER_ERROR, Json(error_response)).into_response()
+}
+
+// Add this new handler function
+async fn machine_events() -> Sse<impl Stream<Item = std::result::Result<Event, Infallible>>> {
+    let rx = MACHINE_EVENTS.subscribe();
+    
+    let stream = stream::unfold(rx, |mut rx| async move {
+        match rx.recv().await {
+            Ok(event) => {
+                let json = serde_json::to_string(&event).unwrap_or_default();
+                let sse_event = Event::default()
+                    .event(event.type_)
+                    .data(json);
+                Some((Ok(sse_event), rx))
+            },
+            Err(_) => None,
+        }
+    });
+
+    Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(1))
+            .text("ping")
+    )
 } 
