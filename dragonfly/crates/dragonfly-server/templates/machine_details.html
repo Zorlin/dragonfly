@@ -255,7 +255,9 @@
                     </button>
                     {% endif %}
                     <button id="deleteBtn"
-                            onclick="if(confirm('Are you sure you want to delete this machine? This action cannot be undone.')) { window.location.href = '/api/machines/{{ machine.id }}/delete'; }"
+                            hx-confirm="Are you sure you want to delete this machine? This action cannot be undone."
+                            hx-delete="/api/machines/{{ machine.id }}"
+                            hx-swap="none"
                             class="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded">
                         Delete
                     </button>
@@ -462,6 +464,12 @@
             if (evt.detail.elt.id === 'saveEditBtn' && evt.detail.xhr.status === 200) {
                 // Reload the page to show updated data
                 window.location.reload();
+            }
+            
+            // Handle machine deletion redirect
+            if (evt.detail.elt.id === 'deleteBtn' && evt.detail.xhr.status === 200) {
+                // Redirect to machines list after successful deletion
+                window.location.href = '/machines';
             }
         });
     });
