@@ -134,7 +134,19 @@ pub async fn machine_list() -> impl IntoResponse {
     match db::get_all_machines().await {
         Ok(machines) => {
             info!("Rendering machine list page with {} machines", machines.len());
-            UiTemplate::MachineList(MachineListTemplate { machines })
+            
+            // Format machines with delete buttons
+            let machines_with_buttons = machines.into_iter()
+                .map(|machine| {
+                    // Add the delete button functionality to each machine
+                    // This will be handled by the template
+                    machine
+                })
+                .collect::<Vec<_>>();
+                
+            UiTemplate::MachineList(MachineListTemplate { 
+                machines: machines_with_buttons 
+            })
         },
         Err(e) => {
             error!("Error fetching machines for machine list page: {}", e);

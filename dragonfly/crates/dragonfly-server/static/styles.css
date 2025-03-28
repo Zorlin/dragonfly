@@ -1,0 +1,32 @@
+.delete-button {
+    cursor: pointer;
+    color: #ff4d4f;
+    border: none;
+    background: transparent;
+    font-size: 1.2em;
+    padding: 0.2em 0.5em;
+    border-radius: 50%;
+    transition: background-color 0.3s;
+}
+
+.delete-button:hover {
+    background-color: rgba(255, 77, 79, 0.1);
+}
+
+.machine-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    /* Your existing styles */
+}
+
+.delete-button {
+    cursor: pointer;
+    border: none;
+    background: transparent;
+    transition: color 0.3s;
+}
+
+.delete-button:hover {
+    opacity: 0.8;
+} 

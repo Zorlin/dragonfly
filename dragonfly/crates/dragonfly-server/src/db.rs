@@ -53,6 +53,7 @@ pub async fn init_db() -> Result<()> {
             status TEXT NOT NULL,
             disks TEXT, -- JSON array of disk info
             nameservers TEXT, -- JSON array of nameservers
+            bmc_credentials TEXT, -- JSON object of BMC credentials
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
@@ -168,7 +169,7 @@ pub async fn get_all_machines() -> Result<Vec<Machine>> {
     
     let rows = sqlx::query(
         r#"
-        SELECT id, mac_address, ip_address, hostname, os_choice, os_installed, status, disks, nameservers, created_at, updated_at 
+        SELECT id, mac_address, ip_address, hostname, os_choice, os_installed, status, disks, nameservers, created_at, updated_at, bmc_credentials 
         FROM machines
         "#,
     )
@@ -182,6 +183,7 @@ pub async fn get_all_machines() -> Result<Vec<Machine>> {
         let status_str: String = row.get(6);
         let disks_json: Option<String> = row.get(7);
         let nameservers_json: Option<String> = row.get(8);
+        let bmc_credentials_json: Option<String> = row.get(11);
         
         // Generate memorable name from MAC address
         let memorable_name = dragonfly_common::mac_to_words::mac_to_words_safe(&mac_address);
@@ -212,6 +214,13 @@ pub async fn get_all_machines() -> Result<Vec<Machine>> {
             serde_json::from_str::<Vec<String>>(&json).unwrap_or_else(|_| Vec::new())
         } else {
             Vec::new()
+        };
+        
+        // Deserialize BMC credentials if present
+        let bmc_credentials = if let Some(json) = bmc_credentials_json {
+            serde_json::from_str::<dragonfly_common::models::BmcCredentials>(&json).ok()
+        } else {
+            None
         };
         
         // Parse status and ensure os_choice is set when we have ExistingOS
@@ -233,6 +242,7 @@ pub async fn get_all_machines() -> Result<Vec<Machine>> {
             created_at: parse_datetime(&row.get::<String, _>(9)),
             updated_at: parse_datetime(&row.get::<String, _>(10)),
             memorable_name: Some(memorable_name),
+            bmc_credentials,
         });
     }
     
@@ -246,7 +256,7 @@ pub async fn get_machine_by_id(id: &Uuid) -> Result<Option<Machine>> {
     
     let result = sqlx::query(
         r#"
-        SELECT id, mac_address, ip_address, hostname, os_choice, os_installed, status, disks, nameservers, created_at, updated_at 
+        SELECT id, mac_address, ip_address, hostname, os_choice, os_installed, status, disks, nameservers, created_at, updated_at, bmc_credentials 
         FROM machines 
         WHERE id = ?
         "#,
@@ -261,6 +271,7 @@ pub async fn get_machine_by_id(id: &Uuid) -> Result<Option<Machine>> {
         let status_str: String = row.get(6);
         let disks_json: Option<String> = row.get(7);
         let nameservers_json: Option<String> = row.get(8);
+        let bmc_credentials_json: Option<String> = row.get(11);
         
         // Generate memorable name from MAC address
         let memorable_name = dragonfly_common::mac_to_words::mac_to_words_safe(&mac_address);
@@ -293,6 +304,13 @@ pub async fn get_machine_by_id(id: &Uuid) -> Result<Option<Machine>> {
             Vec::new()
         };
         
+        // Deserialize BMC credentials if present
+        let bmc_credentials = if let Some(json) = bmc_credentials_json {
+            serde_json::from_str::<dragonfly_common::models::BmcCredentials>(&json).ok()
+        } else {
+            None
+        };
+        
         // Parse status and ensure os_choice is set when we have ExistingOS
         let status = parse_status(&status_str);
         
@@ -312,6 +330,7 @@ pub async fn get_machine_by_id(id: &Uuid) -> Result<Option<Machine>> {
             created_at: parse_datetime(&row.get::<String, _>(9)),
             updated_at: parse_datetime(&row.get::<String, _>(10)),
             memorable_name: Some(memorable_name),
+            bmc_credentials,
         }))
     } else {
         Ok(None)
@@ -324,7 +343,7 @@ pub async fn get_machine_by_mac(mac_address: &str) -> Result<Option<Machine>> {
     
     let result = sqlx::query(
         r#"
-        SELECT id, mac_address, ip_address, hostname, os_choice, os_installed, status, disks, nameservers, created_at, updated_at 
+        SELECT id, mac_address, ip_address, hostname, os_choice, os_installed, status, disks, nameservers, created_at, updated_at, bmc_credentials 
         FROM machines 
         WHERE mac_address = ?
         "#,
@@ -339,6 +358,7 @@ pub async fn get_machine_by_mac(mac_address: &str) -> Result<Option<Machine>> {
         let status_str: String = row.get(6);
         let disks_json: Option<String> = row.get(7);
         let nameservers_json: Option<String> = row.get(8);
+        let bmc_credentials_json: Option<String> = row.get(11);
         
         // Generate memorable name from MAC address
         let memorable_name = dragonfly_common::mac_to_words::mac_to_words_safe(&mac_address);
@@ -371,6 +391,13 @@ pub async fn get_machine_by_mac(mac_address: &str) -> Result<Option<Machine>> {
             Vec::new()
         };
         
+        // Deserialize BMC credentials if present
+        let bmc_credentials = if let Some(json) = bmc_credentials_json {
+            serde_json::from_str::<dragonfly_common::models::BmcCredentials>(&json).ok()
+        } else {
+            None
+        };
+        
         // Parse status and ensure os_choice is set when we have ExistingOS
         let status = parse_status(&status_str);
         
@@ -390,6 +417,7 @@ pub async fn get_machine_by_mac(mac_address: &str) -> Result<Option<Machine>> {
             created_at: parse_datetime(&row.get::<String, _>(9)),
             updated_at: parse_datetime(&row.get::<String, _>(10)),
             memorable_name: Some(memorable_name),
+            bmc_credentials,
         }))
     } else {
         Ok(None)
@@ -514,6 +542,146 @@ pub async fn update_os_installed(id: &Uuid, os_installed: &str) -> Result<bool> 
     Ok(success)
 }
 
+// Update BMC credentials for a machine
+pub async fn update_bmc_credentials(id: &Uuid, credentials: &dragonfly_common::models::BmcCredentials) -> Result<bool> {
+    let pool = get_pool().await?;
+    let now = Utc::now();
+    let now_str = now.to_rfc3339();
+    
+    // Convert credentials to JSON
+    let credentials_json = serde_json::to_string(credentials)?;
+    
+    let result = sqlx::query(
+        r#"
+        UPDATE machines 
+        SET bmc_credentials = ?, updated_at = ? 
+        WHERE id = ?
+        "#,
+    )
+    .bind(credentials_json)
+    .bind(&now_str)
+    .bind(id.to_string())
+    .execute(pool)
+    .await?;
+    
+    let success = result.rows_affected() > 0;
+    if success {
+        info!("BMC credentials updated for machine {}", id);
+    } else {
+        info!("No machine found with ID {} to update BMC credentials", id);
+    }
+    
+    Ok(success)
+}
+
+// Update machine IP address
+pub async fn update_ip_address(id: &Uuid, ip_address: &str) -> Result<bool> {
+    let pool = get_pool().await?;
+    let now = Utc::now();
+    let now_str = now.to_rfc3339();
+    
+    let result = sqlx::query(
+        r#"
+        UPDATE machines 
+        SET ip_address = ?, updated_at = ? 
+        WHERE id = ?
+        "#,
+    )
+    .bind(ip_address)
+    .bind(&now_str)
+    .bind(id.to_string())
+    .execute(pool)
+    .await?;
+    
+    let success = result.rows_affected() > 0;
+    if success {
+        info!("IP address updated for machine {}: {}", id, ip_address);
+    } else {
+        info!("No machine found with ID {} to update IP address", id);
+    }
+    
+    Ok(success)
+}
+
+// Update machine MAC address
+pub async fn update_mac_address(id: &Uuid, mac_address: &str) -> Result<bool> {
+    let pool = get_pool().await?;
+    let now = Utc::now();
+    let now_str = now.to_rfc3339();
+    
+    // First check if a machine with this MAC address already exists
+    let existing_machine = sqlx::query(
+        r#"
+        SELECT id FROM machines WHERE mac_address = ?
+        "#,
+    )
+    .bind(mac_address)
+    .fetch_optional(pool)
+    .await?;
+    
+    if let Some(row) = existing_machine {
+        let existing_id: String = row.get(0);
+        if existing_id != id.to_string() {
+            // MAC address is already in use by another machine
+            return Err(anyhow!("MAC address is already in use by another machine"));
+        }
+    }
+    
+    let result = sqlx::query(
+        r#"
+        UPDATE machines 
+        SET mac_address = ?, updated_at = ? 
+        WHERE id = ?
+        "#,
+    )
+    .bind(mac_address)
+    .bind(&now_str)
+    .bind(id.to_string())
+    .execute(pool)
+    .await?;
+    
+    let success = result.rows_affected() > 0;
+    if success {
+        info!("MAC address updated for machine {}: {}", id, mac_address);
+    } else {
+        info!("No machine found with ID {} to update MAC address", id);
+    }
+    
+    Ok(success)
+}
+
+// Update machine DNS servers
+pub async fn update_nameservers(id: &Uuid, nameservers: &[String]) -> Result<bool> {
+    let pool = get_pool().await?;
+    let now = Utc::now();
+    let now_str = now.to_rfc3339();
+    
+    // Convert nameservers to JSON
+    let nameservers_json = serde_json::to_string(nameservers)?;
+    
+    let result = sqlx::query(
+        r#"
+        UPDATE machines 
+        SET nameservers = ?, updated_at = ? 
+        WHERE id = ?
+        "#,
+    )
+    .bind(nameservers_json)
+    .bind(&now_str)
+    .bind(id.to_string())
+    .execute(pool)
+    .await?;
+    
+    let success = result.rows_affected() > 0;
+    if success {
+        info!("Nameservers updated for machine {}", id);
+    } else {
+        info!("No machine found with ID {} to update nameservers", id);
+    }
+    
+    Ok(success)
+}
+
 // Helper function to parse status from string
 fn parse_status(status_str: &str) -> MachineStatus {
     if status_str.starts_with("ExistingOS: ") || status_str == "Existing OS" {
@@ -602,5 +770,52 @@ async fn migrate_db(pool: &Pool<Sqlite>) -> Result<()> {
         }
     }
     
+    // Check if bmc_credentials column exists
+    let result = sqlx::query(
+        r#"
+        SELECT COUNT(*) AS count FROM pragma_table_info('machines') WHERE name = 'bmc_credentials'
+        "#,
+    )
+    .fetch_one(pool)
+    .await?;
+    
+    let column_exists: i64 = result.get(0);
+    
+    // Add bmc_credentials column if it doesn't exist
+    if column_exists == 0 {
+        info!("Adding bmc_credentials column to machines table");
+        sqlx::query(
+            r#"
+            ALTER TABLE machines ADD COLUMN bmc_credentials TEXT
+            "#,
+        )
+        .execute(pool)
+        .await?;
+    }
+    
     Ok(())
+}
+
+// Delete a machine by ID
+pub async fn delete_machine(id: &Uuid) -> Result<bool> {
+    let pool = get_pool().await?;
+    
+    let result = sqlx::query(
+        r#"
+        DELETE FROM machines 
+        WHERE id = ?
+        "#,
+    )
+    .bind(id.to_string())
+    .execute(pool)
+    .await?;
+    
+    let success = result.rows_affected() > 0;
+    if success {
+        info!("Machine deleted from database: {}", id);
+    } else {
+        info!("No machine found with ID {} to delete", id);
+    }
+    
+    Ok(success)
 } 

@@ -18,6 +18,8 @@ pub struct Machine {
     pub updated_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memorable_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bmc_credentials: Option<BmcCredentials>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -39,6 +41,32 @@ impl fmt::Display for MachineStatus {
             MachineStatus::Ready => write!(f, "Ready"),
             MachineStatus::Offline => write!(f, "Offline"),
             MachineStatus::Error(msg) => write!(f, "Error: {}", msg),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct BmcCredentials {
+    pub address: String,
+    pub username: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    pub bmc_type: BmcType,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub enum BmcType {
+    IPMI,
+    Redfish,
+    Other(String),
+}
+
+impl fmt::Display for BmcType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BmcType::IPMI => write!(f, "IPMI"),
+            BmcType::Redfish => write!(f, "Redfish"),
+            BmcType::Other(name) => write!(f, "{}", name),
         }
     }
 }
@@ -114,6 +142,20 @@ pub struct OsInstalledUpdateRequest {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OsInstalledUpdateResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BmcCredentialsUpdateRequest {
+    pub bmc_address: String,
+    pub bmc_username: String,
+    pub bmc_password: String,
+    pub bmc_type: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BmcCredentialsUpdateResponse {
     pub success: bool,
     pub message: String,
 } 

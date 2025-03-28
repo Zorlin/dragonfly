@@ -5,7 +5,7 @@
     <div class="flex justify-between items-center mb-6">
         <h1 class="text-2xl font-semibold text-gray-800">Machine Details</h1>
         <a href="/" class="bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-2 px-4 rounded">
-            Back to Dashboard
+            Back to Machines
         </a>
     </div>
 
@@ -58,28 +58,44 @@
             <div class="grid grid-cols-2 gap-6">
                 <div>
                     <h3 class="text-lg font-semibold mb-3 border-b pb-2">Basic Information</h3>
-                    <div class="space-y-2">
+                    <div class="space-y-2" id="machineDetailsForm">
                         <div class="grid grid-cols-2">
                             <span class="text-gray-600">ID:</span>
                             <span>{{ machine.id }}</span>
                         </div>
                         <div class="grid grid-cols-2">
                             <span class="text-gray-600">MAC Address:</span>
-                            <span>{{ machine.mac_address }}</span>
+                            <span class="mac-address-display">{{ machine.mac_address }}</span>
+                            <div class="mac-address-edit hidden">
+                                <input type="text" name="mac_address" id="edit-mac-address" 
+                                    value="{{ machine.mac_address }}" 
+                                    class="w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                            </div>
                         </div>
                         <div class="grid grid-cols-2">
                             <span class="text-gray-600">IP Address:</span>
-                            <span>{{ machine.ip_address }}</span>
+                            <span class="ip-address-display">{{ machine.ip_address }}</span>
+                            <div class="ip-address-edit hidden">
+                                <input type="text" name="ip_address" id="edit-ip-address" 
+                                    value="{{ machine.ip_address }}" 
+                                    class="w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                            </div>
                         </div>
                         <div class="grid grid-cols-2">
                             <span class="text-gray-600">Hostname:</span>
-                            <span>
+                            <span class="hostname-display">
                                 {% if machine.hostname.is_some() %}
                                     {{ machine.hostname.as_ref().unwrap() }}
                                 {% else %}
                                     Not set
                                 {% endif %}
                             </span>
+                            <div class="hostname-edit hidden">
+                                <input type="text" name="hostname" id="edit-hostname" 
+                                    value="{% if machine.hostname.is_some() %}{{ machine.hostname.as_ref().unwrap() }}{% endif %}" 
+                                    placeholder="Enter hostname"
+                                    class="w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                            </div>
                         </div>
                         <div class="grid grid-cols-2">
                             <span class="text-gray-600">Machine Name:</span>
@@ -116,17 +132,70 @@
 
                 <div>
                     <h3 class="text-lg font-semibold mb-3 border-b pb-2">Network Configuration</h3>
-                    <div class="space-y-2">
-                        <div class="mb-4">
-                            <h4 class="font-medium text-gray-700">DNS Servers</h4>
-                            {% if machine.nameservers.is_empty() %}
-                                <p class="text-gray-500 italic">No DNS servers detected</p>
+                    <div class="space-y-4">
+                        <div class="grid grid-cols-2">
+                            <span class="text-gray-600">DNS Servers:</span>
+                            <!-- DNS servers display mode -->
+                            <div class="dns-display">
+                                {% if machine.nameservers.is_empty() %}
+                                    <p class="text-gray-500 italic">No DNS servers detected</p>
+                                {% else %}
+                                    <div>
+                                        {% for ns in machine.nameservers %}
+                                            <div>{{ ns }}</div>
+                                        {% endfor %}
+                                    </div>
+                                {% endif %}
+                            </div>
+                            
+                            <!-- DNS servers edit mode -->
+                            <div class="dns-edit hidden">
+                                <div class="space-y-2" id="dns-editors">
+                                    {% if machine.nameservers.is_empty() %}
+                                        <div class="flex">
+                                            <input type="text" name="nameservers[]" 
+                                                placeholder="DNS Server IP" 
+                                                class="w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                                        </div>
+                                    {% else %}
+                                        {% for ns in machine.nameservers %}
+                                            <div class="flex">
+                                                <input type="text" name="nameservers[]" 
+                                                    value="{{ ns }}" 
+                                                    class="w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                                            </div>
+                                        {% endfor %}
+                                    {% endif %}
+                                </div>
+                                <button type="button" id="add-dns-btn" 
+                                    class="mt-2 inline-flex items-center px-2 py-1 border border-transparent text-xs font-medium rounded-md text-indigo-700 bg-indigo-100 hover:bg-indigo-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                                    + Add DNS Server
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div class="grid grid-cols-2">
+                            <span class="text-gray-600">BMC Type:</span>
+                            <span>{% if machine.bmc_credentials.is_some() %}
+                                {{ machine.bmc_credentials.as_ref().unwrap().bmc_type|string }}
                             {% else %}
-                                <ul class="list-disc pl-5">
-                                    {% for ns in machine.nameservers %}
-                                        <li>{{ ns }}</li>
-                                    {% endfor %}
-                                </ul>
+                                None
+                            {% endif %}</span>
+                        </div>
+                        
+                        <div class="ml-2">
+                            {% if machine.bmc_credentials.is_none() %}
+                                <button id="addBmcBtn"
+                                        onclick="document.getElementById('bmc-modal').classList.remove('hidden')"
+                                        class="inline-flex items-center px-2 py-1 border border-transparent text-xs font-medium rounded-md text-green-700 bg-green-100 hover:bg-green-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500">
+                                    Add BMC Credentials
+                                </button>
+                            {% else %}
+                                <button id="editBmcBtn"
+                                        onclick="document.getElementById('bmc-modal').classList.remove('hidden')"
+                                        class="inline-flex items-center px-2 py-1 border border-transparent text-xs font-medium rounded-md text-indigo-700 bg-indigo-100 hover:bg-indigo-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                                    Edit
+                                </button>
                             {% endif %}
                         </div>
                     </div>
@@ -174,31 +243,222 @@
             </div>
 
             <div class="mt-8 flex justify-end">
-                <button id="editHostnameBtn" 
-                        hx-get="/api/machines/{{ machine.id }}/hostname"
-                        hx-target="#hostname-modal"
-                        onclick="document.getElementById('hostname-modal').classList.remove('hidden')"
-                        class="bg-indigo-500 hover:bg-indigo-600 text-white font-bold py-2 px-4 rounded mr-2">
-                    Edit Hostname
-                </button>
-                <button class="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded">
-                    Power Off
-                </button>
+                <!-- Normal mode buttons (visible by default) -->
+                <div id="normalButtons" class="flex">
+                    <button id="editDetailsBtn" 
+                            class="bg-indigo-500 hover:bg-indigo-600 text-white font-bold py-2 px-4 rounded mr-2">
+                        Edit
+                    </button>
+                    {% if machine.bmc_credentials.is_some() %}
+                    <button class="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded">
+                        Power Off
+                    </button>
+                    {% endif %}
+                </div>
+                
+                <!-- Edit mode buttons (hidden by default) -->
+                <div id="editButtons" class="flex hidden">
+                    <button id="saveEditBtn" 
+                            hx-put="/api/machines/{{ machine.id }}"
+                            hx-include="#machineDetailsForm"
+                            hx-swap="none"
+                            class="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded mr-2">
+                        Save
+                    </button>
+                    <button id="cancelEditBtn" type="button" 
+                            class="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded">
+                        Cancel
+                    </button>
+                </div>
             </div>
         </div>
     </div>
 </div>
 
-<!-- Modal for editing hostname -->
-<div id="hostname-modal" class="hidden fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full flex items-center justify-center">
+<!-- Keep the BMC modal -->
+<div id="bmc-modal" class="hidden fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full flex items-center justify-center">
     <div class="relative mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
-        <!-- Modal content will be loaded here by HTMX -->
-        <div class="text-center">
-            <div class="spinner-border animate-spin inline-block w-8 h-8 border-4 rounded-full" role="status">
-                <span class="visually-hidden">Loading...</span>
-            </div>
-            <p class="mt-2">Loading...</p>
+        <div class="mt-3 text-center">
+            <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">
+                BMC Credentials
+            </h3>
+            <form hx-post="/api/machines/{{ machine.id }}/bmc" hx-target="#bmc-modal">
+                <div class="mb-4">
+                    <label for="bmc_address" class="block text-sm font-medium text-gray-700 text-left">BMC Address</label>
+                    <input type="text" name="bmc_address" id="bmc_address" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                        {% if machine.bmc_credentials.is_some() %}
+                            value="{{ machine.bmc_credentials.as_ref().unwrap().address }}"
+                        {% endif %}
+                        required>
+                </div>
+                <div class="mb-4">
+                    <label for="bmc_username" class="block text-sm font-medium text-gray-700 text-left">Username</label>
+                    <input type="text" name="bmc_username" id="bmc_username" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                        {% if machine.bmc_credentials.is_some() %}
+                            value="{{ machine.bmc_credentials.as_ref().unwrap().username }}"
+                        {% endif %}
+                        required>
+                </div>
+                <div class="mb-4">
+                    <label for="bmc_password" class="block text-sm font-medium text-gray-700 text-left">Password</label>
+                    <input type="password" name="bmc_password" id="bmc_password" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm" required>
+                </div>
+                <div class="mb-4">
+                    <label for="bmc_type" class="block text-sm font-medium text-gray-700 text-left">BMC Type</label>
+                    <select name="bmc_type" id="bmc_type" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                        <option value="IPMI" 
+                            {% if machine.bmc_credentials.is_some() %}
+                                {% let bmc = machine.bmc_credentials.as_ref().unwrap() %}
+                                {% let bmc_type = bmc.bmc_type|string %}
+                                {% if bmc_type == "IPMI" %}
+                                    selected
+                                {% endif %}
+                            {% endif %}>IPMI</option>
+                        <option value="Redfish" 
+                            {% if machine.bmc_credentials.is_some() %}
+                                {% let bmc = machine.bmc_credentials.as_ref().unwrap() %}
+                                {% let bmc_type = bmc.bmc_type|string %}
+                                {% if bmc_type == "Redfish" %}
+                                    selected
+                                {% endif %}
+                            {% endif %}>Redfish</option>
+                        <option value="Other" 
+                            {% if machine.bmc_credentials.is_some() %}
+                                {% let bmc = machine.bmc_credentials.as_ref().unwrap() %}
+                                {% let bmc_type = bmc.bmc_type|string %}
+                                {% if bmc_type != "IPMI" %}
+                                    {% if bmc_type != "Redfish" %}
+                                        selected
+                                    {% endif %}
+                                {% endif %}
+                            {% endif %}>Other</option>
+                    </select>
+                </div>
+                <div class="mt-5 sm:mt-4 sm:flex sm:flex-row-reverse">
+                    <button type="submit" class="inline-flex w-full justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 sm:ml-3 sm:w-auto">
+                        Save
+                    </button>
+                    <button type="button" class="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 sm:mt-0 sm:w-auto" onclick="document.getElementById('bmc-modal').classList.add('hidden')">
+                        Cancel
+                    </button>
+                </div>
+            </form>
         </div>
     </div>
 </div>
+
+<!-- Add JavaScript for the inline editing -->
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const normalButtons = document.getElementById('normalButtons');
+        const editButtons = document.getElementById('editButtons');
+        const editBtn = document.getElementById('editDetailsBtn');
+        const saveBtn = document.getElementById('saveEditBtn');
+        const cancelBtn = document.getElementById('cancelEditBtn');
+        const addDnsBtn = document.getElementById('add-dns-btn');
+        
+        // Fields display/edit elements
+        const hostnameDisplay = document.querySelector('.hostname-display');
+        const hostnameEdit = document.querySelector('.hostname-edit');
+        const ipAddressDisplay = document.querySelector('.ip-address-display');
+        const ipAddressEdit = document.querySelector('.ip-address-edit');
+        const macAddressDisplay = document.querySelector('.mac-address-display');
+        const macAddressEdit = document.querySelector('.mac-address-edit');
+        const dnsDisplay = document.querySelector('.dns-display');
+        const dnsEdit = document.querySelector('.dns-edit');
+        
+        // Store original values for cancel operation
+        let originalHostname = '';
+        let originalIpAddress = '';
+        let originalMacAddress = '';
+        let originalDnsInputs = [];
+        
+        // Add DNS server input field
+        addDnsBtn.addEventListener('click', function() {
+            const dnsEditors = document.getElementById('dns-editors');
+            const newInput = document.createElement('div');
+            newInput.className = 'flex';
+            newInput.innerHTML = `
+                <input type="text" name="nameservers[]" 
+                    placeholder="DNS Server IP" 
+                    class="w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+            `;
+            dnsEditors.appendChild(newInput);
+        });
+        
+        // Toggle edit mode
+        editBtn.addEventListener('click', function() {
+            // Store original values
+            originalHostname = document.getElementById('edit-hostname').value;
+            originalIpAddress = document.getElementById('edit-ip-address').value;
+            originalMacAddress = document.getElementById('edit-mac-address').value;
+            
+            // Store original DNS values
+            originalDnsInputs = [];
+            document.querySelectorAll('input[name="nameservers[]"]').forEach(input => {
+                originalDnsInputs.push(input.value);
+            });
+            
+            // Switch to edit mode
+            hostnameDisplay.classList.add('hidden');
+            hostnameEdit.classList.remove('hidden');
+            ipAddressDisplay.classList.add('hidden');
+            ipAddressEdit.classList.remove('hidden');
+            macAddressDisplay.classList.add('hidden');
+            macAddressEdit.classList.remove('hidden');
+            dnsDisplay.classList.add('hidden');
+            dnsEdit.classList.remove('hidden');
+            
+            // Switch button sets
+            normalButtons.classList.add('hidden');
+            editButtons.classList.remove('hidden');
+        });
+        
+        // Cancel edit
+        cancelBtn.addEventListener('click', function() {
+            // Restore original values
+            document.getElementById('edit-hostname').value = originalHostname;
+            document.getElementById('edit-ip-address').value = originalIpAddress;
+            document.getElementById('edit-mac-address').value = originalMacAddress;
+            
+            // Restore DNS inputs
+            const dnsInputs = document.querySelectorAll('input[name="nameservers[]"]');
+            // Remove any extra inputs that were added
+            if (dnsInputs.length > originalDnsInputs.length) {
+                const dnsEditors = document.getElementById('dns-editors');
+                while (dnsEditors.children.length > originalDnsInputs.length) {
+                    dnsEditors.removeChild(dnsEditors.lastChild);
+                }
+            }
+            // Restore original values
+            dnsInputs.forEach((input, index) => {
+                if (index < originalDnsInputs.length) {
+                    input.value = originalDnsInputs[index];
+                }
+            });
+            
+            // Switch back to display mode
+            hostnameDisplay.classList.remove('hidden');
+            hostnameEdit.classList.add('hidden');
+            ipAddressDisplay.classList.remove('hidden');
+            ipAddressEdit.classList.add('hidden');
+            macAddressDisplay.classList.remove('hidden');
+            macAddressEdit.classList.add('hidden');
+            dnsDisplay.classList.remove('hidden');
+            dnsEdit.classList.add('hidden');
+            
+            // Switch button sets back
+            editButtons.classList.add('hidden');
+            normalButtons.classList.remove('hidden');
+        });
+        
+        // Handle successful submission
+        document.body.addEventListener('htmx:afterRequest', function(evt) {
+            if (evt.detail.elt.id === 'saveEditBtn' && evt.detail.xhr.status === 200) {
+                // Reload the page to show updated data
+                window.location.reload();
+            }
+        });
+    });
+</script>
 {% endblock %} 

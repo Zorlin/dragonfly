@@ -268,4 +268,48 @@ pub async fn register_machine(machine: &Machine) -> Result<()> {
             Err(anyhow!("Error checking Hardware resource: {}", e))
         }
     }
+}
+
+// Add this function to delete hardware resources
+pub async fn delete_hardware(mac_address: &str) -> Result<()> {
+    // Get the Kubernetes client
+    let client = match get_client().await {
+        Ok(c) => c,
+        Err(e) => {
+            warn!("Skipping Tinkerbell deletion: {}", e);
+            return Err(anyhow!("Kubernetes client not initialized: {}", e));
+        }
+    };
+    
+    let resource_name = mac_address.to_lowercase();
+    info!("Deleting hardware resource from Tinkerbell: {}", resource_name);
+    
+    // Create the ApiResource for the Hardware CRD
+    let api_resource = kube::core::ApiResource {
+        group: "tinkerbell.org".to_string(),
+        version: "v1alpha1".to_string(),
+        kind: "Hardware".to_string(),
+        api_version: "tinkerbell.org/v1alpha1".to_string(),
+        plural: "hardware".to_string(),
+    };
+    
+    // Create a dynamic API to interact with the Hardware custom resource
+    let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), "tink", &api_resource);
+    
+    // Delete the hardware resource
+    match api.delete(&resource_name, &kube::api::DeleteParams::default()).await {
+        Ok(_) => {
+            info!("Successfully deleted hardware resource: {}", resource_name);
+            Ok(())
+        },
+        Err(KubeError::Api(ae)) if ae.code == 404 => {
+            // Not found is OK - the resource doesn't exist
+            info!("Hardware resource not found in Tinkerbell (already deleted): {}", resource_name);
+            Ok(())
+        },
+        Err(e) => {
+            error!("Failed to delete hardware resource from Tinkerbell: {}", e);
+            Err(anyhow!("Failed to delete hardware resource: {}", e))
+        }
+    }
 } 
