@@ -312,4 +312,121 @@ pub async fn delete_hardware(mac_address: &str) -> Result<()> {
             Err(anyhow!("Failed to delete hardware resource: {}", e))
         }
     }
+}
+
+// Create a Workflow for OS installation
+pub async fn create_workflow(machine: &Machine, _os_choice: &str) -> Result<()> {
+    // Get the Kubernetes client
+    let client = match get_client().await {
+        Ok(c) => c,
+        Err(e) => {
+            warn!("Skipping Tinkerbell workflow creation: {}", e);
+            return Ok(());
+        }
+    };
+    
+    // Use MAC address without colons as part of the workflow name
+    let resource_name = format!("os-install-{}", machine.mac_address.replace(":", "-"));
+    
+    // Hardware reference name (matches what we create in register_machine)
+    let hardware_ref = format!("machine-{}", machine.mac_address.replace(":", "-"));
+    
+    info!("Creating workflow {} for machine {}", resource_name, machine.id);
+    
+    // Map OS choice to template reference
+    // For now, hardcode as "ubuntu" for testing as requested
+    let template_ref = "ubuntu";
+    
+    // Create the Workflow resource
+    let workflow_json = serde_json::json!({
+        "apiVersion": "tinkerbell.org/v1alpha1",
+        "kind": "Workflow",
+        "metadata": {
+            "name": resource_name,
+            "namespace": "tink"
+        },
+        "spec": {
+            "templateRef": template_ref,
+            "hardwareRef": hardware_ref,
+            "hardwareMap": {
+                "device_1": machine.mac_address
+            }
+        }
+    });
+    
+    // Create the ApiResource for the Workflow CRD
+    let api_resource = kube::core::ApiResource {
+        group: "tinkerbell.org".to_string(),
+        version: "v1alpha1".to_string(),
+        kind: "Workflow".to_string(),
+        api_version: "tinkerbell.org/v1alpha1".to_string(),
+        plural: "workflows".to_string(),
+    };
+    
+    info!("Using Kubernetes API Resource for Workflow: group={}, version={}, kind={}, plural={}", 
+          api_resource.group, api_resource.version, api_resource.kind, api_resource.plural);
+    
+    // Create a dynamic API to interact with the Workflow custom resource
+    let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), "tink", &api_resource);
+    
+    // Create a DynamicObject from our workflow_json
+    let dynamic_obj = DynamicObject {
+        metadata: kube::core::ObjectMeta {
+            name: Some(resource_name.clone()),
+            namespace: Some("tink".to_string()),
+            ..Default::default()
+        },
+        types: Some(kube::core::TypeMeta {
+            api_version: "tinkerbell.org/v1alpha1".to_string(),
+            kind: "Workflow".to_string(),
+        }),
+        data: workflow_json,
+    };
+    
+    // Check if the workflow resource already exists
+    match api.get(&resource_name).await {
+        Ok(_existing) => {
+            info!("Found existing Workflow resource in Tinkerbell: {}", resource_name);
+            
+            // Use JSON merge patch to update the resource
+            let patch_params = PatchParams::default();
+            match api.patch(&resource_name, &patch_params, &Patch::Merge(&dynamic_obj)).await {
+                Ok(patched) => {
+                    info!(
+                        "Updated Workflow resource in Tinkerbell: {} (resourceVersion: {:?})",
+                        resource_name,
+                        patched.metadata.resource_version
+                    );
+                    Ok(())
+                },
+                Err(e) => {
+                    error!("Failed to update Workflow resource in Tinkerbell: {}", e);
+                    Err(anyhow!("Failed to update Workflow resource: {}", e))
+                }
+            }
+        },
+        Err(KubeError::Api(ae)) if ae.code == 404 => {
+            info!("No existing Workflow resource found, creating new one: {}", resource_name);
+            
+            // Create a new workflow resource
+            match api.create(&PostParams::default(), &dynamic_obj).await {
+                Ok(created) => {
+                    info!(
+                        "Created new Workflow resource in Tinkerbell: {} (initial resourceVersion: {:?})",
+                        resource_name,
+                        created.metadata.resource_version
+                    );
+                    Ok(())
+                },
+                Err(e) => {
+                    error!("Failed to create Workflow resource in Tinkerbell: {}", e);
+                    Err(anyhow!("Failed to create Workflow resource: {}", e))
+                }
+            }
+        },
+        Err(e) => {
+            error!("Error checking Workflow resource in Tinkerbell: {}", e);
+            Err(anyhow!("Error checking Workflow resource: {}", e))
+        }
+    }
 } 

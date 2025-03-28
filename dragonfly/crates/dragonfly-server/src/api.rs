@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Json, Path, Form},
+    extract::{Json, Path, Form, FromRequest},
     http::StatusCode,
     response::{IntoResponse, Response, Html},
     routing::{post, get, delete, put},
@@ -21,8 +21,10 @@ pub fn api_router() -> Router {
         .route("/api/machines/:id", get(get_machine))
         .route("/api/machines/:id", delete(delete_machine))
         .route("/api/machines/:id", put(update_machine))
+        .route("/api/machines/:id/os", get(get_os_form))
         .route("/api/machines/:id/os", post(assign_os))
         .route("/api/machines/:id/status", post(update_status))
+        .route("/api/machines/:id/status", get(get_status_form))
         .route("/api/machines/:id/hostname", post(update_hostname))
         .route("/api/machines/:id/hostname", get(get_hostname_form))
         .route("/api/machines/:id/os_installed", post(update_os_installed))
@@ -103,34 +105,154 @@ async fn get_machine(
     }
 }
 
+// Combined OS assignment handler
 async fn assign_os(
     Path(id): Path<Uuid>,
-    Json(payload): Json<OsAssignmentRequest>,
+    req: axum::http::Request<axum::body::Body>,
 ) -> Response {
-    info!("Assigning OS {} to machine {}", payload.os_choice, id);
+    // Check content type to determine how to extract the OS choice
+    let content_type = req.headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
     
-    match db::assign_os(&id, &payload.os_choice).await {
-        Ok(true) => {
-            let response = OsAssignmentResponse {
-                success: true,
-                message: format!("OS {} assigned to machine {}", payload.os_choice, id),
+    info!("Content-Type received: {}", content_type);
+    
+    let os_choice = if content_type.starts_with("application/json") {
+        // Extract JSON
+        match axum::Json::<OsAssignmentRequest>::from_request(req, &()).await {
+            Ok(Json(payload)) => Some(payload.os_choice),
+            Err(e) => {
+                error!("Failed to parse JSON request: {}", e);
+                None
+            }
+        }
+    } else if content_type.starts_with("application/x-www-form-urlencoded") {
+        // Extract form data
+        match axum::Form::<OsAssignmentRequest>::from_request(req, &()).await {
+            Ok(Form(payload)) => Some(payload.os_choice),
+            Err(e) => {
+                error!("Failed to parse form request: {}", e);
+                None
+            }
+        }
+    } else {
+        error!("Unsupported content type: {}", content_type);
+        None
+    };
+    
+    match os_choice {
+        Some(os_choice) => assign_os_internal(id, os_choice).await,
+        None => {
+            let error_response = ErrorResponse {
+                error: "Bad Request".to_string(),
+                message: "Failed to extract OS choice from request".to_string(),
             };
-            (StatusCode::OK, Json(response)).into_response()
+            (StatusCode::BAD_REQUEST, Json(error_response)).into_response()
+        }
+    }
+}
+
+// Shared implementation
+async fn assign_os_internal(id: Uuid, os_choice: String) -> Response {
+    info!("Assigning OS {} to machine {}", os_choice, id);
+    
+    match db::assign_os(&id, &os_choice).await {
+        Ok(true) => {
+            // Get the machine to create a workflow for OS installation
+            let machine_name = if let Ok(Some(machine)) = db::get_machine_by_id(&id).await {
+                // Create a workflow for OS installation
+                if let Err(e) = crate::tinkerbell::create_workflow(&machine, &os_choice).await {
+                    warn!("Failed to create Tinkerbell workflow (continuing anyway): {}", e);
+                } else {
+                    info!("Created Tinkerbell workflow for OS installation for machine {}", id);
+                }
+                
+                // Get a user-friendly name for the machine
+                if let Some(hostname) = &machine.hostname {
+                    hostname.clone()
+                } else if let Some(memorable_name) = &machine.memorable_name {
+                    memorable_name.clone()
+                } else {
+                    id.to_string()
+                }
+            } else {
+                warn!("Machine {} not found after assigning OS, couldn't create workflow", id);
+                id.to_string()
+            };
+            
+            // Return HTML with a toast notification
+            let html = format!(r###"
+                <div class="flex flex-col items-center justify-center p-8">
+                    <div class="rounded-full bg-green-100 p-3 mb-4">
+                        <svg class="h-8 w-8 text-green-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                    </div>
+                    <h3 class="text-lg font-medium text-gray-900">Success!</h3>
+                    <p class="mt-2 text-sm text-gray-500">{} has been assigned to {}</p>
+                    <p class="mt-1 text-sm text-gray-500">A Tinkerbell workflow is being created to install the OS.</p>
+                    <button 
+                        type="button" 
+                        class="mt-6 inline-flex justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500"
+                        hx-get="/machines"
+                        hx-target="body"
+                        hx-swap="outerHTML"
+                        onclick="document.getElementById('os-modal').classList.add('hidden');">
+                        Close
+                    </button>
+                </div>
+                
+                <script>
+                    // Create toast notification
+                    const toast = document.createElement('div');
+                    toast.innerHTML = `
+                        <div class="fixed bottom-4 right-4 bg-white shadow-lg rounded-lg p-4 max-w-md transform transition-transform duration-300 ease-in-out z-50 flex items-start">
+                            <div class="flex-shrink-0 mr-3">
+                                <svg class="h-6 w-6 text-green-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                            </div>
+                            <div>
+                                <h3 class="font-medium text-gray-900">Success!</h3>
+                                <p class="mt-1 text-sm text-gray-500">{} has been assigned to {}</p>
+                            </div>
+                        </div>
+                    `;
+                    document.body.appendChild(toast.firstElementChild);
+                    
+                    // Auto remove after 5 seconds
+                    setTimeout(() => {{
+                        const toastEl = document.querySelector('.fixed.bottom-4.right-4');
+                        if (toastEl) {{
+                            toastEl.classList.add('translate-y-full', 'opacity-0');
+                            setTimeout(() => toastEl.remove(), 300);
+                        }}
+                    }}, 5000);
+                    
+                    // Use HTMX to refresh the table body
+                    htmx.trigger(document.querySelector('tbody'), 'refresh');
+                </script>
+            "###, os_choice, machine_name, os_choice, machine_name);
+            
+            (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/html")], html).into_response()
         },
         Ok(false) => {
-            let error_response = ErrorResponse {
-                error: "Not Found".to_string(),
-                message: format!("Machine with ID {} not found", id),
-            };
-            (StatusCode::NOT_FOUND, Json(error_response)).into_response()
+            let error_html = format!(r###"
+                <div class="p-4 mb-4 text-sm text-red-700 bg-red-100 rounded-lg" role="alert">
+                    <span class="font-medium">Error!</span> Machine with ID {} not found.
+                </div>
+            "###, id);
+            (StatusCode::NOT_FOUND, [(axum::http::header::CONTENT_TYPE, "text/html")], error_html).into_response()
         },
         Err(e) => {
             error!("Failed to assign OS to machine {}: {}", id, e);
-            let error_response = ErrorResponse {
-                error: "Database Error".to_string(),
-                message: e.to_string(),
-            };
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(error_response)).into_response()
+            let error_html = format!(r###"
+                <div class="p-4 mb-4 text-sm text-red-700 bg-red-100 rounded-lg" role="alert">
+                    <span class="font-medium">Error!</span> Database error: {}.
+                </div>
+            "###, e);
+            (StatusCode::INTERNAL_SERVER_ERROR, [(axum::http::header::CONTENT_TYPE, "text/html")], error_html).into_response()
         }
     }
 }
@@ -546,6 +668,119 @@ async fn update_machine(
             "success": false,
             "message": if messages.is_empty() { "No updates provided".to_string() } else { messages.join(", ") }
         }))).into_response()
+    }
+}
+
+// Handler to get the OS assignment form
+async fn get_os_form(
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    match db::get_machine_by_id(&id).await {
+        Ok(Some(_machine)) => {
+            // Use raw string literals to avoid escaping issues
+            let html = format!(
+                r###"
+                <div class="sm:flex sm:items-start">
+                    <div class="mt-3 text-center sm:mt-0 sm:text-left w-full">
+                        <h3 class="text-base font-semibold leading-6 text-gray-900">
+                            Assign Operating System
+                        </h3>
+                        <div id="os-form-container" class="mt-2">
+                            <form id="os-form" hx-post="/api/machines/{}/os" hx-target="#os-form-container">
+                                <select name="os_choice" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                                    <option value="Debian 12">Debian 12</option>
+                                    <option value="Ubuntu 24.04">Ubuntu 24.04</option>
+                                    <option value="Flatcar Linux">Flatcar Linux</option>
+                                </select>
+                                <div class="mt-5 sm:mt-4 sm:flex sm:flex-row-reverse">
+                                    <button type="submit" class="inline-flex w-full justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 sm:ml-3 sm:w-auto">
+                                        Assign
+                                    </button>
+                                    <button type="button" class="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 sm:mt-0 sm:w-auto" onclick="document.getElementById('os-modal').classList.add('hidden')">
+                                        Cancel
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+                "###,
+                id
+            );
+            
+            (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/html")], html)
+        },
+        Ok(None) => {
+            let error_html = format!(
+                r###"<div class="p-4 text-red-500">Machine with ID {} not found</div>"###,
+                id
+            );
+            (StatusCode::NOT_FOUND, [(axum::http::header::CONTENT_TYPE, "text/html")], error_html)
+        },
+        Err(e) => {
+            let error_html = format!(
+                r###"<div class="p-4 text-red-500">Error: {}</div>"###,
+                e
+            );
+            (StatusCode::INTERNAL_SERVER_ERROR, [(axum::http::header::CONTENT_TYPE, "text/html")], error_html)
+        }
+    }
+}
+
+// Handler to get the status update form 
+async fn get_status_form(
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    match db::get_machine_by_id(&id).await {
+        Ok(Some(_machine)) => {
+            // Use raw string literals to avoid escaping issues
+            let html = format!(
+                r###"
+                <div class="sm:flex sm:items-start">
+                    <div class="mt-3 text-center sm:mt-0 sm:text-left w-full">
+                        <h3 class="text-base font-semibold leading-6 text-gray-900">
+                            Update Machine Status
+                        </h3>
+                        <div class="mt-2">
+                            <form id="status-form" hx-post="/api/machines/{}/status" hx-target="#status-modal">
+                                <select name="status" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                                    <option value="ReadyForAdoption">Ready For Adoption</option>
+                                    <option value="InstallingOS">Installing OS</option>
+                                    <option value="Ready">Ready</option>
+                                    <option value="Offline">Offline</option>
+                                </select>
+                                <div class="mt-5 sm:mt-4 sm:flex sm:flex-row-reverse">
+                                    <button type="submit" class="inline-flex w-full justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 sm:ml-3 sm:w-auto">
+                                        Update
+                                    </button>
+                                    <button type="button" class="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 sm:mt-0 sm:w-auto" onclick="document.getElementById('status-modal').classList.add('hidden')">
+                                        Cancel
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+                "###,
+                id
+            );
+            
+            (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/html")], html)
+        },
+        Ok(None) => {
+            let error_html = format!(
+                r###"<div class="p-4 text-red-500">Machine with ID {} not found</div>"###,
+                id
+            );
+            (StatusCode::NOT_FOUND, [(axum::http::header::CONTENT_TYPE, "text/html")], error_html)
+        },
+        Err(e) => {
+            let error_html = format!(
+                r###"<div class="p-4 text-red-500">Error: {}</div>"###,
+                e
+            );
+            (StatusCode::INTERNAL_SERVER_ERROR, [(axum::http::header::CONTENT_TYPE, "text/html")], error_html)
+        }
     }
 }
 
