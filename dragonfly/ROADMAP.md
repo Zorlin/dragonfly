@@ -31,3 +31,8 @@ Here's things we would like to work on and add to Dragonfly next.
   * This will have a "barber pole/candy spinner" animated progress bar for each deploying node.
   * This will also have a "deployed" status that shows the total number of nodes deployed and the average deployment time.
   * This will be displayed on the main page right after the status counts.
+  * Timer exports to Prometheus/Grafana
+    * Show all deployment times and stages
+    * Show average deployment time by OS template
+    * Show average deployment time by hardware type
+    * Failed/succeeded counts by OS template, date, and time of day
