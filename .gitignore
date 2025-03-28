@@ -188,3 +188,13 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Admin password file
+.admin_password.txt
+admin_credentials.json
+
+# Settings file
+settings.json
+
+# Machine database file
+config/dragonfly.db

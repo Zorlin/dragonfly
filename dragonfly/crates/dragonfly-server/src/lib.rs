@@ -2,6 +2,7 @@ pub mod api;
 pub mod ui;
 pub mod db;
 pub mod tinkerbell;
+pub mod auth;
 
 use axum::Router;
 use std::net::SocketAddr;

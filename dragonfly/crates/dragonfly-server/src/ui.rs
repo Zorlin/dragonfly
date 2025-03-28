@@ -1,23 +1,27 @@
 use axum::{
-    routing::get,
+    routing::{get, post},
     Router,
     http::header,
-    extract::Query,
+    extract::{Query, State, Form},
+    response::IntoResponse,
 };
 use askama::Template;
-use askama_axum::IntoResponse;
 use dragonfly_common::*;
 use dragonfly_common::models::MachineStatus;
 use tracing::{error, info};
 use std::collections::HashMap;
+use std::sync::Arc;
 use serde_json;
 use uuid;
 use time;
 use cookie::{Cookie, SameSite};
+use tokio::sync::Mutex;
+use std::fs;
 
 use crate::db;
+use crate::auth::{AuthSession, load_credentials, save_credentials, Settings, load_settings, save_settings};
 
-// Filters must be at a specific path where Askama can find them
+// Filters for Askama templates
 mod filters {
     use askama::Result;
 
@@ -93,6 +97,7 @@ pub struct IndexTemplate {
     pub status_counts: HashMap<String, usize>,
     pub status_counts_json: String,
     pub theme: &'static str,
+    pub is_authenticated: bool,
 }
 
 #[derive(Template)]
@@ -100,6 +105,7 @@ pub struct IndexTemplate {
 pub struct MachineListTemplate {
     pub machines: Vec<Machine>,
     pub theme: &'static str,
+    pub is_authenticated: bool,
 }
 
 #[derive(Template)]
@@ -107,23 +113,33 @@ pub struct MachineListTemplate {
 pub struct MachineDetailsTemplate {
     pub machine: Machine,
     pub theme: &'static str,
+    pub is_authenticated: bool,
+}
+
+#[derive(Template)]
+#[template(path = "settings.html")]
+pub struct SettingsTemplate {
+    pub theme: &'static str,
+    pub is_authenticated: bool,
+    pub admin_username: String,
+    pub require_login: bool,
+    pub initial_password: Option<String>,
 }
 
 enum UiTemplate {
     Index(IndexTemplate),
     MachineList(MachineListTemplate),
     MachineDetails(MachineDetailsTemplate),
+    Settings(SettingsTemplate),
 }
 
 impl IntoResponse for UiTemplate {
     fn into_response(self) -> axum::response::Response {
         match self {
-            UiTemplate::Index(template) => template.into_response(),
-            UiTemplate::MachineList(template) => template.into_response(),
-            UiTemplate::MachineDetails(template) => {
-                // Use askama_axum to handle the template
-                askama_axum::into_response(&template)
-            },
+            UiTemplate::Index(template) => askama_axum::into_response(&template),
+            UiTemplate::MachineList(template) => askama_axum::into_response(&template),
+            UiTemplate::MachineDetails(template) => askama_axum::into_response(&template),
+            UiTemplate::Settings(template) => askama_axum::into_response(&template),
         }
     }
 }
@@ -134,6 +150,8 @@ pub fn ui_router() -> Router {
         .route("/machines", get(machine_list))
         .route("/machines/:id", get(machine_details))
         .route("/theme/toggle", get(toggle_theme))
+        .route("/settings", get(settings_page))
+        .route("/settings", post(update_settings))
 }
 
 // Count machines by status and return a HashMap
@@ -165,9 +183,13 @@ fn count_machines_by_status(machines: &[Machine]) -> HashMap<String, usize> {
     counts
 }
 
-pub async fn index(headers: axum::http::HeaderMap) -> impl IntoResponse {
+pub async fn index(
+    headers: axum::http::HeaderMap,
+    auth_session: AuthSession,
+) -> impl IntoResponse {
     // Get theme preference from cookie
     let theme = get_theme_from_cookies(&headers).as_str();
+    let is_authenticated = auth_session.user.is_some();
     
     match db::get_all_machines().await {
         Ok(machines) => {
@@ -186,6 +208,7 @@ pub async fn index(headers: axum::http::HeaderMap) -> impl IntoResponse {
                 status_counts,
                 status_counts_json,
                 theme,
+                is_authenticated,
             })
         },
         Err(e) => {
@@ -196,14 +219,19 @@ pub async fn index(headers: axum::http::HeaderMap) -> impl IntoResponse {
                 status_counts: HashMap::new(),
                 status_counts_json: "{}".to_string(),
                 theme,
+                is_authenticated,
             })
         }
     }
 }
 
-pub async fn machine_list(headers: axum::http::HeaderMap) -> impl IntoResponse {
+pub async fn machine_list(
+    headers: axum::http::HeaderMap,
+    auth_session: AuthSession,
+) -> impl IntoResponse {
     // Get theme preference from cookie
     let theme = get_theme_from_cookies(&headers).as_str();
+    let is_authenticated = auth_session.user.is_some();
     
     match db::get_all_machines().await {
         Ok(machines) => {
@@ -215,6 +243,7 @@ pub async fn machine_list(headers: axum::http::HeaderMap) -> impl IntoResponse {
             UiTemplate::MachineList(MachineListTemplate { 
                 machines,
                 theme,
+                is_authenticated,
             })
         },
         Err(e) => {
@@ -222,6 +251,7 @@ pub async fn machine_list(headers: axum::http::HeaderMap) -> impl IntoResponse {
             UiTemplate::MachineList(MachineListTemplate { 
                 machines: vec![],
                 theme,
+                is_authenticated,
             })
         }
     }
@@ -229,10 +259,12 @@ pub async fn machine_list(headers: axum::http::HeaderMap) -> impl IntoResponse {
 
 pub async fn machine_details(
     axum::extract::Path(id): axum::extract::Path<String>,
-    headers: axum::http::HeaderMap
+    headers: axum::http::HeaderMap,
+    auth_session: AuthSession,
 ) -> impl IntoResponse {
     // Get theme preference from cookie
     let theme = get_theme_from_cookies(&headers).as_str();
+    let is_authenticated = auth_session.user.is_some();
     
     // Parse UUID from string
     match uuid::Uuid::parse_str(&id) {
@@ -244,6 +276,7 @@ pub async fn machine_details(
                     UiTemplate::MachineDetails(MachineDetailsTemplate { 
                         machine,
                         theme,
+                        is_authenticated,
                     })
                 },
                 Ok(None) => {
@@ -255,6 +288,7 @@ pub async fn machine_details(
                         status_counts: HashMap::new(),
                         status_counts_json: "{}".to_string(),
                         theme,
+                        is_authenticated,
                     })
                 },
                 Err(e) => {
@@ -266,6 +300,7 @@ pub async fn machine_details(
                         status_counts: HashMap::new(),
                         status_counts_json: "{}".to_string(),
                         theme,
+                        is_authenticated,
                     })
                 }
             }
@@ -279,6 +314,7 @@ pub async fn machine_details(
                 status_counts: HashMap::new(),
                 status_counts_json: "{}".to_string(),
                 theme,
+                is_authenticated,
             })
         }
     }
@@ -305,5 +341,101 @@ pub async fn toggle_theme(
     (
         [(header::SET_COOKIE, cookie.to_string())],
         axum::response::Redirect::to(&return_to)
+    )
+}
+
+// Handler for the settings page
+pub async fn settings_page(
+    headers: axum::http::HeaderMap,
+    auth_session: AuthSession,
+    settings_state: State<Arc<Mutex<Settings>>>,
+) -> impl IntoResponse {
+    let theme = get_theme_from_cookies(&headers).as_str();
+    let is_authenticated = auth_session.user.is_some();
+    
+    // Only allow authenticated users to access settings
+    if !is_authenticated {
+        return axum::response::Redirect::to("/login").into_response();
+    }
+    
+    // Get admin username
+    let admin_username = match load_credentials() {
+        Ok(creds) => creds.username,
+        Err(_) => "admin".to_string(),
+    };
+    
+    // Get the settings
+    let settings = settings_state.lock().await;
+    let require_login = settings.require_login;
+    
+    // Check if initial password file exists
+    let initial_password = match fs::read_to_string(".admin_password.txt") {
+        Ok(password) => Some(password),
+        Err(_) => None,
+    };
+    
+    UiTemplate::Settings(SettingsTemplate {
+        theme,
+        is_authenticated,
+        admin_username,
+        require_login,
+        initial_password,
+    })
+}
+
+#[derive(serde::Deserialize)]
+pub struct SettingsForm {
+    pub theme: String,
+    pub require_login: Option<String>,
+    pub username: String,
+    pub password: Option<String>,
+    pub password_confirm: Option<String>,
+}
+
+// Handler for settings form submission
+pub async fn update_settings(
+    Form(form): Form<SettingsForm>,
+    headers: axum::http::HeaderMap,
+    auth_session: AuthSession,
+    backend: State<crate::auth::AdminBackend>,
+    settings_state: State<Arc<Mutex<Settings>>>,
+) -> impl IntoResponse {
+    if !auth_session.user.is_some() {
+        return axum::response::Redirect::to("/login").into_response();
+    }
+    
+    // Update theme preference
+    let theme = form.theme.clone();
+    let mut cookie = Cookie::new("dragonfly_theme", theme);
+    cookie.set_path("/");
+    cookie.set_max_age(time::Duration::days(365));
+    cookie.set_http_only(true);
+    cookie.set_same_site(SameSite::Lax);
+    
+    // Update settings
+    let mut settings = settings_state.lock().await;
+    settings.require_login = form.require_login.is_some();
+    drop(settings);
+    
+    // Save settings to disk
+    let _ = save_settings(&Settings {
+        require_login: form.require_login.is_some(),
+    });
+    
+    // Update admin credentials if a password was provided
+    if let Some(password) = form.password {
+        if !password.is_empty() {
+            // Update credentials
+            let _ = backend.update_credentials(form.username, password).await;
+            
+            // Delete the initial password file if it exists
+            let _ = fs::remove_file(".admin_password.txt");
+        }
+    }
+    
+    // Set cookie and redirect to settings
+    (
+        [(header::SET_COOKIE, cookie.to_string())],
+        axum::response::Redirect::to("/settings")
     )
 } 

@@ -128,9 +128,9 @@ async fn get_all_machines(req: axum::http::Request<axum::body::Body>) -> Respons
                             None => {
                                 if machine.status == MachineStatus::InstallingOS {
                                     if let Some(os) = &machine.os_choice {
-                                        format!("Installing {}", os)
+                                        format!("🚧 {}", format_os_name(os))
                                     } else {
-                                        "Installing OS".to_string()
+                                        "🚀 Installing OS".to_string()
                                     }
                                 } else if let Some(os) = &machine.os_choice {
                                     os.clone()
@@ -198,7 +198,12 @@ async fn get_all_machines(req: axum::http::Request<axum::body::Body>) -> Respons
                             MachineStatus::AwaitingAssignment => "bg-blue-100 text-blue-800",
                             _ => "bg-red-100 text-red-800"
                         },
-                        machine.status.to_string(),
+                        match &machine.status {
+                            MachineStatus::Ready => String::from("Ready for Adoption"),
+                            MachineStatus::InstallingOS => String::from("Installing OS"),
+                            MachineStatus::AwaitingAssignment => String::from("Awaiting Assignment"),
+                            _ => machine.status.to_string()
+                        },
                         os_display,
                         if machine.status == MachineStatus::AwaitingAssignment {
                             format!(r#"
@@ -937,9 +942,9 @@ async fn get_machine_os(Path(id): Path<String>) -> Response {
                                 name="os_choice"
                                 class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md"
                             >
-                                <option value="ubuntu">Ubuntu</option>
-                                <option value="debian">Debian</option>
-                                <option value="centos">CentOS</option>
+                                <option value="ubuntu-2404">Ubuntu 24.04</option>
+                                <option value="debian-12">Debian 12</option>
+                                <option value="proxmox">Proxmox VE</option>
                             </select>
                         </div>
                         <div class="mt-5 sm:mt-4 sm:flex sm:flex-row-reverse">
@@ -1030,4 +1035,14 @@ async fn machine_events() -> Sse<impl Stream<Item = std::result::Result<Event, I
             .interval(Duration::from_secs(1))
             .text("ping")
     )
+}
+
+fn format_os_name(os: &str) -> String {
+    match os {
+        "ubuntu-2204" => "Ubuntu 22.04",
+        "ubuntu-2404" => "Ubuntu 24.04",
+        "debian-12" => "Debian 12",
+        "proxmox" => "Proxmox VE",
+        _ => os,
+    }.to_string()
 } 
