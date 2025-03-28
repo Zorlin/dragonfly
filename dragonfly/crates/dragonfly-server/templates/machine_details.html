@@ -18,15 +18,18 @@
                     {{ machine.ip_address }}
                 {% endif %}
             </h3>
-            <span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-yellow-100 text-yellow-800">
-                {% if machine.status == MachineStatus::Ready %}
-                    Ready for Adoption
-                {% else if machine.status == MachineStatus::InstallingOS %}
-                    Installing OS
-                {% else %}
-                    {{ machine.status }}
-                {% endif %}
-            </span>
+            <div class="flex items-center">
+                <span class="font-bold text-gray-900 dark:text-white mr-2">Status:</span>
+                <span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-yellow-100 text-yellow-800">
+                    {% if machine.status == MachineStatus::Ready %}
+                        Ready for Adoption
+                    {% else if machine.status == MachineStatus::InstallingOS %}
+                        Installing OS
+                    {% else %}
+                        {{ machine.status }}
+                    {% endif %}
+                </span>
+            </div>
         </div>
 
         <div class="border-t border-gray-200 dark:border-gray-700">
@@ -37,18 +40,6 @@
                     <h3 class="text-lg font-medium leading-6 text-gray-900 dark:text-white">Basic Information</h3>
                     <div class="mt-5 border-t border-gray-200 dark:border-gray-700">
                         <dl class="divide-y divide-gray-200 dark:divide-gray-700">
-                            <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
-                                <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">ID</dt>
-                                <dd class="mt-1 text-sm text-gray-900 dark:text-white sm:mt-0 sm:col-span-2">{{ machine.id }}</dd>
-                            </div>
-                            <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
-                                <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">MAC Address</dt>
-                                <dd class="mt-1 text-sm text-gray-900 dark:text-white sm:mt-0 sm:col-span-2">{{ machine.mac_address }}</dd>
-                            </div>
-                            <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
-                                <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">IP Address</dt>
-                                <dd class="mt-1 text-sm text-gray-900 dark:text-white sm:mt-0 sm:col-span-2">{{ machine.ip_address }}</dd>
-                            </div>
                             <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
                                 <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Hostname</dt>
                                 <dd class="mt-1 text-sm text-gray-900 dark:text-white sm:mt-0 sm:col-span-2">
@@ -68,6 +59,18 @@
                                         Not set
                                     {% endif %}
                                 </dd>
+                            </div>
+                            <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
+                                <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">ID</dt>
+                                <dd class="mt-1 text-sm text-gray-900 dark:text-white sm:mt-0 sm:col-span-2">{{ machine.id }}</dd>
+                            </div>
+                            <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
+                                <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">MAC Address</dt>
+                                <dd class="mt-1 text-sm text-gray-900 dark:text-white sm:mt-0 sm:col-span-2">{{ machine.mac_address }}</dd>
+                            </div>
+                            <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
+                                <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">IP Address</dt>
+                                <dd class="mt-1 text-sm text-gray-900 dark:text-white sm:mt-0 sm:col-span-2">{{ machine.ip_address }}</dd>
                             </div>
                             <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
                                 <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Created</dt>

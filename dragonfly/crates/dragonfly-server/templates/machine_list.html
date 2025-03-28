@@ -84,8 +84,6 @@
 <script>
     // Check if user is authenticated before allowing admin actions
     function requireAdmin(callback) {
-        // This will be read by the browser as a global variable
-        // set in the Alpine.js data model from the template context
         if (!window.isAuthenticated) {
             alert("You need to be logged in as admin to perform this action.");
             return false;

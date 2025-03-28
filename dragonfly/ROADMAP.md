@@ -26,3 +26,8 @@ Here's things we would like to work on and add to Dragonfly next.
 * Retina/HiDPI display support
 * Touchscreen support
 * Automatic provisioning of Proxmox clusters
+* A timer that measures how long it takes to deploy each kind of OS Template and even rough heuristics based on hardware (CPU, RAM, etc)
+  and uses it to estimate remaining time for longer deployments.
+  * This will have a "barber pole/candy spinner" animated progress bar for each deploying node.
+  * This will also have a "deployed" status that shows the total number of nodes deployed and the average deployment time.
+  * This will be displayed on the main page right after the status counts.
