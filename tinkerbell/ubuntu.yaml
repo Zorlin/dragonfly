@@ -1,0 +1,82 @@
+apiVersion: tinkerbell.org/v1alpha1
+kind: Template
+metadata:
+  name: ubuntu
+  namespace: tink
+spec:
+  data: |
+    name: ubuntu
+    version: "0.1"
+    global_timeout: 9800
+    tasks:
+      - name: "os installation"
+        worker: "{{.device_1}}"
+        volumes:
+          - /dev:/dev
+          - /dev/console:/dev/console
+          - /lib/firmware:/lib/firmware:ro
+        environment:
+          GLOBAL_VALUE: "my global value"
+        actions:
+          - name: "stream image"
+            image: quay.io/tinkerbell/actions/image2disk:latest
+            timeout: 9600
+            environment:
+              DEST_DISK: {{ index .Hardware.Disks 0 }}
+              IMG_URL: "http://10.7.1.30:8080/ubuntu/jammy-server-cloudimg-amd64.raw.gz"
+              COMPRESSED: true
+
+          - name: "write cloud-init config"
+            image: quay.io/tinkerbell/actions/writefile:latest
+            timeout: 90
+            environment:
+              DEST_DISK: {{ formatPartition ( index .Hardware.Disks 0 ) 1 }}
+              DEST_PATH: /etc/cloud/cloud.cfg.d/10_tinkerbell.cfg
+              FS_TYPE: ext4
+              UID: 0
+              GID: 0
+              MODE: 0600
+              DIRMODE: 0700
+              CONTENTS: |
+                datasource:
+                  Ec2:
+                    metadata_urls: ["http://10.7.1.30:50061"]
+                    strict_id: false
+                manage_etc_hosts: localhost
+                warnings:
+                  dsid_missing_source: off
+
+          - name: "write ds-identify config"
+            image: quay.io/tinkerbell/actions/writefile:latest
+            timeout: 90
+            environment:
+              DEST_DISK: {{ formatPartition ( index .Hardware.Disks 0 ) 1 }}
+              DEST_PATH: /etc/cloud/ds-identify.cfg
+              FS_TYPE: ext4
+              UID: 0
+              GID: 0
+              MODE: 0600
+              DIRMODE: 0700
+              CONTENTS: |
+                datasource: Ec2
+
+          - name: "write netplan config"
+            image: quay.io/tinkerbell/actions/writefile:latest
+            timeout: 90
+            environment:
+              DEST_DISK: {{ formatPartition ( index .Hardware.Disks 0 ) 1 }}
+              DEST_PATH: /etc/netplan/config.yaml
+              FS_TYPE: ext4
+              UID: 0
+              GID: 0
+              MODE: 0644
+              DIRMODE: 0755
+              CONTENTS: |
+                network:
+                  version: 2
+                  renderer: networkd
+                  ethernets:
+                    id0:
+                      match:
+                        name: en*
+                      dhcp4: true
