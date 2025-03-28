@@ -45,6 +45,17 @@ spec:
                 manage_etc_hosts: localhost
                 warnings:
                   dsid_missing_source: off
+                users:
+                  - default
+                disable_root: true
+                ssh_import_id:
+                  - gh:zorlin
+                  - gh:michatinkers
+                packages:
+                  - qemu-guest-agent
+                runcmd:
+                  - systemctl enable qemu-guest-agent
+                  - systemctl start qemu-guest-agent
 
           - name: "write ds-identify config"
             image: quay.io/tinkerbell/actions/writefile:latest
