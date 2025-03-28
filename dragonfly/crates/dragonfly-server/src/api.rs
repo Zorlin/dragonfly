@@ -14,7 +14,6 @@ use serde_json::json;
 use serde::Deserialize;
 use futures::stream::{self, Stream};
 use std::convert::Infallible;
-use tokio_stream::StreamExt;
 use std::time::Duration;
 use tokio::sync::broadcast;
 use serde::Serialize;
@@ -38,19 +37,19 @@ pub fn api_router() -> Router {
     Router::new()
         .route("/api/machines", post(register_machine))
         .route("/api/machines", get(get_all_machines))
-        .route("/api/machines/:id", get(get_machine))
-        .route("/api/machines/:id", delete(delete_machine))
-        .route("/api/machines/:id", put(update_machine))
-        .route("/api/machines/:id/os", get(get_machine_os))
-        .route("/api/machines/:id/os", post(assign_os))
-        .route("/api/machines/:id/status", get(get_machine_status))
-        .route("/api/machines/:id/status", post(update_status))
-        .route("/api/machines/:id/hostname", post(update_hostname))
-        .route("/api/machines/:id/hostname", get(get_hostname_form))
-        .route("/api/machines/:id/os_installed", post(update_os_installed))
-        .route("/api/machines/:id/bmc", post(update_bmc))
+        .route("/api/machines/{id}", get(get_machine))
+        .route("/api/machines/{id}", delete(delete_machine))
+        .route("/api/machines/{id}", put(update_machine))
+        .route("/api/machines/{id}/os", get(get_machine_os))
+        .route("/api/machines/{id}/os", post(assign_os))
+        .route("/api/machines/{id}/status", get(get_machine_status))
+        .route("/api/machines/{id}/status", post(update_status))
+        .route("/api/machines/{id}/hostname", post(update_hostname))
+        .route("/api/machines/{id}/hostname", get(get_hostname_form))
+        .route("/api/machines/{id}/os_installed", post(update_os_installed))
+        .route("/api/machines/{id}/bmc", post(update_bmc))
         .route("/api/events", get(machine_events))
-        .route("/:mac", get(ipxe_script))
+        .route("/{mac}", get(ipxe_script))
 }
 
 async fn register_machine(

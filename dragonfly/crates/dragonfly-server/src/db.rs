@@ -14,7 +14,7 @@ use dragonfly_common::models::{Machine, MachineStatus, RegisterRequest};
 static DB_POOL: OnceCell<Pool<Sqlite>> = OnceCell::const_new();
 
 // Initialize the database connection pool
-pub async fn init_db() -> Result<()> {
+pub async fn init_db() -> Result<SqlitePool> {
     // Create or open the SQLite database file
     let db_path = "sqlite.db";
     
@@ -66,12 +66,12 @@ pub async fn init_db() -> Result<()> {
     migrate_db(&pool).await?;
     
     // Store the pool globally
-    if let Err(_) = DB_POOL.set(pool) {
+    if let Err(_) = DB_POOL.set(pool.clone()) {
         return Err(anyhow!("Failed to set global database pool"));
     }
     
     info!("Database initialized successfully");
-    Ok(())
+    Ok(pool)
 }
 
 // Get a reference to the database pool
