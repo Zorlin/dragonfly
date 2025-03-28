@@ -10,41 +10,8 @@ use tower_http::services::ServeDir;
 use anyhow::Result;
 use tracing::{info, warn};
 
-/// Run the dragonfly server
-pub async fn run_server() -> anyhow::Result<()> {
-    // Initialize the database
-    db::init_db().await?;
-    
-    // Initialize Tinkerbell integration if KUBECONFIG is available
-    if let Ok(_) = tinkerbell::init().await {
-        tracing::info!("Tinkerbell integration initialized successfully");
-    } else {
-        tracing::warn!("Tinkerbell integration not initialized. KUBECONFIG environment variable may not be set.");
-    }
-    
-    // Create the router
-    let app = Router::new()
-        .merge(api::api_router())
-        .merge(ui::ui_router())
-        // Serve static files
-        .nest_service("/js", ServeDir::new("crates/dragonfly-server/static/js"))
-        .nest_service("/css", ServeDir::new("crates/dragonfly-server/static/css"))
-        .nest_service("/images", ServeDir::new("crates/dragonfly-server/static/images"))
-        .layer(TraceLayer::new_for_http());
-
-    // Create the address to bind to
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
-    tracing::info!("Listening on {}", addr);
-
-    // Start the server
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(listener, app).await?;
-    
-    Ok(())
-}
-
 /// Run the dragonfly server, initializing tracing if needed
-pub fn run() -> anyhow::Result<()> {
+pub fn run() -> Result<()> {
     // Initialize tracing if not already initialized
     tracing_subscriber::fmt::try_init().ok();
     
@@ -52,7 +19,7 @@ pub fn run() -> anyhow::Result<()> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
-        .block_on(run_server())
+        .block_on(start())
 }
 
 /// Run the dragonfly server with extended configuration

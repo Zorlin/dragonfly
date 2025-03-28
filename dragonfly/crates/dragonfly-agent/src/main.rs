@@ -9,6 +9,23 @@ use std::process::Command;
 use sysinfo::System;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use clap::Parser;
+
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Run in setup mode (initial PXE boot)
+    #[arg(long)]
+    setup: bool,
+
+    /// Server URL (default: http://localhost:3000)
+    #[arg(long)]
+    server: Option<String>,
+
+    /// Tinkerbell IPXE URL (default: http://10.7.1.30:8080/hookos.ipxe)
+    #[arg(long, default_value = "http://10.7.1.30:8080/hookos.ipxe")]
+    ipxe_url: String,
+}
 
 // Enhanced OS detection with support for more distributions
 fn detect_os() -> Result<(String, String)> {
@@ -353,11 +370,16 @@ fn detect_nameservers() -> Vec<String> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Parse command line arguments
+    let args = Args::parse();
+    
     // Initialize logger
     tracing_subscriber::fmt::init();
     
-    // Get API URL from environment or use default
-    let api_url = env::var("DRAGONFLY_API_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
+    // Get API URL from environment, command line, or use default
+    let api_url = args.server
+        .or_else(|| env::var("DRAGONFLY_API_URL").ok())
+        .unwrap_or_else(|| "http://localhost:3000".to_string());
     
     // Create HTTP client
     let client = Client::new();
@@ -376,17 +398,31 @@ async fn main() -> Result<()> {
     let disks = detect_disks();
     let nameservers = detect_nameservers();
     
-    // Detect OS
+    // Detect OS - even in setup mode we want to check for existing OS
     let (os_name, os_version) = detect_os()?;
     tracing::info!("Detected OS: {} {}", os_name, os_version);
     
-    // Determine machine status based on OS detection
-    let (current_status, os_info) = if !os_name.is_empty() && os_name != "Unknown" {
+    // Check if we have a bootable OS
+    let has_bootable_os = if args.setup {
+        // In setup mode, check if we can find bootable partitions
+        let bootable = check_bootable_os()?;
+        tracing::info!("Bootable OS check result: {}", bootable);
+        bootable
+    } else {
+        // In normal mode, if we detected a non-Alpine OS, consider it bootable
+        os_name != "Alpine" && os_name != "Unknown"
+    };
+    
+    // Determine machine status based on OS detection and setup mode
+    let (current_status, os_info) = if has_bootable_os {
         let os_full_name = format!("{} {}", os_name, os_version);
         tracing::info!("Found existing OS: {}", os_full_name);
         (MachineStatus::ExistingOS, Some(os_full_name))
+    } else if args.setup {
+        tracing::info!("No bootable OS found, marking as ready for adoption");
+        (MachineStatus::ReadyForAdoption, None)
     } else {
-        tracing::info!("Unable to detect OS, marking as ready for adoption");
+        tracing::info!("Running in Alpine environment");
         (MachineStatus::ReadyForAdoption, None)
     };
     
@@ -408,7 +444,8 @@ async fn main() -> Result<()> {
     // Find if this machine already exists by MAC address
     let existing_machine = existing_machines.iter().find(|m| m.mac_address == mac_address);
     
-    match existing_machine {
+    // Process registration/update as before
+    let machine_id = match existing_machine {
         Some(machine) => {
             // Machine exists, update its status
             tracing::info!("Machine already exists with ID: {}", machine.id);
@@ -453,6 +490,8 @@ async fn main() -> Result<()> {
                 
                 tracing::info!("OS installed updated successfully!");
             }
+            
+            machine.id
         },
         None => {
             // Machine doesn't exist, register it
@@ -526,12 +565,180 @@ async fn main() -> Result<()> {
                 
                 tracing::info!("OS installed updated successfully!");
             }
+            
+            register_response.machine_id
+        }
+    };
+    
+    // If in setup mode, handle boot decision
+    if args.setup {
+        if has_bootable_os {
+            tracing::info!("Bootable OS detected, attempting to chainload existing OS...");
+            
+            // Try to chainload the existing OS
+            chainload_existing_os()?;
+        } else {
+            tracing::info!("No bootable OS found, chainloading IPXE for OS installation...");
+            
+            // Ensure ipxe.lkrn exists
+            if !Path::new("/usr/share/ipxe/ipxe.lkrn").exists() {
+                tracing::info!("Installing IPXE...");
+                Command::new("apk")
+                    .args(["add", "ipxe"])
+                    .status()
+                    .context("Failed to install IPXE")?;
+            }
+            
+            // Chainload IPXE
+            tracing::info!("Chainloading IPXE with URL: {}", args.ipxe_url);
+            Command::new("kexec")
+                .args([
+                    "-l", 
+                    "/usr/share/ipxe/ipxe.lkrn",
+                    "--command-line",
+                    &format!("dhcp && chain {}", args.ipxe_url)
+                ])
+                .status()
+                .context("Failed to load IPXE kernel")?;
+                
+            // Execute the loaded kernel
+            Command::new("kexec")
+                .arg("-e")
+                .status()
+                .context("Failed to execute IPXE kernel")?;
         }
     }
     
-    // TODO: Implement a background process to periodically update status
-    
     Ok(())
+}
+
+/// Check if there's a bootable OS on the system
+fn check_bootable_os() -> Result<bool> {
+    // First check for EFI boot entries
+    if Path::new("/sys/firmware/efi").exists() {
+        tracing::info!("Checking EFI boot entries...");
+        
+        // Use efibootmgr to check boot entries
+        if let Ok(output) = Command::new("efibootmgr")
+            .output()
+        {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                // Look for non-network boot entries
+                for line in stdout.lines() {
+                    if line.contains("Boot") && !line.contains("Network") {
+                        tracing::info!("Found EFI boot entry: {}", line);
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+    }
+    
+    // Check for GRUB installations
+    for path in ["/boot/grub", "/boot/grub2", "/boot/efi/EFI"] {
+        if Path::new(path).exists() {
+            tracing::info!("Found bootloader directory: {}", path);
+            return Ok(true);
+        }
+    }
+    
+    // Check for bootable partitions using blkid
+    if let Ok(output) = Command::new("blkid")
+        .output()
+    {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
+                // Look for common Linux root filesystem types
+                if line.contains("TYPE=\"ext4\"") || 
+                   line.contains("TYPE=\"xfs\"") || 
+                   line.contains("TYPE=\"btrfs\"") {
+                    tracing::info!("Found bootable partition: {}", line);
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    
+    Ok(false)
+}
+
+/// Attempt to chainload the existing OS
+fn chainload_existing_os() -> Result<()> {
+    // First try to find the kernel in standard locations
+    let kernel_locations = [
+        "/boot/vmlinuz",
+        "/boot/vmlinuz-linux",
+        "/boot/vmlinuz-current",
+    ];
+    
+    let initrd_locations = [
+        "/boot/initrd.img",
+        "/boot/initramfs-linux.img",
+        "/boot/initrd-current",
+    ];
+    
+    // Try to find the newest kernel
+    let mut newest_kernel: Option<(String, std::fs::Metadata)> = None;
+    for kernel in kernel_locations.iter() {
+        if let Ok(metadata) = std::fs::metadata(kernel) {
+            if metadata.is_file() {
+                match &newest_kernel {
+                    None => newest_kernel = Some((kernel.to_string(), metadata)),
+                    Some((_, old_meta)) => {
+                        if let (Ok(old_time), Ok(new_time)) = (old_meta.modified(), metadata.modified()) {
+                            if new_time > old_time {
+                                newest_kernel = Some((kernel.to_string(), metadata));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Find matching initrd
+    let mut initrd_path = None;
+    if let Some((kernel_path, _)) = &newest_kernel {
+        for initrd in initrd_locations.iter() {
+            if Path::new(initrd).exists() {
+                initrd_path = Some(initrd.to_string());
+                break;
+            }
+        }
+    }
+    
+    if let Some((kernel_path, _)) = newest_kernel {
+        tracing::info!("Found kernel at: {}", kernel_path);
+        if let Some(initrd) = &initrd_path {
+            tracing::info!("Found initrd at: {}", initrd);
+        }
+        
+        // Build kexec command
+        let mut cmd = Command::new("kexec");
+        cmd.arg("-l").arg(&kernel_path);
+        
+        if let Some(initrd) = &initrd_path {
+            cmd.args(["--initrd", initrd]);
+        }
+        
+        // Add basic kernel parameters
+        cmd.args(["--append", "root=auto rw"]);
+        
+        // Execute kexec load
+        cmd.status().context("Failed to load kernel with kexec")?;
+        
+        // Execute the loaded kernel
+        Command::new("kexec")
+            .arg("-e")
+            .status()
+            .context("Failed to execute loaded kernel")?;
+            
+        Ok(())
+    } else {
+        anyhow::bail!("Could not find bootable kernel")
+    }
 }
 
 fn get_mac_address() -> Result<String> {

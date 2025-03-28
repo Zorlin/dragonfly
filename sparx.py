@@ -831,7 +831,7 @@ class HostManager(Static):
                         for idx, column in enumerate(table.columns):
                             if column.label.plain == "Role" or column.label.plain == "👤":
                                 role_column = idx
-                                break
+        break
                         
                         if role_column is not None:
                             table.update_cell(row.key, role_column, host.role_emoji)
