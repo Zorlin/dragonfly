@@ -8,7 +8,11 @@
             <div class="md:flex md:items-center md:justify-between">
                 <div class="flex-1 min-w-0">
                     <h2 class="text-2xl font-bold leading-7 text-gray-900 dark:text-white sm:text-3xl sm:truncate">
-                        {{ machine.memorable_name.unwrap_or(machine.mac_address) }}
+                        {% if machine.memorable_name.is_some() %}
+                            {{ machine.memorable_name.as_ref().unwrap() }}
+                        {% else %}
+                            {{ machine.mac_address }}
+                        {% endif %}
                     </h2>
                     <div class="mt-1 flex flex-col sm:flex-row sm:flex-wrap sm:mt-0 sm:space-x-6">
                         <div class="mt-2 flex items-center text-sm text-gray-500 dark:text-gray-400">
@@ -23,12 +27,13 @@
                             </svg>
                             IP: {{ machine.ip_address }}
                         </div>
-                        {% if machine.hostname %}
+                        {% if machine.hostname.is_some() %}
                         <div class="mt-2 flex items-center text-sm text-gray-500 dark:text-gray-400">
                             <svg class="flex-shrink-0 mr-1.5 h-5 w-5 text-gray-400 dark:text-gray-500" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
                                 <path d="M2 11a1 1 0 011-1h2a1 1 0 011 1v5a1 1 0 01-1 1H3a1 1 0 01-1-1v-5zM8 7a1 1 0 011-1h2a1 1 0 011 1v9a1 1 0 01-1 1H9a1 1 0 01-1-1V7zM14 4a1 1 0 011-1h2a1 1 0 011 1v12a1 1 0 01-1 1h-2a1 1 0 01-1-1V4z" />
                             </svg>
-                            Hostname: {{ machine.hostname }}
+                            Hostname: 
+                            {{ machine.hostname.as_ref().unwrap() }}
                         </div>
                         {% endif %}
                     </div>
@@ -59,7 +64,13 @@
                     </div>
                     <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
                         <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Hostname</dt>
-                        <dd class="mt-1 text-sm text-gray-900 dark:text-white sm:mt-0 sm:col-span-2">{{ machine.hostname.unwrap_or("Not set") }}</dd>
+                        <dd class="mt-1 text-sm text-gray-900 dark:text-white sm:mt-0 sm:col-span-2">
+                            {% if machine.hostname.is_some() %}
+                                {{ machine.hostname.as_ref().unwrap() }}
+                            {% else %}
+                                Not set
+                            {% endif %}
+                        </dd>
                     </div>
                     <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
                         <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">DNS Servers</dt>
@@ -67,8 +78,8 @@
                             {% if machine.nameservers.is_empty() %}
                                 No DNS servers configured
                             {% else %}
-                                {% for server in machine.nameservers %}
-                                    {{ server }}{% if not loop.last %}, {% endif %}
+                                {% for dns in machine.nameservers %}
+                                {{ dns }} 
                                 {% endfor %}
                             {% endif %}
                         </dd>
@@ -97,8 +108,20 @@
                                         {% for disk in machine.disks %}
                                         <tr>
                                             <td class="whitespace-nowrap py-4 pl-4 pr-3 text-sm font-medium text-gray-900 dark:text-white sm:pl-6">{{ disk.device }}</td>
-                                            <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500 dark:text-gray-400">{{ disk.calculated_size.unwrap_or("Unknown") }}</td>
-                                            <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500 dark:text-gray-400">{{ disk.model.unwrap_or("Unknown") }}</td>
+                                            <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500 dark:text-gray-400">
+                                                {% if disk.calculated_size.is_some() %}
+                                                    {{ disk.calculated_size.as_ref().unwrap() }}
+                                                {% else %}
+                                                    Unknown
+                                                {% endif %}
+                                            </td>
+                                            <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500 dark:text-gray-400">
+                                                {% if disk.model.is_some() %}
+                                                    {{ disk.model.as_ref().unwrap() }}
+                                                {% else %}
+                                                    Unknown
+                                                {% endif %}
+                                            </td>
                                         </tr>
                                         {% endfor %}
                                     </tbody>

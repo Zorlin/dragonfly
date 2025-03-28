@@ -8,6 +8,8 @@
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
     <!-- Alpine.js for UI interactivity -->
     <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+    <!-- TODO: Replace with proper Tailwind CSS installation via PostCSS or CLI -->
+    <!-- See: https://tailwindcss.com/docs/installation -->
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
     {% block head %}{% endblock %}
@@ -21,10 +23,14 @@
     statusModal: false,
     deleteModal: false,
     currentMachine: null,
-    theme: localStorage.getItem('theme') || 'system',
+    theme: '{{ theme }}' || localStorage.getItem('theme') || 'system',
     setTheme(value) {
         this.theme = value;
         localStorage.setItem('theme', value);
+        
+        // Save the theme preference on the server
+        fetch(`/theme/toggle?theme=${value}&return_to=${window.location.pathname}`);
+        
         if (value === 'dark' || (value === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
             document.documentElement.classList.add('dark');
         } else {
@@ -32,6 +38,7 @@
         }
     },
     init() {
+        // Use theme from the server cookie (already set in this.theme)
         this.$watch('theme', value => this.setTheme(value));
         window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
             if (this.theme === 'system') {

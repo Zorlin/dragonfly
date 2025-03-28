@@ -43,9 +43,9 @@
     </div>
 </div>
 
-<div id="status-modal" class="relative z-10" aria-labelledby="modal-title" role="dialog" aria-modal="true" x-show="showStatus" x-cloak>
+<div id="status-modal" class="relative z-10" aria-labelledby="modal-title" role="dialog" aria-modal="true" x-show="statusModal" x-cloak>
     <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"></div>
-    <div class="fixed inset-0 z-10 overflow-y-auto" @click="showStatus = false">
+    <div class="fixed inset-0 z-10 overflow-y-auto" @click="statusModal = false">
         <div class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
             <div class="relative transform overflow-hidden rounded-lg bg-white px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6" 
                 @click.stop>
@@ -55,9 +55,9 @@
     </div>
 </div>
 
-<div id="os-modal" class="relative z-10" aria-labelledby="modal-title" role="dialog" aria-modal="true" x-show="showOs" x-cloak>
+<div id="os-modal" class="relative z-10" aria-labelledby="modal-title" role="dialog" aria-modal="true" x-show="osModal" x-cloak>
     <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"></div>
-    <div class="fixed inset-0 z-10 overflow-y-auto" @click="showOs = false">
+    <div class="fixed inset-0 z-10 overflow-y-auto" @click="osModal = false">
         <div class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
             <div class="relative transform overflow-hidden rounded-lg bg-white px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6" 
                 @click.stop>
@@ -67,9 +67,9 @@
     </div>
 </div>
 
-<div id="delete-modal" class="relative z-10" aria-labelledby="modal-title" role="dialog" aria-modal="true" x-show="showDelete" x-cloak>
+<div id="delete-modal" class="relative z-10" aria-labelledby="modal-title" role="dialog" aria-modal="true" x-show="deleteModal" x-cloak>
     <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"></div>
-    <div class="fixed inset-0 z-10 overflow-y-auto" @click="showDelete = false">
+    <div class="fixed inset-0 z-10 overflow-y-auto" @click="deleteModal = false">
         <div class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
             <div class="relative transform overflow-hidden rounded-lg bg-white px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6" 
                 @click.stop>

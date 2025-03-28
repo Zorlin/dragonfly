@@ -7,6 +7,7 @@ use axum::Router;
 use std::net::SocketAddr;
 use tower_http::trace::TraceLayer;
 use tower_http::services::ServeDir;
+use tower_http::cors::CorsLayer;
 use anyhow::Result;
 use tracing::{info, warn};
 
@@ -46,7 +47,8 @@ pub async fn start() -> Result<()> {
         .nest_service("/js", ServeDir::new("crates/dragonfly-server/static/js"))
         .nest_service("/css", ServeDir::new("crates/dragonfly-server/static/css"))
         .nest_service("/images", ServeDir::new("crates/dragonfly-server/static/images"))
-        .layer(TraceLayer::new_for_http());
+        .layer(TraceLayer::new_for_http())
+        .layer(CorsLayer::permissive());
     
     // Run it
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
