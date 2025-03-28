@@ -15,11 +15,11 @@ smee:
     httpIPXE:
       scriptUrl:
         scheme: "http"
-        host: "10.7.1.30"
-        port: 8080
-        path: "menu.ipxe"
+        host: "10.7.1.200"
+        port: 3000
+        path: ""
   additionalArgs:
-    - "--dhcp-http-ipxe-script-prepend-mac=false"
+    - "--dhcp-http-ipxe-script-prepend-mac=true"
 stack:
   hook:
     enabled: true

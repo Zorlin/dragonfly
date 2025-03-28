@@ -578,34 +578,9 @@ async fn main() -> Result<()> {
             // Try to chainload the existing OS
             chainload_existing_os()?;
         } else {
-            tracing::info!("No bootable OS found, chainloading IPXE for OS installation...");
-            
-            // Ensure ipxe.lkrn exists
-            if !Path::new("/usr/share/ipxe/ipxe.lkrn").exists() {
-                tracing::info!("Installing IPXE...");
-                Command::new("apk")
-                    .args(["add", "ipxe"])
-                    .status()
-                    .context("Failed to install IPXE")?;
-            }
-            
-            // Chainload IPXE
-            tracing::info!("Chainloading IPXE with URL: {}", args.ipxe_url);
-            Command::new("kexec")
-                .args([
-                    "-l", 
-                    "/usr/share/ipxe/ipxe.lkrn",
-                    "--command-line",
-                    &format!("dhcp && chain {}", args.ipxe_url)
-                ])
-                .status()
-                .context("Failed to load IPXE kernel")?;
-                
-            // Execute the loaded kernel
-            Command::new("kexec")
-                .arg("-e")
-                .status()
-                .context("Failed to execute IPXE kernel")?;
+            tracing::info!("No bootable OS found, rebooting into Tinkerbell...");
+            let mut cmd = Command::new("reboot");
+            cmd.status().context("Failed to reboot")?;
         }
     }
     
@@ -733,7 +708,7 @@ fn chainload_existing_os() -> Result<()> {
         Command::new("kexec")
             .arg("-e")
             .status()
-            .context("Failed to execute loaded kernel")?;
+            .context("Failed to execute IPXE kernel")?;
             
         Ok(())
     } else {

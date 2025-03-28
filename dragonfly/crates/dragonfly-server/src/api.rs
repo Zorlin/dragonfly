@@ -22,6 +22,7 @@ pub fn api_router() -> Router {
         .route("/api/machines/:id/hostname", post(update_hostname))
         .route("/api/machines/:id/hostname", get(get_hostname_form))
         .route("/api/machines/:id/os_installed", post(update_os_installed))
+        .route("/:mac", get(ipxe_script))
 }
 
 async fn register_machine(
@@ -299,6 +300,34 @@ async fn get_hostname_form(
                 e
             );
             (StatusCode::INTERNAL_SERVER_ERROR, [(axum::http::header::CONTENT_TYPE, "text/html")], error_html)
+        }
+    }
+}
+
+// Handler for iPXE script generation
+async fn ipxe_script(Path(mac): Path<String>) -> Response {
+    if !mac.contains(':') || mac.split(':').count() != 6 {
+        return (StatusCode::NOT_FOUND, "Not Found").into_response();
+    }
+    
+    info!("Generating iPXE script for MAC: {}", mac);
+    
+    match db::get_machine_by_mac(&mac).await {
+        Ok(Some(_)) => {
+            let script = format!("#!ipxe\nchain http://10.7.1.30:8080/hookos.ipxe");
+            (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/plain")], script).into_response()
+        },
+        Ok(None) => {
+            let script = format!("#!ipxe\nchain http://10.7.1.30:8080/sparxplug.ipxe");
+            (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/plain")], script).into_response()
+        },
+        Err(e) => {
+            error!("Database error while looking up MAC {}: {}", mac, e);
+            let error_response = ErrorResponse {
+                error: "Database Error".to_string(),
+                message: e.to_string(),
+            };
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(error_response)).into_response()
         }
     }
 }

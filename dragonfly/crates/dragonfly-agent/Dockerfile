@@ -4,10 +4,27 @@
 
 FROM rust:1.85.1-alpine3.21 AS builder
 
+RUN apk add --no-cache \
+    openssl-dev \
+    musl-dev \
+    gcc \
+    wget
+
+ENV RUSTFLAGS="-C target-feature=-crt-static"
+
 WORKDIR /usr/src/dragonfly
 COPY . .
 RUN cargo build --release -p dragonfly-agent
 
+# Download iPXE kernel
+RUN wget -O /usr/local/share/ipxe.lkrn https://boot.alpinelinux.org/alpine-ipxe/x86_64/ipxe.lkrn
+
 FROM alpine:3.21
+RUN apk add --no-cache \
+    openssl \
+    libgcc \
+    kexec-tools
+
 COPY --from=builder /usr/src/dragonfly/target/release/dragonfly-agent /usr/local/bin/
+COPY --from=builder /usr/local/share/ipxe.lkrn /usr/local/share/ipxe.lkrn
 CMD ["dragonfly-agent"]
