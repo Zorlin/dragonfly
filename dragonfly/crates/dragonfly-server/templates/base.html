@@ -11,6 +11,15 @@
     <!-- TODO: Replace with proper Tailwind CSS installation via PostCSS or CLI -->
     <!-- See: https://tailwindcss.com/docs/installation -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      // Tailwind Configuration
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {}
+        }
+      }
+    </script>
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
     {% block head %}{% endblock %}
     <style>
@@ -21,11 +30,16 @@
         const savedTheme = localStorage.getItem('theme') || 'system';
         const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
         
+        // Start with no dark class
+        document.documentElement.classList.remove('dark');
+        
+        // Only add dark if explicitly dark or system preference is dark
         if (savedTheme === 'dark' || (savedTheme === 'system' && prefersDark)) {
             document.documentElement.classList.add('dark');
-        } else {
-            document.documentElement.classList.remove('dark');
         }
+        
+        // Log for debugging
+        console.log('Initial theme:', savedTheme, 'System prefers dark:', prefersDark);
     </script>
 </head>
 <body class="bg-gray-100 dark:bg-gray-900" x-data="{
@@ -42,23 +56,32 @@
         // Save the theme preference on the server
         fetch(`/theme/toggle?theme=${value}&return_to=${window.location.pathname}`);
         
+        // Reset theme - start by removing dark class
+        document.documentElement.classList.remove('dark');
+        
+        // Only add dark class when needed
         if (value === 'dark' || (value === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
             document.documentElement.classList.add('dark');
-        } else {
-            document.documentElement.classList.remove('dark');
         }
+        
+        console.log('Theme set to:', value, 'Dark class:', document.documentElement.classList.contains('dark'));
     },
     init() {
         // Force theme application on page load
         this.$nextTick(() => {
+            // Always start fresh by removing the dark class
+            document.documentElement.classList.remove('dark');
+            
+            // Check if we should be in dark mode
             const isDark = this.theme === 'dark' || 
                 (this.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
                 
+            // Only add dark class if we should be in dark mode
             if (isDark) {
                 document.documentElement.classList.add('dark');
-            } else {
-                document.documentElement.classList.remove('dark');
             }
+            
+            console.log('Theme initialized to:', this.theme, 'Dark class:', document.documentElement.classList.contains('dark'));
         });
         
         // Watch for theme changes
@@ -67,7 +90,12 @@
         // Watch for system preference changes
         window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
             if (this.theme === 'system') {
-                this.setTheme('system');
+                // Reset dark class based on system preference
+                document.documentElement.classList.remove('dark');
+                if (e.matches) {
+                    document.documentElement.classList.add('dark');
+                }
+                console.log('System preference changed to:', e.matches ? 'dark' : 'light');
             }
         });
     }

@@ -492,7 +492,7 @@ async fn update_status(
                 </div>
                 <script>
                     // Close the modal
-                    document.getElementById('status-modal').classList.add('hidden');
+                    statusModal = false;
                     // Refresh the machine list
                     htmx.trigger(document.querySelector('tbody'), 'refreshMachines');
                 </script>
@@ -931,10 +931,10 @@ async fn get_machine_os(Path(id): Path<String>) -> Response {
                 <div class="mt-2">
                     <form hx-post="/api/machines/{}/os" hx-swap="none" @submit="osModal = false">
                         <div class="mt-4">
-                            <label for="os" class="block text-sm font-medium text-gray-700">Operating System</label>
+                            <label for="os_choice" class="block text-sm font-medium text-gray-700">Operating System</label>
                             <select
-                                id="os"
-                                name="os"
+                                id="os_choice"
+                                name="os_choice"
                                 class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md"
                             >
                                 <option value="ubuntu">Ubuntu</option>
@@ -973,7 +973,7 @@ pub async fn get_machine_status(Path(id): Path<Uuid>) -> impl IntoResponse {
                     Update Machine Status
                 </h3>
                 <div class="mt-2">
-                    <form hx-post="/api/machines/{}/status" hx-swap="none" @submit="showStatus = false">
+                    <form hx-post="/api/machines/{}/status" hx-swap="none" @submit="statusModal = false">
                         <div class="mb-4">
                             <label for="status" class="block text-sm font-medium text-gray-700">Status</label>
                             <select name="status" id="status" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md">
