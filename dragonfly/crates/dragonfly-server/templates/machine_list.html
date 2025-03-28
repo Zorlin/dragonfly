@@ -112,28 +112,28 @@
                         </div>
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                        <div class="flex space-x-3">
+                        <div class="flex space-x-3" onclick="event.stopPropagation();">
                             {% if machine.status|string == "ReadyForAdoption" %}
-                            <button
+                            <span
                                 hx-get="/api/machines/{{ machine.id }}/os"
                                 hx-target="#os-modal"
-                                class="text-indigo-600 hover:text-indigo-900">
+                                class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-indigo-600 text-white hover:bg-indigo-700 cursor-pointer">
                                 Assign OS
-                            </button>
+                            </span>
                             {% endif %}
-                            <button
+                            <span
                                 hx-get="/api/machines/{{ machine.id }}/status"
                                 hx-target="#status-modal"
-                                class="text-gray-600 hover:text-gray-900">
+                                class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-500 text-white hover:bg-orange-600 cursor-pointer">
                                 Update Status
-                            </button>
+                            </span>
                             <button
                                 id="delete-btn-{{ machine.id }}"
                                 hx-delete="/api/machines/{{ machine.id }}"
                                 hx-swap="none"
                                 hx-trigger="confirmed"
                                 class="text-red-600 hover:text-red-900"
-                                onclick="event.stopPropagation(); event.preventDefault(); openDeleteModal('{{ machine.id }}')">
+                                onclick="openDeleteModal('{{ machine.id }}')">
                                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5">
                                     <path stroke-linecap="round" stroke-linejoin="round" d="M9.75 9.75l4.5 4.5m0-4.5l-4.5 4.5M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                                 </svg>
@@ -158,7 +158,7 @@
                         Assign Operating System
                     </h3>
                     <div class="mt-2">
-                        <form hx-post="/api/machines/{id}/os" hx-target="#os-modal">
+                        <form id="os-form" hx-post="" hx-target="#os-modal">
                             <select name="os_choice" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
                                 <option value="Debian 12">Debian 12</option>
                                 <option value="Ubuntu 24.04">Ubuntu 24.04</option>
@@ -190,7 +190,7 @@
                         Update Machine Status
                     </h3>
                     <div class="mt-2">
-                        <form hx-post="/api/machines/{id}/status" hx-target="#status-modal">
+                        <form id="status-form" hx-post="" hx-target="#status-modal">
                             <select name="status" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
                                 <option value="ReadyForAdoption">Ready For Adoption</option>
                                 <option value="InstallingOS">Installing OS</option>
@@ -249,6 +249,40 @@
 <script>
   let currentDeleteButtonId;
 
+  // Prevent clicks in action cells from navigating to machine details
+  document.addEventListener('DOMContentLoaded', function() {
+    // Add click handlers for the action buttons
+    document.querySelectorAll('[hx-target="#os-modal"], [hx-target="#status-modal"]').forEach(function(el) {
+      el.addEventListener('click', function(event) {
+        // Stop event from reaching the row
+        event.stopPropagation();
+      });
+    });
+  });
+
+  // Listen for HTMX requests
+  document.body.addEventListener('htmx:beforeRequest', function(event) {
+    // Fix the OS modal form target when opened
+    if (event.detail.requestConfig.path && event.detail.requestConfig.path.includes('/machines/') && event.detail.requestConfig.path.includes('/os')) {
+      // Extract the machine ID from the URL
+      const url = event.detail.requestConfig.path;
+      const machineId = url.split('/machines/')[1].split('/os')[0];
+      
+      // Update the OS form with the correct machine ID when the modal loads
+      document.getElementById('os-form').setAttribute('hx-post', '/api/machines/' + machineId + '/os');
+    }
+    
+    // Fix the Status modal form target when opened
+    if (event.detail.requestConfig.path && event.detail.requestConfig.path.includes('/machines/') && event.detail.requestConfig.path.includes('/status')) {
+      // Extract the machine ID from the URL
+      const url = event.detail.requestConfig.path;
+      const machineId = url.split('/machines/')[1].split('/status')[0];
+      
+      // Update the status form with the correct machine ID when the modal loads
+      document.getElementById('status-form').setAttribute('hx-post', '/api/machines/' + machineId + '/status');
+    }
+  });
+
   // Listen for successful DELETE requests and refresh the table
   document.body.addEventListener('htmx:afterRequest', function(event) {
     if (event.detail.requestConfig && event.detail.requestConfig.method === 'DELETE' && event.detail.successful) {
@@ -260,6 +294,9 @@
   });
 
   function openDeleteModal(machineId) {
+    // Stop event propagation
+    event.stopPropagation();
+    
     // Store the ID of the button that needs to be triggered when confirmed
     currentDeleteButtonId = 'delete-btn-' + machineId;
     
@@ -279,5 +316,21 @@
   function closeDeleteModal() {
     document.getElementById('delete-modal').classList.add('hidden');
   }
+
+  function openOSModal(machineId) {
+    // Set the hx-post attribute for the OS form
+    document.getElementById('os-form').setAttribute('hx-post', '/api/machines/' + machineId + '/os');
+    // Show the OS modal
+    document.getElementById('os-modal').classList.remove('hidden');
+  }
+
+  // Add event listeners to Assign OS buttons
+  document.querySelectorAll('[hx-get*="/os"]').forEach(button => {
+    button.addEventListener('click', function(event) {
+      event.stopPropagation();
+      const machineId = this.getAttribute('hx-get').split('/')[3];
+      openOSModal(machineId);
+    });
+  });
 </script>
 {% endblock %}
