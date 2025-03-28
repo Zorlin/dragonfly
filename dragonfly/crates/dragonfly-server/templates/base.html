@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -16,6 +16,17 @@
     <style>
         [x-cloak] { display: none !important; }
     </style>
+    <script>
+        // Immediately check and set theme before page renders to prevent flash
+        const savedTheme = localStorage.getItem('theme') || 'system';
+        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        
+        if (savedTheme === 'dark' || (savedTheme === 'system' && prefersDark)) {
+            document.documentElement.classList.add('dark');
+        } else {
+            document.documentElement.classList.remove('dark');
+        }
+    </script>
 </head>
 <body class="bg-gray-100 dark:bg-gray-900" x-data="{
     settingsOpen: false,
@@ -38,14 +49,27 @@
         }
     },
     init() {
-        // Use theme from the server cookie (already set in this.theme)
+        // Force theme application on page load
+        this.$nextTick(() => {
+            const isDark = this.theme === 'dark' || 
+                (this.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+                
+            if (isDark) {
+                document.documentElement.classList.add('dark');
+            } else {
+                document.documentElement.classList.remove('dark');
+            }
+        });
+        
+        // Watch for theme changes
         this.$watch('theme', value => this.setTheme(value));
+        
+        // Watch for system preference changes
         window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
             if (this.theme === 'system') {
                 this.setTheme('system');
             }
         });
-        this.setTheme(this.theme);
     }
 }">
     <div x-data="machineActions">
