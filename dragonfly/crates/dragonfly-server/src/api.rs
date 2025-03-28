@@ -17,6 +17,7 @@ use std::convert::Infallible;
 use std::time::Duration;
 use tokio::sync::broadcast;
 use serde::Serialize;
+use crate::auth::AuthSession;
 
 use crate::db;
 
@@ -265,9 +266,18 @@ async fn get_machine(
 
 // Combined OS assignment handler
 async fn assign_os(
+    auth_session: AuthSession,
     Path(id): Path<Uuid>,
     req: axum::http::Request<axum::body::Body>,
 ) -> Response {
+    // Check if user is authenticated as admin
+    if auth_session.user.is_none() {
+        return (StatusCode::UNAUTHORIZED, Json(json!({
+            "error": "Unauthorized",
+            "message": "Admin authentication required for this operation"
+        }))).into_response();
+    }
+
     // Check content type to determine how to extract the OS choice
     let content_type = req.headers()
         .get(axum::http::header::CONTENT_TYPE)
@@ -416,9 +426,18 @@ async fn assign_os_internal(id: Uuid, os_choice: String) -> Response {
 }
 
 async fn update_status(
+    auth_session: AuthSession,
     Path(id): Path<Uuid>,
     req: axum::http::Request<axum::body::Body>,
 ) -> Response {
+    // Check if user is authenticated as admin
+    if auth_session.user.is_none() {
+        return (StatusCode::UNAUTHORIZED, Json(json!({
+            "error": "Unauthorized",
+            "message": "Admin authentication required for this operation"
+        }))).into_response();
+    }
+
     // Check content type to determine how to extract the status
     let content_type = req.headers()
         .get(axum::http::header::CONTENT_TYPE)
@@ -521,9 +540,18 @@ async fn update_status(
 }
 
 async fn update_hostname(
+    auth_session: AuthSession,
     Path(id): Path<Uuid>,
     Json(payload): Json<HostnameUpdateRequest>,
 ) -> Response {
+    // Check if user is authenticated as admin
+    if auth_session.user.is_none() {
+        return (StatusCode::UNAUTHORIZED, Json(json!({
+            "error": "Unauthorized",
+            "message": "Admin authentication required for this operation"
+        }))).into_response();
+    }
+
     info!("Updating hostname for machine {} to {}", id, payload.hostname);
     
     match db::update_hostname(&id, &payload.hostname).await {
@@ -567,9 +595,18 @@ async fn update_hostname(
 }
 
 async fn update_os_installed(
+    auth_session: AuthSession,
     Path(id): Path<Uuid>,
     Json(payload): Json<OsInstalledUpdateRequest>,
 ) -> Response {
+    // Check if user is authenticated as admin
+    if auth_session.user.is_none() {
+        return (StatusCode::UNAUTHORIZED, Json(json!({
+            "error": "Unauthorized",
+            "message": "Admin authentication required for this operation"
+        }))).into_response();
+    }
+
     info!("Updating OS installed for machine {} to {}", id, payload.os_installed);
     
     match db::update_os_installed(&id, &payload.os_installed).await {
@@ -605,9 +642,18 @@ async fn update_os_installed(
 }
 
 async fn update_bmc(
+    auth_session: AuthSession,
     Path(id): Path<Uuid>,
     Form(payload): Form<BmcCredentialsUpdateRequest>,
 ) -> Response {
+    // Check if user is authenticated as admin
+    if auth_session.user.is_none() {
+        return (StatusCode::UNAUTHORIZED, Json(json!({
+            "error": "Unauthorized",
+            "message": "Admin authentication required for this operation"
+        }))).into_response();
+    }
+
     info!("Updating BMC credentials for machine {}", id);
     
     // Create BMC credentials from the form data
@@ -747,8 +793,17 @@ async fn ipxe_script(Path(mac): Path<String>) -> Response {
 
 // Update the delete_machine function to use kube-rs instead of kubectl
 async fn delete_machine(
+    auth_session: AuthSession,
     Path(id): Path<Uuid>,
 ) -> Response {
+    // Check if user is authenticated as admin
+    if auth_session.user.is_none() {
+        return (StatusCode::UNAUTHORIZED, Json(json!({
+            "error": "Unauthorized",
+            "message": "Admin authentication required for this operation"
+        }))).into_response();
+    }
+
     info!("Request to delete machine: {}", id);
 
     // Get the machine to find its MAC address
@@ -816,9 +871,18 @@ struct UpdateMachineRequest {
 
 // Add this function to handle machine updates
 async fn update_machine(
+    auth_session: AuthSession,
     Path(id): Path<Uuid>,
     Form(payload): Form<UpdateMachineRequest>,
 ) -> Response {
+    // Check if user is authenticated as admin
+    if auth_session.user.is_none() {
+        return (StatusCode::UNAUTHORIZED, Json(json!({
+            "error": "Unauthorized",
+            "message": "Admin authentication required for this operation"
+        }))).into_response();
+    }
+
     info!("Updating machine {}", id);
     let mut updated = false;
     let mut messages = vec![];
@@ -1044,4 +1108,14 @@ fn format_os_name(os: &str) -> String {
         "proxmox" => "Proxmox VE",
         _ => os,
     }.to_string()
+}
+
+// Utility function to require admin authentication
+async fn require_admin(auth_session: AuthSession) -> std::result::Result<(), StatusCode> {
+    // Check if user is authenticated as admin
+    if auth_session.user.is_none() {
+        Err(StatusCode::UNAUTHORIZED)
+    } else {
+        Ok(())
+    }
 } 

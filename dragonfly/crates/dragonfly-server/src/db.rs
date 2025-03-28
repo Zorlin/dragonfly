@@ -9,6 +9,7 @@ use std::path::Path;
 use serde_json;
 
 use dragonfly_common::models::{Machine, MachineStatus, RegisterRequest};
+use crate::auth::Credentials;
 
 // Global database pool
 static DB_POOL: OnceCell<Pool<Sqlite>> = OnceCell::const_new();
@@ -54,6 +55,21 @@ pub async fn init_db() -> Result<SqlitePool> {
             disks TEXT, -- JSON array of disk info
             nameservers TEXT, -- JSON array of nameservers
             bmc_credentials TEXT, -- JSON object of BMC credentials
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+    
+    // Create admin_credentials table
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS admin_credentials (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
@@ -820,4 +836,76 @@ pub async fn delete_machine(id: &Uuid) -> Result<bool> {
     }
     
     Ok(success)
+}
+
+// Get admin credentials from database
+pub async fn get_admin_credentials() -> Result<Option<Credentials>> {
+    let pool = get_pool().await?;
+    
+    let row = sqlx::query(
+        r#"
+        SELECT username, password_hash FROM admin_credentials ORDER BY id DESC LIMIT 1
+        "#,
+    )
+    .fetch_optional(pool)
+    .await?;
+    
+    if let Some(row) = row {
+        let username: String = row.get(0);
+        let password_hash: String = row.get(1);
+        
+        Ok(Some(Credentials {
+            username,
+            password: None,
+            password_hash,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+// Save admin credentials to database
+pub async fn save_admin_credentials(credentials: &Credentials) -> Result<()> {
+    let pool = get_pool().await?;
+    let now = Utc::now();
+    let now_str = now.to_rfc3339();
+    
+    // Check if credentials already exist
+    let existing = sqlx::query("SELECT COUNT(*) FROM admin_credentials")
+        .fetch_one(pool)
+        .await?;
+    
+    let count: i64 = existing.get(0);
+    
+    if count > 0 {
+        // Update existing credentials
+        sqlx::query(
+            r#"
+            UPDATE admin_credentials 
+            SET username = ?, password_hash = ?, updated_at = ?
+            WHERE id = (SELECT id FROM admin_credentials ORDER BY id DESC LIMIT 1)
+            "#,
+        )
+        .bind(&credentials.username)
+        .bind(&credentials.password_hash)
+        .bind(&now_str)
+        .execute(pool)
+        .await?;
+    } else {
+        // Insert new credentials
+        sqlx::query(
+            r#"
+            INSERT INTO admin_credentials (username, password_hash, created_at, updated_at)
+            VALUES (?, ?, ?, ?)
+            "#,
+        )
+        .bind(&credentials.username)
+        .bind(&credentials.password_hash)
+        .bind(&now_str)
+        .bind(&now_str)
+        .execute(pool)
+        .await?;
+    }
+    
+    Ok(())
 } 

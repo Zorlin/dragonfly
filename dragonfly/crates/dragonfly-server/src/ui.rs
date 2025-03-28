@@ -95,6 +95,8 @@ pub struct SettingsTemplate {
     pub require_login: bool,
     pub has_initial_password: bool,
     pub rendered_password: String,
+    pub show_admin_settings: bool,
+    pub error_message: Option<String>,
 }
 
 enum UiTemplate {
@@ -354,14 +356,14 @@ pub async fn settings_page(
     auth_session: AuthSession,
     headers: HeaderMap,
 ) -> Response {
-    if !auth_session.user.is_some() {
-        return Redirect::to("/login").into_response();
-    }
-    
     // Get current theme from cookie
     let theme = get_theme_from_cookie(&headers);
     
-    // Get current admin username
+    // Check if user is authenticated
+    let is_authenticated = auth_session.user.is_some();
+    let show_admin_settings = is_authenticated;
+    
+    // Get admin username if authenticated
     let admin_username = if let Some(user) = &auth_session.user {
         user.username.clone()
     } else {
@@ -371,17 +373,15 @@ pub async fn settings_page(
     // Get current settings
     let require_login = app_state.settings.lock().await.require_login;
     
-    let is_authenticated = auth_session.user.is_some();
-    
-    // Check if initial password file exists
-    let initial_password = match fs::read_to_string(".admin_password.txt") {
-        Ok(password) => Some(password),
-        Err(_) => None,
+    // Check if initial password file exists (only for admins)
+    let (has_initial_password, rendered_password) = if is_authenticated {
+        match fs::read_to_string(".admin_password.txt") {
+            Ok(password) => (true, password),
+            Err(_) => (false, String::new()),
+        }
+    } else {
+        (false, String::new())
     };
-    
-    // Create new fields for the template
-    let has_initial_password = initial_password.is_some();
-    let rendered_password = initial_password.clone().unwrap_or_default();
     
     UiTemplate::Settings(SettingsTemplate {
         theme,
@@ -390,6 +390,8 @@ pub async fn settings_page(
         require_login,
         has_initial_password,
         rendered_password,
+        show_admin_settings,
+        error_message: None,
     }).into_response()
 }
 
@@ -397,7 +399,8 @@ pub async fn settings_page(
 pub struct SettingsForm {
     pub theme: String,
     pub require_login: Option<String>,
-    pub username: String,
+    pub username: Option<String>,
+    pub old_password: Option<String>,
     pub password: Option<String>,
     pub password_confirm: Option<String>,
 }
@@ -408,11 +411,7 @@ pub async fn update_settings(
     auth_session: AuthSession,
     Form(form): Form<SettingsForm>,
 ) -> Response {
-    if !auth_session.user.is_some() {
-        return Redirect::to("/login").into_response();
-    }
-    
-    // Update theme preference
+    // Update theme preference (allowed for all users)
     let theme = form.theme.clone();
     let mut cookie = Cookie::new("dragonfly_theme", theme);
     cookie.set_path("/");
@@ -420,24 +419,46 @@ pub async fn update_settings(
     cookie.set_http_only(true);
     cookie.set_same_site(SameSite::Lax);
     
-    // Update settings
-    let mut settings = app_state.settings.lock().await;
-    settings.require_login = form.require_login.is_some();
-    drop(settings);
-    
-    // Save settings to disk
-    let _ = save_settings(&Settings {
-        require_login: form.require_login.is_some(),
-    });
-    
-    // Update admin credentials if a password was provided
-    if let Some(password) = form.password {
-        if !password.is_empty() {
-            // Update credentials
-            let _ = app_state.auth_backend.update_credentials(form.username, password).await;
-            
-            // Delete the initial password file if it exists
-            let _ = fs::remove_file(".admin_password.txt");
+    // Apply admin settings if authenticated
+    if auth_session.user.is_some() {
+        // Update require_login setting
+        let mut settings = app_state.settings.lock().await;
+        settings.require_login = form.require_login.is_some();
+        drop(settings);
+        
+        // Save settings to disk
+        let _ = save_settings(&Settings {
+            require_login: form.require_login.is_some(),
+        });
+        
+        // Update admin credentials if old password and new password are provided
+        if let (Some(old_password), Some(password), Some(username)) = (form.old_password, form.password.clone(), form.username) {
+            if !password.is_empty() {
+                // Verify old password first
+                let user = auth_session.user.as_ref().unwrap();
+                
+                // Create credentials to verify
+                let verify_creds = crate::auth::Credentials {
+                    username: user.username.clone(),
+                    password: Some(old_password),
+                    password_hash: String::new(),
+                };
+                
+                // Attempt to verify the old password
+                match app_state.auth_backend.verify_credentials(verify_creds).await {
+                    Ok(true) => {
+                        // Old password verified, update to new password
+                        let _ = app_state.auth_backend.update_credentials(username, password).await;
+                        
+                        // Delete the initial password file if it exists
+                        let _ = fs::remove_file(".admin_password.txt");
+                    },
+                    _ => {
+                        // Old password verification failed
+                        return Redirect::to("/settings?error=invalid_password").into_response();
+                    }
+                }
+            }
         }
     }
     

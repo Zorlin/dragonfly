@@ -17,7 +17,7 @@ use axum_login::{AuthUser, AuthnBackend};
 use rand::{distributions::Alphanumeric, Rng};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use async_trait::async_trait;
 
 // Constants
@@ -96,7 +96,30 @@ impl AdminBackend {
         creds.password = None; // Clear any password that might be in memory
         creds.password_hash = password_hash;
         
-        save_credentials(&creds)
+        save_credentials(&creds).await
+    }
+    
+    pub async fn verify_credentials(&self, creds: Credentials) -> Result<bool, io::Error> {
+        let stored_creds = self.credentials.lock().await;
+        
+        if creds.username != stored_creds.username {
+            return Ok(false);
+        }
+
+        // Get password from credentials
+        let password = match creds.password {
+            Some(password) => password,
+            None => return Ok(false),
+        };
+
+        let is_valid = match PasswordHash::new(&stored_creds.password_hash) {
+            Ok(parsed_hash) => Argon2::default()
+                .verify_password(password.as_bytes(), &parsed_hash)
+                .map_or(false, |_| true),
+            Err(_) => false,
+        };
+
+        Ok(is_valid)
     }
 }
 
@@ -264,12 +287,18 @@ pub async fn auth_middleware(
 ) -> Response {
     let path = req.uri().path();
     
-    // Always allow access to static files and login/logout routes
+    // Always allow access to:
+    // 1. Static files and login/logout routes
+    // 2. API endpoints (they have their own auth checks)
+    // 3. Settings page (restricted features handled in the handler)
+    // 4. Machine registration endpoints (needed for initial setup)
     if path.starts_with("/js/") || 
        path.starts_with("/css/") || 
        path.starts_with("/images/") || 
        path == "/login" || 
-       path == "/logout" {
+       path == "/logout" ||
+       path == "/settings" ||
+       path.starts_with("/api/") {
         return next.run(req).await;
     }
     
@@ -319,32 +348,82 @@ pub fn generate_default_credentials() -> Credentials {
         password_hash,
     };
 
-    // Save to credentials file
-    if let Err(e) = save_credentials(&credentials) {
-        error!("Failed to save admin credentials: {}", e);
-    }
+    // Create a clone to move into the tokio::spawn
+    let credentials_clone = credentials.clone();
+    
+    // Save to credentials file - do this in a separate task to avoid blocking
+    tokio::spawn(async move {
+        if let Err(e) = save_credentials(&credentials_clone).await {
+            error!("Failed to save admin credentials: {}", e);
+        }
+    });
 
     info!("Generated default admin credentials. Username: admin, Password: {}", password);
     credentials
 }
 
-pub fn load_credentials() -> io::Result<Credentials> {
-    let path = Path::new(CREDENTIALS_FILE);
-    if !path.exists() {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "Credentials file not found",
-        ));
+pub async fn load_credentials() -> io::Result<Credentials> {
+    // First try to load from database
+    match crate::db::get_admin_credentials().await {
+        Ok(Some(creds)) => {
+            info!("Loaded admin credentials from database");
+            return Ok(creds);
+        },
+        Ok(None) => {
+            info!("No admin credentials found in database");
+            // Try to load from file as a one-time migration path
+            let path = Path::new(CREDENTIALS_FILE);
+            if path.exists() {
+                info!("Found legacy credentials file, attempting migration");
+                match fs::read_to_string(path) {
+                    Ok(data) => match serde_json::from_str::<Credentials>(&data) {
+                        Ok(creds) => {
+                            // Migrate file credentials to database
+                            if let Err(e) = crate::db::save_admin_credentials(&creds).await {
+                                error!("Failed to migrate admin credentials to database: {}", e);
+                            } else {
+                                info!("Successfully migrated admin credentials from file to database");
+                                // Delete file after successful migration
+                                if let Err(e) = fs::remove_file(path) {
+                                    warn!("Could not remove legacy credentials file: {}", e);
+                                }
+                            }
+                            return Ok(creds);
+                        },
+                        Err(e) => {
+                            error!("Legacy credentials file contains invalid data: {}", e);
+                        }
+                    },
+                    Err(e) => {
+                        error!("Could not read legacy credentials file: {}", e);
+                    }
+                }
+            }
+            
+            // No credentials found in database or file
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "No admin credentials found",
+            ));
+        },
+        Err(e) => {
+            error!("Error loading admin credentials from database: {}", e);
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("Database error: {}", e),
+            ));
+        }
     }
-
-    let data = fs::read_to_string(path)?;
-    serde_json::from_str(&data).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
-pub fn save_credentials(credentials: &Credentials) -> io::Result<()> {
-    let data = serde_json::to_string_pretty(credentials)?;
-    let mut file = File::create(CREDENTIALS_FILE)?;
-    file.write_all(data.as_bytes())?;
+pub async fn save_credentials(credentials: &Credentials) -> io::Result<()> {
+    // Save to database
+    if let Err(e) = crate::db::save_admin_credentials(credentials).await {
+        error!("Failed to save admin credentials to database: {}", e);
+        return Err(io::Error::new(io::ErrorKind::Other, format!("Database error: {}", e)));
+    }
+    
+    info!("Saved admin credentials to database");
     Ok(())
 }
 

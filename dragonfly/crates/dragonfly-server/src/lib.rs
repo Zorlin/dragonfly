@@ -1,5 +1,5 @@
 use axum::{
-    middleware::{self},
+    middleware,
     Router,
 };
 use std::{net::SocketAddr, sync::Arc};
@@ -11,7 +11,7 @@ use axum_login::AuthManagerLayerBuilder;
 use tower_sessions::{MemoryStore, SessionManagerLayer};
 use rand::RngCore;
 
-use crate::auth::{AdminBackend, auth_middleware, auth_router, load_credentials, generate_default_credentials, load_settings, Settings};
+use crate::auth::{AdminBackend, auth_router, load_credentials, generate_default_credentials, load_settings, Settings};
 use crate::db::init_db;
 
 mod auth;
@@ -40,7 +40,7 @@ pub async fn start() -> Result<(), Box<dyn std::error::Error>> {
 /// Initialize the API server
 pub async fn init(addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
     // Load or generate admin credentials
-    let credentials = match load_credentials() {
+    let credentials = match load_credentials().await {
         Ok(creds) => {
             info!("Admin credentials loaded - username: {}", creds.username);
             creds
