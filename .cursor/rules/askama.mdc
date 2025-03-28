@@ -1,0 +1,6 @@
+---
+description: 
+globs: *.rs
+alwaysApply: false
+---
+DO NOT remove Askama Axum.

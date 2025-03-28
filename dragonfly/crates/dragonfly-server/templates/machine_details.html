@@ -2,135 +2,176 @@
 
 {% block content %}
 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-    <div class="space-y-8">
-        <!-- Basic Information -->
-        <div>
-            <div class="md:flex md:items-center md:justify-between">
-                <div class="flex-1 min-w-0">
-                    <h2 class="text-2xl font-bold leading-7 text-gray-900 dark:text-white sm:text-3xl sm:truncate">
-                        {% if machine.memorable_name.is_some() %}
-                            {{ machine.memorable_name.as_ref().unwrap() }}
-                        {% else %}
-                            {{ machine.mac_address }}
-                        {% endif %}
-                    </h2>
-                    <div class="mt-1 flex flex-col sm:flex-row sm:flex-wrap sm:mt-0 sm:space-x-6">
-                        <div class="mt-2 flex items-center text-sm text-gray-500 dark:text-gray-400">
-                            <svg class="flex-shrink-0 mr-1.5 h-5 w-5 text-gray-400 dark:text-gray-500" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-                                <path fill-rule="evenodd" d="M2 5a2 2 0 012-2h12a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V5zm3.293 1.293a1 1 0 011.414 0l3 3a1 1 0 010 1.414l-3 3a1 1 0 01-1.414-1.414L7.586 10 5.293 7.707a1 1 0 010-1.414z" clip-rule="evenodd" />
-                            </svg>
-                            MAC: {{ machine.mac_address }}
-                        </div>
-                        <div class="mt-2 flex items-center text-sm text-gray-500 dark:text-gray-400">
-                            <svg class="flex-shrink-0 mr-1.5 h-5 w-5 text-gray-400 dark:text-gray-500" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-                                <path fill-rule="evenodd" d="M6.672 1.911a1 1 0 10-1.932.518l.259.966a1 1 0 001.932-.518l-.26-.966zM2.429 4.74a1 1 0 10-.517 1.932l.966.259a1 1 0 00.517-1.932l-.966-.26zm8.814-.569a1 1 0 00-1.415-1.414l-.707.707a1 1 0 101.415 1.415l.707-.708zm-7.071 7.072l.707-.707A1 1 0 003.465 9.12l-.708.707a1 1 0 001.415 1.415zm3.2-5.171a1 1 0 00-1.3 1.3l4 10a1 1 0 001.823.075l1.38-2.759 3.018 3.02a1 1 0 001.414-1.415l-3.019-3.02 2.76-1.379a1 1 0 00-.076-1.822l-10-4z" clip-rule="evenodd" />
-                            </svg>
-                            IP: {{ machine.ip_address }}
-                        </div>
-                        {% if machine.hostname.is_some() %}
-                        <div class="mt-2 flex items-center text-sm text-gray-500 dark:text-gray-400">
-                            <svg class="flex-shrink-0 mr-1.5 h-5 w-5 text-gray-400 dark:text-gray-500" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-                                <path d="M2 11a1 1 0 011-1h2a1 1 0 011 1v5a1 1 0 01-1 1H3a1 1 0 01-1-1v-5zM8 7a1 1 0 011-1h2a1 1 0 011 1v9a1 1 0 01-1 1H9a1 1 0 01-1-1V7zM14 4a1 1 0 011-1h2a1 1 0 011 1v12a1 1 0 01-1 1h-2a1 1 0 01-1-1V4z" />
-                            </svg>
-                            Hostname: 
-                            {{ machine.hostname.as_ref().unwrap() }}
-                        </div>
-                        {% endif %}
-                    </div>
-                </div>
-                <div class="mt-4 flex md:mt-0 md:ml-4">
-                    <button type="button" class="inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
-                        Edit Details
-                    </button>
-                    <button type="button" class="ml-3 inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
-                        Manage BMC
-                    </button>
-                </div>
-            </div>
+    <div class="flex justify-between items-center mb-8">
+        <h2 class="text-2xl font-bold leading-7 text-gray-900 dark:text-white">Machine Details</h2>
+        <a href="/machines" class="inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+            Back to Machines
+        </a>
+    </div>
+
+    <div class="bg-white dark:bg-gray-800 shadow overflow-hidden sm:rounded-lg mb-6">
+        <div class="px-4 py-5 sm:px-6 flex justify-between items-center">
+            <h3 class="text-lg leading-6 font-medium text-gray-900 dark:text-white">
+                {% if machine.hostname.is_some() %}
+                    {{ machine.hostname.as_ref().unwrap() }}
+                {% else %}
+                    {{ machine.ip_address }}
+                {% endif %}
+            </h3>
+            <span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-yellow-100 text-yellow-800">
+                {% if machine.status == MachineStatus::Ready %}
+                    Ready for Adoption
+                {% else %}
+                    {{ machine.status }}
+                {% endif %}
+            </span>
         </div>
 
-        <!-- Network Configuration -->
-        <div>
-            <h3 class="text-lg leading-6 font-medium text-gray-900 dark:text-white">Network Configuration</h3>
-            <div class="mt-5 border-t border-gray-200 dark:border-gray-700">
-                <dl class="divide-y divide-gray-200 dark:divide-gray-700">
-                    <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
-                        <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">MAC Address</dt>
-                        <dd class="mt-1 text-sm text-gray-900 dark:text-white sm:mt-0 sm:col-span-2">{{ machine.mac_address }}</dd>
+        <div class="border-t border-gray-200 dark:border-gray-700">
+            <!-- Two-column layout for Basic Info and Network Config -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- Basic Information -->
+                <div class="px-4 py-5 sm:p-6">
+                    <h3 class="text-lg font-medium leading-6 text-gray-900 dark:text-white">Basic Information</h3>
+                    <div class="mt-5 border-t border-gray-200 dark:border-gray-700">
+                        <dl class="divide-y divide-gray-200 dark:divide-gray-700">
+                            <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
+                                <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">ID</dt>
+                                <dd class="mt-1 text-sm text-gray-900 dark:text-white sm:mt-0 sm:col-span-2">{{ machine.id }}</dd>
+                            </div>
+                            <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
+                                <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">MAC Address</dt>
+                                <dd class="mt-1 text-sm text-gray-900 dark:text-white sm:mt-0 sm:col-span-2">{{ machine.mac_address }}</dd>
+                            </div>
+                            <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
+                                <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">IP Address</dt>
+                                <dd class="mt-1 text-sm text-gray-900 dark:text-white sm:mt-0 sm:col-span-2">{{ machine.ip_address }}</dd>
+                            </div>
+                            <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
+                                <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Hostname</dt>
+                                <dd class="mt-1 text-sm text-gray-900 dark:text-white sm:mt-0 sm:col-span-2">
+                                    {% if machine.hostname.is_some() %}
+                                        {{ machine.hostname.as_ref().unwrap() }}
+                                    {% else %}
+                                        Not set
+                                    {% endif %}
+                                </dd>
+                            </div>
+                            <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
+                                <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Machine Name</dt>
+                                <dd class="mt-1 text-sm text-gray-900 dark:text-white sm:mt-0 sm:col-span-2">
+                                    {% if machine.memorable_name.is_some() %}
+                                        {{ machine.memorable_name.as_ref().unwrap() }}
+                                    {% else %}
+                                        Not set
+                                    {% endif %}
+                                </dd>
+                            </div>
+                            <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
+                                <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Created</dt>
+                                <dd class="mt-1 text-sm text-gray-900 dark:text-white sm:mt-0 sm:col-span-2">{{ machine.created_at }}</dd>
+                            </div>
+                            <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
+                                <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Last Updated</dt>
+                                <dd class="mt-1 text-sm text-gray-900 dark:text-white sm:mt-0 sm:col-span-2">{{ machine.updated_at }}</dd>
+                            </div>
+                        </dl>
                     </div>
-                    <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
-                        <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">IP Address</dt>
-                        <dd class="mt-1 text-sm text-gray-900 dark:text-white sm:mt-0 sm:col-span-2">{{ machine.ip_address }}</dd>
-                    </div>
-                    <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
-                        <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Hostname</dt>
-                        <dd class="mt-1 text-sm text-gray-900 dark:text-white sm:mt-0 sm:col-span-2">
-                            {% if machine.hostname.is_some() %}
-                                {{ machine.hostname.as_ref().unwrap() }}
-                            {% else %}
-                                Not set
-                            {% endif %}
-                        </dd>
-                    </div>
-                    <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
-                        <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">DNS Servers</dt>
-                        <dd class="mt-1 text-sm text-gray-900 dark:text-white sm:mt-0 sm:col-span-2">
-                            {% if machine.nameservers.is_empty() %}
-                                No DNS servers configured
-                            {% else %}
-                                {% for dns in machine.nameservers %}
-                                {{ dns }} 
-                                {% endfor %}
-                            {% endif %}
-                        </dd>
-                    </div>
-                </dl>
-            </div>
-        </div>
+                </div>
 
-        <!-- Storage Information -->
-        <div>
-            <h3 class="text-lg leading-6 font-medium text-gray-900 dark:text-white">Storage</h3>
-            <div class="mt-5">
-                <div class="flex flex-col">
-                    <div class="-my-2 -mx-4 overflow-x-auto sm:-mx-6 lg:-mx-8">
-                        <div class="inline-block min-w-full py-2 align-middle md:px-6 lg:px-8">
-                            <div class="overflow-hidden shadow ring-1 ring-black ring-opacity-5 md:rounded-lg">
-                                <table class="min-w-full divide-y divide-gray-300 dark:divide-gray-600">
-                                    <thead class="bg-gray-50 dark:bg-gray-700">
-                                        <tr>
-                                            <th scope="col" class="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-gray-900 dark:text-white sm:pl-6">Device</th>
-                                            <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900 dark:text-white">Size</th>
-                                            <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900 dark:text-white">Model</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody class="divide-y divide-gray-200 dark:divide-gray-600 bg-white dark:bg-gray-800">
-                                        {% for disk in machine.disks %}
-                                        <tr>
-                                            <td class="whitespace-nowrap py-4 pl-4 pr-3 text-sm font-medium text-gray-900 dark:text-white sm:pl-6">{{ disk.device }}</td>
-                                            <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500 dark:text-gray-400">
-                                                {% if disk.calculated_size.is_some() %}
-                                                    {{ disk.calculated_size.as_ref().unwrap() }}
-                                                {% else %}
-                                                    Unknown
-                                                {% endif %}
-                                            </td>
-                                            <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500 dark:text-gray-400">
-                                                {% if disk.model.is_some() %}
-                                                    {{ disk.model.as_ref().unwrap() }}
-                                                {% else %}
-                                                    Unknown
-                                                {% endif %}
-                                            </td>
-                                        </tr>
+                <!-- Network Configuration -->
+                <div class="px-4 py-5 sm:p-6">
+                    <h3 class="text-lg font-medium leading-6 text-gray-900 dark:text-white">Network Configuration</h3>
+                    <div class="mt-5 border-t border-gray-200 dark:border-gray-700">
+                        <dl class="divide-y divide-gray-200 dark:divide-gray-700">
+                            <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
+                                <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">DNS Servers</dt>
+                                <dd class="mt-1 text-sm text-gray-900 dark:text-white sm:mt-0 sm:col-span-2">
+                                    {% if machine.nameservers.is_empty() %}
+                                        No DNS servers configured
+                                    {% else %}
+                                        {% for dns in machine.nameservers %}
+                                        {{ dns }}<br>
                                         {% endfor %}
-                                    </tbody>
-                                </table>
+                                    {% endif %}
+                                </dd>
+                            </div>
+                            <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
+                                <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">BMC Type</dt>
+                                <dd class="mt-1 text-sm text-gray-900 dark:text-white sm:mt-0 sm:col-span-2 flex items-center">
+                                    {% if machine.bmc_credentials.is_some() %}
+                                        {{ machine.bmc_credentials.as_ref().unwrap().bmc_type }}
+                                    {% else %}
+                                        None
+                                        <button class="ml-3 inline-flex items-center px-3 py-1 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-green-100 text-green-800">
+                                            Add BMC Credentials
+                                        </button>
+                                    {% endif %}
+                                </dd>
+                            </div>
+                        </dl>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Storage Information (Full Width) -->
+            <div class="px-4 py-5 sm:p-6 border-t border-gray-200 dark:border-gray-700">
+                <h3 class="text-lg font-medium leading-6 text-gray-900 dark:text-white">Storage</h3>
+                <div class="mt-5">
+                    <div class="flex flex-col">
+                        <div class="-my-2 -mx-4 overflow-x-auto sm:-mx-6 lg:-mx-8">
+                            <div class="inline-block min-w-full py-2 align-middle md:px-6 lg:px-8">
+                                <div class="overflow-hidden shadow ring-1 ring-black ring-opacity-5 md:rounded-lg">
+                                    <table class="min-w-full divide-y divide-gray-300 dark:divide-gray-600">
+                                        <thead class="bg-gray-50 dark:bg-gray-700">
+                                            <tr>
+                                                <th scope="col" class="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-gray-900 dark:text-white sm:pl-6">DEVICE</th>
+                                                <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900 dark:text-white">SIZE</th>
+                                                <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900 dark:text-white">MODEL</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody class="divide-y divide-gray-200 dark:divide-gray-600 bg-white dark:bg-gray-800">
+                                            {% for disk in machine.disks %}
+                                            <tr>
+                                                <td class="whitespace-nowrap py-4 pl-4 pr-3 text-sm font-medium text-gray-900 dark:text-white sm:pl-6">{{ disk.device }}</td>
+                                                <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500 dark:text-gray-400">
+                                                    {% if disk.calculated_size.is_some() %}
+                                                        {{ disk.calculated_size.as_ref().unwrap() }}
+                                                    {% else %}
+                                                        {{ disk.size_bytes }} bytes
+                                                    {% endif %}
+                                                </td>
+                                                <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500 dark:text-gray-400">
+                                                    {% if disk.model.is_some() %}
+                                                        {{ disk.model.as_ref().unwrap() }}
+                                                    {% else %}
+                                                        Unknown
+                                                    {% endif %}
+                                                </td>
+                                            </tr>
+                                            {% endfor %}
+                                        </tbody>
+                                    </table>
+                                </div>
                             </div>
                         </div>
                     </div>
                 </div>
             </div>
+        </div>
+        <div class="px-4 py-4 sm:px-6 bg-gray-50 dark:bg-gray-700 flex justify-end space-x-3">
+            <button 
+                @click="window.location.href = '/machines/{{ machine.id }}/edit'" 
+                class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md"
+            >
+                Edit
+            </button>
+            <button 
+                @click="showDeleteModal('{{ machine.id }}')" 
+                class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-md"
+            >
+                Delete
+            </button>
         </div>
     </div>
 </div>
