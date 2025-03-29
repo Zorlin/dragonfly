@@ -169,12 +169,22 @@ fn count_machines_by_status(machines: &[Machine]) -> HashMap<String, usize> {
 }
 
 pub async fn index(
+    State(app_state): State<crate::AppState>,
     headers: HeaderMap,
     auth_session: AuthSession,
 ) -> Response {
     // Get theme preference from cookie
     let theme = get_theme_from_cookie(&headers);
     let is_authenticated = auth_session.user.is_some();
+    
+    // Check if login is required site-wide
+    let require_login = app_state.settings.lock().await.require_login;
+    
+    // If require_login is enabled and user is not authenticated,
+    // redirect to login page
+    if require_login && !is_authenticated {
+        return Redirect::to("/login").into_response();
+    }
     
     match db::get_all_machines().await {
         Ok(machines) => {
@@ -213,12 +223,22 @@ pub async fn index(
 }
 
 pub async fn machine_list(
+    State(app_state): State<crate::AppState>,
     headers: HeaderMap,
     auth_session: AuthSession,
 ) -> Response {
     // Get theme preference from cookie
     let theme = get_theme_from_cookie(&headers);
     let is_authenticated = auth_session.user.is_some();
+    
+    // Check if login is required site-wide
+    let require_login = app_state.settings.lock().await.require_login;
+    
+    // If require_login is enabled and user is not authenticated,
+    // redirect to login page
+    if require_login && !is_authenticated {
+        return Redirect::to("/login").into_response();
+    }
     
     match db::get_all_machines().await {
         Ok(machines) => {
@@ -245,6 +265,7 @@ pub async fn machine_list(
 }
 
 pub async fn machine_details(
+    State(app_state): State<crate::AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
     headers: HeaderMap,
     auth_session: AuthSession,
@@ -252,6 +273,15 @@ pub async fn machine_details(
     // Get theme preference from cookie
     let theme = get_theme_from_cookie(&headers);
     let is_authenticated = auth_session.user.is_some();
+    
+    // Check if login is required site-wide
+    let require_login = app_state.settings.lock().await.require_login;
+    
+    // If require_login is enabled and user is not authenticated,
+    // redirect to login page
+    if require_login && !is_authenticated {
+        return Redirect::to("/login").into_response();
+    }
     
     // Parse UUID from string
     match uuid::Uuid::parse_str(&id) {
@@ -352,6 +382,16 @@ pub async fn settings_page(
     
     // Check if user is authenticated
     let is_authenticated = auth_session.user.is_some();
+    
+    // Get current settings
+    let require_login = app_state.settings.lock().await.require_login;
+    
+    // If require_login is enabled and user is not authenticated,
+    // redirect to login page
+    if require_login && !is_authenticated {
+        return Redirect::to("/login").into_response();
+    }
+    
     let show_admin_settings = is_authenticated;
     
     // Get admin username if authenticated
@@ -361,14 +401,24 @@ pub async fn settings_page(
         "admin".to_string()
     };
     
-    // Get current settings
-    let require_login = app_state.settings.lock().await.require_login;
-    
     // Check if initial password file exists (only for admins)
     let (has_initial_password, rendered_password) = if is_authenticated {
-        match fs::read_to_string(".admin_password.txt") {
-            Ok(password) => (true, password),
-            Err(_) => (false, String::new()),
+        info!("Checking for initial password file at: initial_password.txt");
+        let current_dir = match std::env::current_dir() {
+            Ok(dir) => dir.display().to_string(),
+            Err(_) => "unknown".to_string(),
+        };
+        info!("Current directory: {}", current_dir);
+        
+        match fs::read_to_string("initial_password.txt") {
+            Ok(password) => {
+                info!("Found initial password file, will display to admin");
+                (true, password)
+            },
+            Err(e) => {
+                info!("No initial password file found: {}", e);
+                (false, String::new())
+            }
         }
     } else {
         (false, String::new())
@@ -402,6 +452,20 @@ pub async fn update_settings(
     auth_session: AuthSession,
     Form(form): Form<SettingsForm>,
 ) -> Response {
+    // Check if user is authenticated
+    let is_authenticated = auth_session.user.is_some();
+    
+    // Get current settings
+    let settings_lock = app_state.settings.lock().await;
+    let require_login = settings_lock.require_login;
+    drop(settings_lock);
+    
+    // If require_login is enabled and user is not authenticated,
+    // redirect to login page
+    if require_login && !is_authenticated {
+        return Redirect::to("/login").into_response();
+    }
+    
     // Update theme preference (allowed for all users)
     let theme = form.theme.clone();
     let mut cookie = Cookie::new("dragonfly_theme", theme);
@@ -420,7 +484,7 @@ pub async fn update_settings(
         // Save settings to disk
         let _ = save_settings(&Settings {
             require_login: form.require_login.is_some(),
-        });
+        }).await;
         
         // Update admin credentials if old password and new password are provided
         if let (Some(old_password), Some(password), Some(username)) = (form.old_password, form.password.clone(), form.username) {
@@ -442,7 +506,7 @@ pub async fn update_settings(
                         let _ = app_state.auth_backend.update_credentials(username, password).await;
                         
                         // Delete the initial password file if it exists
-                        let _ = fs::remove_file(".admin_password.txt");
+                        let _ = fs::remove_file("initial_password.txt");
                     },
                     _ => {
                         // Old password verification failed

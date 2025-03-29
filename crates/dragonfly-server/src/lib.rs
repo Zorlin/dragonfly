@@ -40,6 +40,11 @@ pub async fn start() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Initialize the API server
 pub async fn init(addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
+    info!("Starting the API server initialization");
+
+    // Initialize the database 
+    let db_pool = init_db().await?;
+    
     // Load or generate admin credentials
     let credentials = match load_credentials().await {
         Ok(creds) => {
@@ -48,18 +53,15 @@ pub async fn init(addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         },
         Err(_) => {
             info!("No admin credentials found, generating...");
-            generate_default_credentials()
+            generate_default_credentials().await
         }
     };
 
-    // Initialize the database 
-    let db_pool = init_db().await?;
-    
     // Create admin backend
     let backend = AdminBackend::new(credentials);
     
     // Load settings or use defaults
-    let settings = load_settings();
+    let settings = load_settings().await;
     let settings_state = Arc::new(Mutex::new(settings));
     
     // Create shared state

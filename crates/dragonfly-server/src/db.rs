@@ -9,7 +9,7 @@ use std::path::Path;
 use serde_json;
 
 use dragonfly_common::models::{Machine, MachineStatus, RegisterRequest};
-use crate::auth::Credentials;
+use crate::auth::{Credentials, Settings};
 
 // Global database pool
 static DB_POOL: OnceCell<Pool<Sqlite>> = OnceCell::const_new();
@@ -872,13 +872,17 @@ pub async fn get_admin_credentials() -> Result<Option<Credentials>> {
 
 // Save admin credentials to database
 pub async fn save_admin_credentials(credentials: &Credentials) -> Result<()> {
+    // Make sure the database pool is initialized
     let pool = get_pool().await?;
     let now = Utc::now();
     let now_str = now.to_rfc3339();
     
+    // Use a transaction to ensure atomicity
+    let mut tx = pool.begin().await?;
+    
     // Check if credentials already exist
     let existing = sqlx::query("SELECT COUNT(*) FROM admin_credentials")
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
     
     let count: i64 = existing.get(0);
@@ -895,8 +899,10 @@ pub async fn save_admin_credentials(credentials: &Credentials) -> Result<()> {
         .bind(&credentials.username)
         .bind(&credentials.password_hash)
         .bind(&now_str)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
+        
+        info!("Updated existing admin credentials for user: {}", credentials.username);
     } else {
         // Insert new credentials
         sqlx::query(
@@ -909,9 +915,104 @@ pub async fn save_admin_credentials(credentials: &Credentials) -> Result<()> {
         .bind(&credentials.password_hash)
         .bind(&now_str)
         .bind(&now_str)
+        .execute(&mut *tx)
+        .await?;
+        
+        info!("Created new admin credentials for user: {}", credentials.username);
+    }
+    
+    // Commit the transaction
+    tx.commit().await?;
+    
+    // Verify the save worked by retrieving the credentials again
+    match get_admin_credentials().await {
+        Ok(Some(_)) => {
+            info!("Successfully verified admin credentials were saved");
+            Ok(())
+        },
+        _ => {
+            error!("Failed to verify admin credentials were saved - this is a critical error!");
+            Err(anyhow!("Failed to verify admin credentials were saved"))
+        }
+    }
+}
+
+// Get application settings from database
+pub async fn get_app_settings() -> Result<Settings> {
+    let pool = get_pool().await?;
+    
+    // First, make sure the settings table exists
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS app_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1), -- Only one settings record allowed
+            require_login BOOLEAN NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+    
+    // Try to get settings
+    let row = sqlx::query(
+        r#"
+        SELECT require_login FROM app_settings WHERE id = 1
+        "#,
+    )
+    .fetch_optional(pool)
+    .await?;
+    
+    if let Some(row) = row {
+        let require_login: bool = row.get(0);
+        
+        Ok(Settings {
+            require_login,
+        })
+    } else {
+        // No settings found, insert default settings
+        let default_settings = Settings::default();
+        let now = Utc::now();
+        let now_str = now.to_rfc3339();
+        
+        sqlx::query(
+            r#"
+            INSERT INTO app_settings (id, require_login, created_at, updated_at)
+            VALUES (1, ?, ?, ?)
+            "#,
+        )
+        .bind(default_settings.require_login)
+        .bind(&now_str)
+        .bind(&now_str)
         .execute(pool)
         .await?;
+        
+        Ok(default_settings)
     }
+}
+
+// Save application settings to database
+pub async fn save_app_settings(settings: &Settings) -> Result<()> {
+    let pool = get_pool().await?;
+    let now = Utc::now();
+    let now_str = now.to_rfc3339();
+    
+    // Update existing settings or insert if they don't exist (upsert pattern)
+    sqlx::query(
+        r#"
+        INSERT INTO app_settings (id, require_login, created_at, updated_at)
+        VALUES (1, ?, ?, ?)
+        ON CONFLICT (id) DO UPDATE SET
+        require_login = excluded.require_login,
+        updated_at = excluded.updated_at
+        "#,
+    )
+    .bind(settings.require_login)
+    .bind(&now_str)
+    .bind(&now_str)
+    .execute(pool)
+    .await?;
     
     Ok(())
 } 

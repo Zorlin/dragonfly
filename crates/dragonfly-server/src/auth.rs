@@ -248,31 +248,31 @@ pub async fn auth_middleware(
 ) -> Response {
     let path = req.uri().path();
     
-    // Always allow access to:
-    // 1. Static files and login/logout routes
-    // 2. API endpoints (they have their own auth checks)
-    // 3. Settings page (restricted features handled in the handler)
-    // 4. Machine registration endpoints (needed for initial setup)
+    // Always allow access to static files and authentication-related routes
+    // regardless of settings
     if path.starts_with("/js/") || 
        path.starts_with("/css/") || 
        path.starts_with("/images/") || 
        path == "/login" || 
-       path == "/logout" ||
-       path == "/settings" ||
-       path.starts_with("/api/") {
+       path == "/logout" {
         return next.run(req).await;
     }
     
-    // Check if login is required
+    // Always allow access to API endpoints (they have their own auth checks)
+    if path.starts_with("/api/") {
+        return next.run(req).await;
+    }
+    
+    // Check if login is required site-wide
     let require_login = {
         let settings_guard = settings.lock().await;
         settings_guard.require_login
     };
     
     if require_login {
-        // Check if user is authenticated
+        // When login is required, check authentication for ALL other paths
         if auth_session.user.is_none() {
-            // Redirect to login page
+            info!("Auth required for path: {}, redirecting to login", path);
             return Redirect::to("/login").into_response();
         }
     }
@@ -282,7 +282,28 @@ pub async fn auth_middleware(
 }
 
 // Helper functions for managing credentials
-pub fn generate_default_credentials() -> Credentials {
+pub async fn generate_default_credentials() -> Credentials {
+    // Check if an initial password file already exists
+    if Path::new(INITIAL_PASSWORD_FILE).exists() {
+        info!("Initial password file exists - attempting to load existing credentials from database");
+        // Try to load credentials from database first
+        match crate::db::get_admin_credentials().await {
+            Ok(Some(creds)) => {
+                info!("Found existing admin credentials in database - using those");
+                return creds;
+            },
+            _ => {
+                // If we can't load from database but file exists, we should delete the file
+                // as it's probably stale/outdated
+                info!("Failed to load admin credentials from database but initial password file exists - file may be stale");
+                if let Err(e) = fs::remove_file(INITIAL_PASSWORD_FILE) {
+                    error!("Failed to remove stale initial password file: {}", e);
+                }
+            }
+        }
+    }
+
+    info!("Generating new admin credentials");
     let username = "admin".to_string();
     let password: String = rand::thread_rng()
         .sample_iter(&Alphanumeric)
@@ -302,32 +323,39 @@ pub fn generate_default_credentials() -> Credentials {
         password_hash,
     };
 
-    // Save initial password to a file for better UX
-    // This way admins can access it later if needed
-    let password_message = format!(
-        "# Dragonfly Initial Admin Password\n\n\
-        This is your initial admin password. For security, change it after logging in.\n\n\
-        Username: admin\n\
-        Password: {}\n\n\
-        Delete this file after you've securely saved the password elsewhere.", 
-        password
-    );
-    
-    if let Err(e) = fs::write(INITIAL_PASSWORD_FILE, password_message) {
-        error!("Failed to save initial password to file: {}", e);
-    } else {
-        info!("Initial admin password saved to {}", INITIAL_PASSWORD_FILE);
-    }
-
-    // Save credentials to database - but in a separate task to avoid blocking
-    let credentials_clone = credentials.clone();
-    tokio::spawn(async move {
-        if let Err(e) = crate::db::save_admin_credentials(&credentials_clone).await {
-            error!("Failed to save admin credentials to database: {}", e);
-        } else {
+    // Save to database FIRST - if this fails, we shouldn't write the password file
+    match crate::db::save_admin_credentials(&credentials).await {
+        Ok(_) => {
             info!("Successfully saved admin credentials to database");
+            
+            // Now save the initial password to a file for better UX
+            info!("Writing initial admin password to file: {}", INITIAL_PASSWORD_FILE);
+            // Get current directory for logging
+            let current_dir = match std::env::current_dir() {
+                Ok(dir) => dir.display().to_string(),
+                Err(_) => "unknown".to_string(),
+            };
+            
+            // Clone password to avoid ownership issues
+            if let Err(e) = fs::write(INITIAL_PASSWORD_FILE, password.clone()) {
+                error!("Failed to save initial password to file: {} (Error: {})", INITIAL_PASSWORD_FILE, e);
+            } else {
+                info!("Initial admin password successfully saved to {} in directory: {}", 
+                      INITIAL_PASSWORD_FILE, current_dir);
+                
+                // Verify file exists
+                if Path::new(INITIAL_PASSWORD_FILE).exists() {
+                    info!("Verified password file exists at {}", INITIAL_PASSWORD_FILE);
+                } else {
+                    error!("File write succeeded but verification failed - file not found at {}", INITIAL_PASSWORD_FILE);
+                }
+            }
+        },
+        Err(e) => {
+            error!("Failed to save admin credentials to database: {}", e);
+            // We don't write the password file in this case
         }
-    });
+    }
 
     info!("Generated default admin credentials. Username: admin, Password: {}", password);
     credentials
@@ -368,34 +396,28 @@ pub async fn save_credentials(credentials: &Credentials) -> io::Result<()> {
     Ok(())
 }
 
-pub fn load_settings() -> Settings {
-    let path = Path::new("settings.json");
-    if !path.exists() {
-        let default_settings = Settings::default();
-        if let Err(e) = save_settings(&default_settings) {
-            error!("Failed to save default settings: {}", e);
-        }
-        return default_settings;
-    }
-
-    match fs::read_to_string(path) {
-        Ok(data) => match serde_json::from_str(&data) {
-            Ok(settings) => settings,
-            Err(e) => {
-                error!("Failed to parse settings file: {}", e);
-                Settings::default()
-            }
+pub async fn load_settings() -> Settings {
+    match crate::db::get_app_settings().await {
+        Ok(settings) => {
+            info!("Loaded settings from database");
+            settings
         },
         Err(e) => {
-            error!("Failed to read settings file: {}", e);
+            error!("Failed to load settings from database: {}", e);
             Settings::default()
         }
     }
 }
 
-pub fn save_settings(settings: &Settings) -> io::Result<()> {
-    let data = serde_json::to_string_pretty(settings)?;
-    let mut file = File::create("settings.json")?;
-    file.write_all(data.as_bytes())?;
-    Ok(())
+pub async fn save_settings(settings: &Settings) -> io::Result<()> {
+    match crate::db::save_app_settings(settings).await {
+        Ok(_) => {
+            info!("Settings saved to database");
+            Ok(())
+        },
+        Err(e) => {
+            error!("Failed to save settings to database: {}", e);
+            Err(io::Error::new(io::ErrorKind::Other, format!("Database error: {}", e)))
+        }
+    }
 } 
