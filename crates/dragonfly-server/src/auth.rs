@@ -1,28 +1,32 @@
-use std::fs::{self, File};
-use std::io::{self, Write};
+use std::fs;
+use std::io;
 use std::path::Path;
 use std::sync::Arc;
+use std::collections::HashMap;
 
-use argon2::{password_hash::SaltString, Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
+use argon2::{password_hash::SaltString, Argon2, PasswordHasher, PasswordVerifier};
 use axum::{
-    extract::{Form, Extension},
-    http::{Request, StatusCode},
+    extract::{Form, Extension, FromRequest, Request},
+    http::StatusCode,
     middleware::Next,
     response::{Html, IntoResponse, Redirect, Response},
     Router,
     routing::{get, post},
 };
-use axum_extra::extract::cookie::CookieJar;
 use axum_login::{AuthUser, AuthnBackend};
-use rand::{distributions::Alphanumeric, Rng};
+use rand::{distributions::Alphanumeric, Rng, rngs::OsRng};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 use async_trait::async_trait;
 use askama::Template;
 
 // Constants for the initial password file (not for loading, just for UX)
 const INITIAL_PASSWORD_FILE: &str = "initial_password.txt";
+
+// Constants for auth system
+const USER_ID_KEY: &str = "user_id";
+const SESSION_COOKIE_NAME: &str = "dragonfly_auth";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Credentials {
@@ -30,6 +34,35 @@ pub struct Credentials {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
     pub password_hash: String,
+}
+
+impl Default for Credentials {
+    fn default() -> Self {
+        Self {
+            username: "admin".to_string(),
+            password: None,
+            password_hash: String::new(),
+        }
+    }
+}
+
+impl Credentials {
+    pub fn create(username: String, password: String) -> io::Result<Self> {
+        let salt = SaltString::generate(&mut OsRng);
+        
+        let password_hash = match Argon2::default().hash_password(password.as_bytes(), &salt) {
+            Ok(hash) => hash.to_string(),
+            Err(e) => {
+                return Err(io::Error::new(io::ErrorKind::Other, format!("Failed to hash password: {}", e)));
+            }
+        };
+        
+        Ok(Self {
+            username,
+            password: None, // Don't store plaintext password
+            password_hash,
+        })
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,59 +106,62 @@ impl AuthUser for Admin {
     }
 }
 
-// The backend for handling authentication
-#[derive(Debug, Clone)]
+// Define a backend for authentication
+#[derive(Clone)]
 pub struct AdminBackend {
-    credentials: Arc<Mutex<Credentials>>,
+    pub credentials: Credentials,
 }
 
 impl AdminBackend {
     pub fn new(credentials: Credentials) -> Self {
-        Self {
-            credentials: Arc::new(Mutex::new(credentials)),
-        }
-    }
-
-    pub async fn update_credentials(&self, username: String, password: String) -> io::Result<()> {
-        let salt = SaltString::generate(rand::thread_rng());
-        let password_hash = Argon2::default()
-            .hash_password(password.as_bytes(), &salt)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?
-            .to_string();
-
-        let mut creds = self.credentials.lock().await;
-        creds.username = username;
-        creds.password = None; // Clear any password that might be in memory
-        creds.password_hash = password_hash;
-        
-        // Save directly to database
-        save_credentials(&creds).await
+        Self { credentials }
     }
     
-    pub async fn verify_credentials(&self, creds: Credentials) -> Result<bool, io::Error> {
-        let stored_creds = self.credentials.lock().await;
-        
-        if creds.username != stored_creds.username {
-            return Ok(false);
+    // Verify credentials
+    pub async fn verify_credentials(&self, credentials: Credentials) -> bool {
+        // If username doesn't match, reject
+        if credentials.username != self.credentials.username {
+            return false;
         }
-
-        // Get password from credentials
-        let password = match creds.password {
-            Some(password) => password,
-            None => return Ok(false),
+        
+        // Verify the password against the stored hash
+        let password_matches = match &credentials.password {
+            Some(password) => {
+                match argon2::Argon2::default().verify_password(
+                    password.as_bytes(),
+                    &argon2::PasswordHash::new(&self.credentials.password_hash).unwrap(),
+                ) {
+                    Ok(_) => true,
+                    Err(_) => false,
+                }
+            },
+            None => false,
         };
-
-        let is_valid = match PasswordHash::new(&stored_creds.password_hash) {
-            Ok(parsed_hash) => Argon2::default()
-                .verify_password(password.as_bytes(), &parsed_hash)
-                .map_or(false, |_| true),
-            Err(_) => false,
-        };
-
-        Ok(is_valid)
+        
+        password_matches
+    }
+    
+    // Update credentials
+    pub async fn update_credentials(&self, username: String, password: String) -> anyhow::Result<Credentials> {
+        // Create new credentials with hashed password
+        let new_credentials = Credentials::create(username, password)?;
+        
+        // Save to database
+        save_credentials(&new_credentials).await?;
+        
+        Ok(new_credentials)
     }
 }
 
+impl Default for AdminBackend {
+    fn default() -> Self {
+        Self {
+            credentials: Credentials::default(),
+        }
+    }
+}
+
+// The backend for handling authentication
 #[async_trait]
 impl AuthnBackend for AdminBackend {
     type User = Admin;
@@ -136,43 +172,42 @@ impl AuthnBackend for AdminBackend {
         &self,
         creds: Self::Credentials,
     ) -> Result<Option<Self::User>, Self::Error> {
-        let stored_creds = self.credentials.lock().await;
-        
-        if creds.username != stored_creds.username {
+        // If username doesn't match, reject
+        if creds.username != self.credentials.username {
             return Ok(None);
         }
-
-        // Get password from credentials
-        let password = match creds.password {
-            Some(password) => password,
-            None => return Ok(None),
+        
+        // Verify the password against the stored hash
+        let password_matches = match &creds.password {
+            Some(password) => {
+                match argon2::Argon2::default().verify_password(
+                    password.as_bytes(),
+                    &argon2::PasswordHash::new(&self.credentials.password_hash).unwrap(),
+                ) {
+                    Ok(_) => true,
+                    Err(_) => false,
+                }
+            },
+            None => false,
         };
-
-        let is_valid = match PasswordHash::new(&stored_creds.password_hash) {
-            Ok(parsed_hash) => Argon2::default()
-                .verify_password(password.as_bytes(), &parsed_hash)
-                .map_or(false, |_| true),
-            Err(_) => false,
-        };
-
-        if is_valid {
+        
+        if password_matches {
             Ok(Some(Admin {
-                id: 1, // Only one admin for now
-                username: stored_creds.username.clone(),
-                password_hash: stored_creds.password_hash.clone(),
+                id: 1,
+                username: self.credentials.username.clone(),
+                password_hash: self.credentials.password_hash.clone(),
             }))
         } else {
             Ok(None)
         }
     }
 
-    async fn get_user(&self, id: &i64) -> Result<Option<Self::User>, Self::Error> {
-        if *id == 1 {
-            let creds = self.credentials.lock().await;
+    async fn get_user(&self, user_id: &i64) -> Result<Option<Self::User>, Self::Error> {
+        if *user_id == 1 {
             Ok(Some(Admin {
                 id: 1,
-                username: creds.username.clone(),
-                password_hash: creds.password_hash.clone(),
+                username: self.credentials.username.clone(),
+                password_hash: self.credentials.password_hash.clone(),
             }))
         } else {
             Ok(None)
@@ -184,7 +219,7 @@ impl AuthnBackend for AdminBackend {
 pub type AuthSession = axum_login::AuthSession<AdminBackend>;
 
 // Setup the auth layer and router
-pub fn auth_router() -> Router {
+pub fn auth_router() -> Router<crate::AppState> {
     Router::new()
         .route("/login", get(login_page))
         .route("/login", post(login_handler))
@@ -244,7 +279,6 @@ async fn logout(mut auth_session: AuthSession) -> Response {
 pub async fn auth_middleware(
     auth_session: AuthSession,
     settings: Extension<Arc<Mutex<Settings>>>,
-    _jar: CookieJar,
     req: Request<axum::body::Body>,
     next: Next,
 ) -> Response {
@@ -284,23 +318,20 @@ pub async fn auth_middleware(
 }
 
 // Helper functions for managing credentials
-pub async fn generate_default_credentials() -> Credentials {
+pub async fn generate_default_credentials() -> anyhow::Result<Credentials> {
     // Check if an initial password file already exists
     if Path::new(INITIAL_PASSWORD_FILE).exists() {
         info!("Initial password file exists - attempting to load existing credentials from database");
         // Try to load credentials from database first
-        match crate::db::get_admin_credentials().await {
-            Ok(Some(creds)) => {
-                info!("Found existing admin credentials in database - using those");
-                return creds;
-            },
-            _ => {
-                // If we can't load from database but file exists, we should delete the file
-                // as it's probably stale/outdated
-                info!("Failed to load admin credentials from database but initial password file exists - file may be stale");
-                if let Err(e) = fs::remove_file(INITIAL_PASSWORD_FILE) {
-                    error!("Failed to remove stale initial password file: {}", e);
-                }
+        if let Ok(Some(creds)) = crate::db::get_admin_credentials().await {
+            info!("Found existing admin credentials in database - using those");
+            return Ok(creds);
+        } else {
+            // If we can't load from database but file exists, we should delete the file
+            // as it's probably stale/outdated
+            info!("Failed to load admin credentials from database but initial password file exists - file may be stale");
+            if let Err(e) = fs::remove_file(INITIAL_PASSWORD_FILE) {
+                error!("Failed to remove stale initial password file: {}", e);
             }
         }
     }
@@ -313,54 +344,26 @@ pub async fn generate_default_credentials() -> Credentials {
         .map(char::from)
         .collect();
 
-    let salt = SaltString::generate(rand::thread_rng());
-    let password_hash = Argon2::default()
-        .hash_password(password.as_bytes(), &salt)
-        .expect("Failed to hash password")
-        .to_string();
-
-    let credentials = Credentials {
-        username,
-        password: None, // We don't store the password in the credentials
-        password_hash,
-    };
-
-    // Save to database FIRST - if this fails, we shouldn't write the password file
-    match crate::db::save_admin_credentials(&credentials).await {
-        Ok(_) => {
-            info!("Successfully saved admin credentials to database");
-            
-            // Now save the initial password to a file for better UX
-            info!("Writing initial admin password to file: {}", INITIAL_PASSWORD_FILE);
-            // Get current directory for logging
-            let current_dir = match std::env::current_dir() {
-                Ok(dir) => dir.display().to_string(),
-                Err(_) => "unknown".to_string(),
-            };
-            
-            // Clone password to avoid ownership issues
-            if let Err(e) = fs::write(INITIAL_PASSWORD_FILE, password.clone()) {
-                error!("Failed to save initial password to file: {} (Error: {})", INITIAL_PASSWORD_FILE, e);
-            } else {
-                info!("Initial admin password successfully saved to {} in directory: {}", 
-                      INITIAL_PASSWORD_FILE, current_dir);
-                
-                // Verify file exists
-                if Path::new(INITIAL_PASSWORD_FILE).exists() {
-                    info!("Verified password file exists at {}", INITIAL_PASSWORD_FILE);
-                } else {
-                    error!("File write succeeded but verification failed - file not found at {}", INITIAL_PASSWORD_FILE);
-                }
-            }
-        },
-        Err(e) => {
-            error!("Failed to save admin credentials to database: {}", e);
-            // We don't write the password file in this case
-        }
+    // Create new credentials with proper error handling
+    let credentials = Credentials::create(username, password.clone())
+        .map_err(|e| anyhow::anyhow!("Failed to create admin credentials: {}", e))?;
+    
+    // Save to database
+    if let Err(e) = crate::db::save_admin_credentials(&credentials).await {
+        error!("Failed to save admin credentials to database: {}", e);
+        return Err(anyhow::anyhow!("Failed to save admin credentials to database: {}", e));
     }
-
+    
+    // Save password to file for user convenience
+    if let Err(e) = fs::write(INITIAL_PASSWORD_FILE, &password) {
+        error!("Failed to save initial password to file: {}", e);
+        // This is not a critical error, so we can continue
+    } else {
+        info!("Initial admin password saved to {}", INITIAL_PASSWORD_FILE);
+    }
+    
     info!("Generated default admin credentials. Username: admin, Password: {}", password);
-    credentials
+    Ok(credentials)
 }
 
 pub async fn load_credentials() -> io::Result<Credentials> {
@@ -398,15 +401,15 @@ pub async fn save_credentials(credentials: &Credentials) -> io::Result<()> {
     Ok(())
 }
 
-pub async fn load_settings() -> Settings {
+pub async fn load_settings() -> io::Result<Settings> {
     match crate::db::get_app_settings().await {
         Ok(settings) => {
             info!("Loaded settings from database");
-            settings
+            Ok(settings)
         },
         Err(e) => {
             error!("Failed to load settings from database: {}", e);
-            Settings::default()
+            Ok(Settings::default()) // Return default settings on error
         }
     }
 }
@@ -421,5 +424,24 @@ pub async fn save_settings(settings: &Settings) -> io::Result<()> {
             error!("Failed to save settings to database: {}", e);
             Err(io::Error::new(io::ErrorKind::Other, format!("Database error: {}", e)))
         }
+    }
+}
+
+// Define how credentials are converted from a Form submission
+impl<S> FromRequest<S> for Credentials
+where
+    S: Send + Sync,
+{
+    type Rejection = StatusCode;
+
+    async fn from_request(req: Request<axum::body::Body>, state: &S) -> Result<Self, Self::Rejection> {
+        let Form(map) = Form::<HashMap<String, String>>::from_request(req, state).await
+            .map_err(|_| StatusCode::BAD_REQUEST)?;
+        
+        Ok(Credentials {
+            username: map.get("username").cloned().unwrap_or_default(),
+            password: map.get("password").cloned(),
+            password_hash: "".to_string(), // This will be set during authentication
+        })
     }
 } 

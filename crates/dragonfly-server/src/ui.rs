@@ -16,7 +16,7 @@ use cookie::{Cookie, SameSite};
 use std::fs;
 
 use crate::db;
-use crate::auth::{AuthSession, Settings, save_settings};
+use crate::auth::{self, AuthSession, Settings, save_settings, Credentials};
 use crate::filters;
 
 // Extract theme from cookies
@@ -63,6 +63,7 @@ pub struct MachineDetailsTemplate {
     pub is_authenticated: bool,
     pub created_at_formatted: String,
     pub updated_at_formatted: String,
+    pub workflow_info: Option<crate::tinkerbell::WorkflowInfo>,
 }
 
 #[derive(Template)]
@@ -301,12 +302,32 @@ pub async fn machine_details(
                     let created_at_formatted = machine.created_at.format("%Y-%m-%d %H:%M:%S UTC").to_string();
                     let updated_at_formatted = machine.updated_at.format("%Y-%m-%d %H:%M:%S UTC").to_string();
                     
+                    // Fetch workflow information for this machine if it's installing OS
+                    let workflow_info = if machine.status == MachineStatus::InstallingOS {
+                        match crate::tinkerbell::get_workflow_info(&machine).await {
+                            Ok(info) => {
+                                if let Some(info) = &info {
+                                    info!("Found workflow information for machine {}: state={}, progress={}%", 
+                                         uuid, info.state, info.progress);
+                                }
+                                info
+                            },
+                            Err(e) => {
+                                error!("Error fetching workflow information for machine {}: {}", uuid, e);
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
+                    
                     UiTemplate::MachineDetails(MachineDetailsTemplate { 
                         machine,
                         theme,
                         is_authenticated,
                         created_at_formatted,
                         updated_at_formatted,
+                        workflow_info,
                     }).into_response()
                 },
                 Ok(None) => {
@@ -471,85 +492,63 @@ pub async fn update_settings(
     // Check if user is authenticated
     let is_authenticated = auth_session.user.is_some();
     
-    // Get current settings
-    let settings_lock = app_state.settings.lock().await;
-    let require_login = settings_lock.require_login;
-    drop(settings_lock);
-    
-    // If require_login is enabled and user is not authenticated,
-    // redirect to login page
-    if require_login && !is_authenticated {
-        return Redirect::to("/login").into_response();
-    }
-    
-    // Update theme preference (allowed for all users)
-    let theme = form.theme.clone();
-    let mut cookie = Cookie::new("dragonfly_theme", theme);
-    cookie.set_path("/");
-    cookie.set_max_age(time::Duration::days(365));
-    cookie.set_http_only(true);
-    cookie.set_same_site(SameSite::Lax);
-    
-    // Apply admin settings if authenticated
-    if auth_session.user.is_some() {
-        // Process default OS setting - if empty string, convert to None
-        let default_os = match &form.default_os {
-            Some(os) if !os.is_empty() => {
-                info!("Setting default OS to: {}", os);
-                Some(os.clone())
-            },
-            _ => {
-                info!("Clearing default OS setting");
-                None
-            }
-        };
+    // If updating password, verify credentials first
+    if let (Some(_old_password), Some(password), Some(password_confirm)) = 
+        (&form.old_password, &form.password, &form.password_confirm) {
         
-        // Update settings
-        let mut settings = app_state.settings.lock().await;
-        settings.require_login = form.require_login.is_some();
-        settings.default_os = default_os.clone();
-        drop(settings);
-        
-        // Save settings to disk
-        let _ = save_settings(&Settings {
-            require_login: form.require_login.is_some(),
-            default_os,
-        }).await;
-        
-        // Update admin credentials if old password and new password are provided
-        if let (Some(old_password), Some(password), Some(username)) = (form.old_password, form.password.clone(), form.username) {
-            if !password.is_empty() {
-                // Verify old password first
-                let user = auth_session.user.as_ref().unwrap();
+        if !password.is_empty() && password == password_confirm {
+            // Only allow password update if authenticated
+            if is_authenticated {
+                let username = form.username.unwrap_or_else(|| "admin".to_string());
                 
-                // Create credentials to verify
-                let verify_creds = crate::auth::Credentials {
-                    username: user.username.clone(),
-                    password: Some(old_password),
-                    password_hash: String::new(),
-                };
-                
-                // Attempt to verify the old password
-                match app_state.auth_backend.verify_credentials(verify_creds).await {
-                    Ok(true) => {
-                        // Old password verified, update to new password
-                        let _ = app_state.auth_backend.update_credentials(username, password).await;
-                        
-                        // Delete the initial password file if it exists
-                        let _ = fs::remove_file("initial_password.txt");
+                // Create new credentials directly
+                match Credentials::create(username, password.clone()) {
+                    Ok(new_credentials) => {
+                        // Save them
+                        if let Err(e) = auth::save_credentials(&new_credentials).await {
+                            return Response::builder()
+                                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                                .body(format!("Failed to save credentials: {}", e).into())
+                                .unwrap();
+                        }
                     },
-                    _ => {
-                        // Old password verification failed
-                        return Redirect::to("/settings?error=invalid_password").into_response();
+                    Err(e) => {
+                        return Response::builder()
+                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .body(format!("Failed to create credentials: {}", e).into())
+                            .unwrap();
                     }
                 }
             }
         }
     }
     
-    // Set cookie and redirect to settings
-    (
-        [(header::SET_COOKIE, cookie.to_string())],
-        Redirect::to("/settings")
-    ).into_response()
+    // Update settings
+    let mut settings = match app_state.settings.try_lock() {
+        Ok(guard) => (*guard).clone(),
+        Err(_) => Settings::default(),
+    };
+    
+    // Update require_login setting
+    settings.require_login = form.require_login.is_some();
+    
+    // Update default OS setting
+    match form.default_os.as_deref() {
+        Some("none") => settings.default_os = None,
+        Some(os) if !os.is_empty() => settings.default_os = Some(os.to_string()),
+        _ => {}
+    }
+    
+    // Save the updated settings
+    if let Err(e) = auth::save_settings(&settings).await {
+        error!("Failed to save settings: {}", e);
+    }
+    
+    // Update settings in app state
+    if let Ok(mut guard) = app_state.settings.try_lock() {
+        *guard = settings;
+    }
+    
+    // Redirect back to settings page
+    Redirect::to("/settings").into_response()
 } 

@@ -20,6 +20,10 @@ pub struct Machine {
     pub memorable_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bmc_credentials: Option<BmcCredentials>,
+    #[serde(default)]
+    pub installation_progress: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub installation_step: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -156,6 +160,18 @@ pub struct BmcCredentialsUpdateRequest {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BmcCredentialsUpdateResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InstallationProgressUpdateRequest {
+    pub progress: u8,  // 0-100 percentage
+    pub step: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InstallationProgressUpdateResponse {
     pub success: bool,
     pub message: String,
 } 

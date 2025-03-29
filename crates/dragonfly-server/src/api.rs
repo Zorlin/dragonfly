@@ -15,45 +15,33 @@ use serde::Deserialize;
 use futures::stream::{self, Stream};
 use std::convert::Infallible;
 use std::time::Duration;
-use tokio::sync::broadcast;
 use serde::Serialize;
 use crate::auth::AuthSession;
+use crate::AppState;
 
 use crate::db;
 
-// Add this near the top with other statics/constants
-static MACHINE_EVENTS: once_cell::sync::Lazy<broadcast::Sender<MachineEvent>> = 
-    once_cell::sync::Lazy::new(|| {
-        let (tx, _) = broadcast::channel(100);
-        tx
-    });
-
-#[derive(Clone, Serialize)]
-struct MachineEvent {
-    type_: String,
-    machine_id: Option<uuid::Uuid>,
-}
-
-pub fn api_router() -> Router {
+pub fn api_router() -> Router<crate::AppState> {
     Router::new()
-        .route("/api/machines", post(register_machine))
-        .route("/api/machines", get(get_all_machines))
-        .route("/api/machines/{id}", get(get_machine))
-        .route("/api/machines/{id}", delete(delete_machine))
-        .route("/api/machines/{id}", put(update_machine))
-        .route("/api/machines/{id}/os", get(get_machine_os))
-        .route("/api/machines/{id}/os", post(assign_os))
-        .route("/api/machines/{id}/status", get(get_machine_status))
-        .route("/api/machines/{id}/status", post(update_status))
-        .route("/api/machines/{id}/hostname", post(update_hostname))
-        .route("/api/machines/{id}/hostname", get(get_hostname_form))
-        .route("/api/machines/{id}/os_installed", post(update_os_installed))
-        .route("/api/machines/{id}/bmc", post(update_bmc))
-        .route("/api/events", get(machine_events))
-        .route("/{mac}", get(ipxe_script))
+        .route("/machines", post(register_machine))
+        .route("/machines", get(get_all_machines))
+        .route("/machines/{id}", get(get_machine))
+        .route("/machines/{id}", delete(delete_machine))
+        .route("/machines/{id}", put(update_machine))
+        .route("/machines/{id}/os", get(get_machine_os))
+        .route("/machines/{id}/os", post(assign_os))
+        .route("/machines/{id}/status", get(get_machine_status))
+        .route("/machines/{id}/status", post(update_status))
+        .route("/machines/{id}/hostname", post(update_hostname))
+        .route("/machines/{id}/hostname", get(get_hostname_form))
+        .route("/machines/{id}/os_installed", post(update_os_installed))
+        .route("/machines/{id}/bmc", post(update_bmc))
+        .route("/machines/{id}/progress", post(update_installation_progress))
+        .route("/events", get(machine_events))
 }
 
 async fn register_machine(
+    State(state): State<AppState>,
     Json(payload): Json<RegisterRequest>,
 ) -> Response {
     info!("Registering machine with MAC: {}", payload.mac_address);
@@ -69,10 +57,7 @@ async fn register_machine(
             }
             
             // Emit machine discovered event
-            let _ = MACHINE_EVENTS.send(MachineEvent {
-                type_: "machine_discovered".to_string(),
-                machine_id: Some(machine_id),
-            });
+            state.event_manager.send(format!("machine_discovered:{}", machine_id));
             
             let response = RegisterResponse {
                 machine_id,
@@ -446,6 +431,7 @@ async fn assign_os_internal(id: Uuid, os_choice: String) -> Response {
 }
 
 async fn update_status(
+    State(state): State<AppState>,
     _auth_session: AuthSession,
     Path(id): Path<Uuid>,
     req: axum::http::Request<axum::body::Body>,
@@ -536,10 +522,7 @@ async fn update_status(
             }
             
             // Emit machine updated event
-            let _ = MACHINE_EVENTS.send(MachineEvent {
-                type_: "machine_updated".to_string(),
-                machine_id: Some(id),
-            });
+            state.event_manager.send(format!("machine_updated:{}", id));
             
             // Return HTML success message
             Html(format!(r#"
@@ -573,6 +556,7 @@ async fn update_status(
 }
 
 async fn update_hostname(
+    State(state): State<AppState>,
     auth_session: AuthSession,
     Path(id): Path<Uuid>,
     Json(payload): Json<HostnameUpdateRequest>,
@@ -598,10 +582,7 @@ async fn update_hostname(
             }
             
             // Emit machine updated event
-            let _ = MACHINE_EVENTS.send(MachineEvent {
-                type_: "machine_updated".to_string(),
-                machine_id: Some(id),
-            });
+            state.event_manager.send(format!("machine_updated:{}", id));
             
             let response = HostnameUpdateResponse {
                 success: true,
@@ -628,6 +609,7 @@ async fn update_hostname(
 }
 
 async fn update_os_installed(
+    State(state): State<AppState>,
     _auth_session: AuthSession,
     Path(id): Path<Uuid>,
     Json(payload): Json<OsInstalledUpdateRequest>,
@@ -637,10 +619,7 @@ async fn update_os_installed(
     match db::update_os_installed(&id, &payload.os_installed).await {
         Ok(true) => {
             // Emit machine updated event
-            let _ = MACHINE_EVENTS.send(MachineEvent {
-                type_: "machine_updated".to_string(),
-                machine_id: Some(id),
-            });
+            state.event_manager.send(format!("machine_updated:{}", id));
             
             let response = OsInstalledUpdateResponse {
                 success: true,
@@ -667,6 +646,7 @@ async fn update_os_installed(
 }
 
 async fn update_bmc(
+    State(state): State<AppState>,
     auth_session: AuthSession,
     Path(id): Path<Uuid>,
     Form(payload): Form<BmcCredentialsUpdateRequest>,
@@ -698,10 +678,7 @@ async fn update_bmc(
     match db::update_bmc_credentials(&id, &credentials).await {
         Ok(true) => {
             // Emit machine updated event
-            let _ = MACHINE_EVENTS.send(MachineEvent {
-                type_: "machine_updated".to_string(),
-                machine_id: Some(id),
-            });
+            state.event_manager.send(format!("machine_updated:{}", id));
             
             (StatusCode::OK, Html(format!(r#"
                 <div class="p-4 mb-4 text-sm text-green-700 bg-green-100 rounded-lg" role="alert">
@@ -750,7 +727,7 @@ async fn get_hostname_form(
                             Update Machine Hostname
                         </h3>
                         <div class="mt-2">
-                            <form hx-post="/api/machines/{}/hostname" hx-target="#hostname-modal">
+                            <form hx-post="/machines/{}/hostname" hx-target="#hostname-modal">
                                 <label for="hostname" class="block text-sm font-medium text-gray-700">Hostname</label>
                                 <input type="text" name="hostname" id="hostname" value="{}" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm" placeholder="Enter hostname">
                                 <div class="mt-5 sm:mt-4 sm:flex sm:flex-row-reverse">
@@ -789,7 +766,7 @@ async fn get_hostname_form(
 }
 
 // Handler for iPXE script generation
-async fn ipxe_script(Path(mac): Path<String>) -> Response {
+pub async fn ipxe_script(Path(mac): Path<String>) -> Response {
     if !mac.contains(':') || mac.split(':').count() != 6 {
         return (StatusCode::NOT_FOUND, "Not Found").into_response();
     }
@@ -818,6 +795,7 @@ async fn ipxe_script(Path(mac): Path<String>) -> Response {
 
 // Update the delete_machine function to use kube-rs instead of kubectl
 async fn delete_machine(
+    State(state): State<AppState>,
     auth_session: AuthSession,
     Path(id): Path<Uuid>,
 ) -> Response {
@@ -858,10 +836,7 @@ async fn delete_machine(
                     };
                     
                     // Emit machine deleted event
-                    let _ = MACHINE_EVENTS.send(MachineEvent {
-                        type_: "machine_deleted".to_string(),
-                        machine_id: Some(id),
-                    });
+                    state.event_manager.send(format!("machine_deleted:{}", id));
                     
                     (StatusCode::OK, Json(json!({ "success": true, "message": message }))).into_response()
                 },
@@ -896,6 +871,7 @@ struct UpdateMachineRequest {
 
 // Add this function to handle machine updates
 async fn update_machine(
+    State(state): State<AppState>,
     auth_session: AuthSession,
     Path(id): Path<Uuid>,
     Form(payload): Form<UpdateMachineRequest>,
@@ -996,10 +972,7 @@ async fn update_machine(
 
     if updated {
         // Emit machine updated event
-        let _ = MACHINE_EVENTS.send(MachineEvent {
-            type_: "machine_updated".to_string(),
-            machine_id: Some(id),
-        });
+        state.event_manager.send(format!("machine_updated:{}", id));
         
         (StatusCode::OK, Json(json!({
             "success": true,
@@ -1022,7 +995,7 @@ async fn get_machine_os(Path(id): Path<String>) -> Response {
                     Assign Operating System
                 </h3>
                 <div class="mt-2">
-                    <form hx-post="/api/machines/{}/os" hx-swap="none" @submit="osModal = false">
+                    <form hx-post="/machines/{}/os" hx-swap="none" @submit="osModal = false">
                         <div class="mt-4">
                             <label for="os_choice" class="block text-sm font-medium text-gray-700">Operating System</label>
                             <select
@@ -1068,7 +1041,7 @@ pub async fn get_machine_status(Path(id): Path<Uuid>) -> impl IntoResponse {
                     Update Machine Status
                 </h3>
                 <div class="mt-2">
-                    <form hx-post="/api/machines/{}/status" hx-swap="none" @submit="statusModal = false">
+                    <form hx-post="/machines/{}/status" hx-swap="none" @submit="statusModal = false">
                         <div class="mb-4">
                             <label for="status" class="block text-sm font-medium text-gray-700">Status</label>
                             <select name="status" id="status" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md">
@@ -1104,16 +1077,16 @@ pub async fn handle_error(err: anyhow::Error) -> Response {
 }
 
 // Add this new handler function
-async fn machine_events() -> Sse<impl Stream<Item = std::result::Result<Event, Infallible>>> {
-    let rx = MACHINE_EVENTS.subscribe();
+async fn machine_events(
+    State(state): State<AppState>,
+) -> Sse<impl Stream<Item = std::result::Result<Event, Infallible>>> {
+    let rx = state.event_manager.subscribe();
     
     let stream = stream::unfold(rx, |mut rx| async move {
         match rx.recv().await {
             Ok(event) => {
-                let json = serde_json::to_string(&event).unwrap_or_default();
                 let sse_event = Event::default()
-                    .event(event.type_)
-                    .data(json);
+                    .data(event);
                 Some((Ok(sse_event), rx))
             },
             Err(_) => None,
@@ -1145,5 +1118,48 @@ async fn require_admin(auth_session: AuthSession) -> std::result::Result<(), Sta
         Err(StatusCode::UNAUTHORIZED)
     } else {
         Ok(())
+    }
+}
+
+async fn update_installation_progress(
+    State(state): State<AppState>,
+    _auth_session: AuthSession,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<InstallationProgressUpdateRequest>,
+) -> Response {
+    // We should allow Tinkerbell to update progress without authentication
+    // This exception is only for this specific endpoint
+    
+    info!("Updating installation progress for machine {} to {}%", id, payload.progress);
+    if let Some(step) = &payload.step {
+        info!("Current installation step: {}", step);
+    }
+    
+    match db::update_installation_progress(&id, payload.progress, payload.step.as_deref()).await {
+        Ok(true) => {
+            // Emit machine updated event
+            state.event_manager.send(format!("machine_updated:{}", id));
+            
+            let response = InstallationProgressUpdateResponse {
+                success: true,
+                message: format!("Installation progress updated for machine {}", id),
+            };
+            (StatusCode::OK, Json(response)).into_response()
+        },
+        Ok(false) => {
+            let error_response = ErrorResponse {
+                error: "Not Found".to_string(),
+                message: format!("Machine with ID {} not found", id),
+            };
+            (StatusCode::NOT_FOUND, Json(error_response)).into_response()
+        },
+        Err(e) => {
+            error!("Failed to update installation progress for machine {}: {}", id, e);
+            let error_response = ErrorResponse {
+                error: "Database Error".to_string(),
+                message: e.to_string(),
+            };
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(error_response)).into_response()
+        }
     }
 } 

@@ -1,109 +1,113 @@
 use axum::{
-    middleware,
     Router,
+    extract::Extension,
+    response::Redirect,
+    routing::get
 };
-use std::{net::SocketAddr, sync::Arc};
+use std::sync::Arc;
 use tokio::sync::Mutex;
-use tower_http::{cors::CorsLayer, services::ServeDir, trace::TraceLayer};
-use tracing::info;
-use sqlx::SqlitePool;
+use tower_sessions::{SessionManagerLayer, MemoryStore};
+use tower_http::trace;
+use tower_http::trace::TraceLayer;
+use tracing::{info, Level};
+use std::net::SocketAddr;
+use tower_cookies::CookieManagerLayer;
 use axum_login::AuthManagerLayerBuilder;
-use tower_sessions::{MemoryStore, SessionManagerLayer};
-use rand::RngCore;
 
 use crate::auth::{AdminBackend, auth_router, load_credentials, generate_default_credentials, load_settings, Settings};
 use crate::db::init_db;
+use crate::event_manager::EventManager;
 
 mod auth;
 mod api;
-mod ui;
 mod db;
-mod tinkerbell;
 mod filters;
+mod ui;
+mod tinkerbell;
+mod event_manager;
 
-pub use api::api_router;
-
-// Define a shared state structure
+// Application state struct
 #[derive(Clone)]
 pub struct AppState {
-    pub auth_backend: AdminBackend,
-    pub db_pool: SqlitePool,
     pub settings: Arc<Mutex<Settings>>,
+    pub event_manager: Arc<EventManager>,
 }
 
-/// Start the API server with a default address
-pub async fn start() -> Result<(), Box<dyn std::error::Error>> {
-    // Use default address or read from configuration
-    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], 3000));
-    init(addr).await
-}
-
-/// Initialize the API server
-pub async fn init(addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
-    info!("Starting the API server initialization");
-
+pub async fn run() -> anyhow::Result<()> {
     // Initialize the database 
     let db_pool = init_db().await?;
+    
+    // Initialize timing database tables
+    db::init_timing_tables().await?;
+    
+    // Load historical timing data
+    tinkerbell::load_historical_timings().await?;
+    
+    // Start the timing cleanup task
+    tinkerbell::start_timing_cleanup_task().await;
     
     // Load or generate admin credentials
     let credentials = match load_credentials().await {
         Ok(creds) => {
-            info!("Admin credentials loaded - username: {}", creds.username);
+            info!("Loaded existing admin credentials");
             creds
         },
         Err(_) => {
-            info!("No admin credentials found, generating...");
-            generate_default_credentials().await
+            info!("No admin credentials found, generating default credentials");
+            match generate_default_credentials().await {
+                Ok(creds) => creds,
+                Err(e) => {
+                    return Err(anyhow::anyhow!("Failed to generate default credentials: {}", e));
+                }
+            }
         }
     };
-
-    // Create admin backend
-    let backend = AdminBackend::new(credentials);
     
-    // Load settings or use defaults
-    let settings = load_settings().await;
-    let settings_state = Arc::new(Mutex::new(settings));
-    
-    // Create shared state
-    let app_state = AppState {
-        auth_backend: backend.clone(),
-        db_pool,
-        settings: settings_state.clone(),
+    // Load settings
+    let settings = match load_settings().await {
+        Ok(s) => s,
+        Err(e) => {
+            info!("Failed to load settings: {}, using defaults", e);
+            Settings::default()
+        }
     };
     
-    // Generate a random secret key for the session
-    let mut secret = [0u8; 64];
-    rand::thread_rng().fill_bytes(&mut secret);
+    // Create application state
+    let app_state = AppState {
+        settings: Arc::new(Mutex::new(settings)),
+        event_manager: Arc::new(EventManager::new()),
+    };
     
-    // Create session store and session layer
-    info!("Setting up session store and auth layer");
+    // Set up a session store
     let session_store = MemoryStore::default();
     let session_layer = SessionManagerLayer::new(session_store)
-        .with_secure(false)
-        .with_same_site(tower_sessions::cookie::SameSite::Lax);
-
-    // Create auth manager layer with explicit credential identifier name
-    info!("Creating auth manager layer");
-    let auth_layer = AuthManagerLayerBuilder::new(backend, session_layer)
-        .build();
+        .with_secure(false);
     
-    // Build the router
-    info!("Building router with authentication layer");
+    // Create session-based authentication
+    let backend = AdminBackend::new(credentials);
+    let auth_layer = AuthManagerLayerBuilder::new(backend, session_layer).build();
+    
+    // Build the app router with shared state
     let app = Router::new()
-        .merge(api_router())
         .merge(auth_router())
-        .merge(ui::ui_router().with_state(app_state.clone()))
-        .nest_service("/static", ServeDir::new("crates/dragonfly-server/static"))
-        .nest_service("/js", ServeDir::new("crates/dragonfly-server/static/js"))
-        .nest_service("/css", ServeDir::new("crates/dragonfly-server/static/css"))
-        .nest_service("/images", ServeDir::new("crates/dragonfly-server/static/images"))
+        .merge(ui::ui_router())
+        .route("/{mac}", get(api::ipxe_script))  // MAC route at root level for iPXE
+        .nest("/api", api::api_router())
+        .layer(CookieManagerLayer::new())
         .layer(auth_layer)
-        .layer(axum::extract::Extension(app_state))
-        .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::permissive());
+        .layer(Extension(db_pool))
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(trace::DefaultMakeSpan::new()
+                    .level(Level::INFO))
+                .on_response(trace::DefaultOnResponse::new()
+                    .level(Level::INFO)),
+        )
+        .with_state(app_state);
     
     // Start the server
-    info!("Starting server at {}", addr);
+    info!("Starting server on 0.0.0.0:3000");
+    let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app.into_make_service()).await?;
     

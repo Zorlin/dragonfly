@@ -198,20 +198,25 @@
 
         evtSource = new EventSource('/api/events');
         
-        evtSource.addEventListener('machine_discovered', function(event) {
-            console.log('New machine discovered!');
-            debouncedRefresh();
-        });
-        
-        evtSource.addEventListener('machine_updated', function(event) {
-            console.log('Machine updated!');
-            debouncedRefresh();
-        });
-        
-        evtSource.addEventListener('machine_deleted', function(event) {
-            console.log('Machine deleted!');
-            debouncedRefresh();
-        });
+        evtSource.onmessage = function(event) {
+            console.log('Event received:', event.data);
+            const [type, id] = event.data.split(':');
+            
+            switch(type) {
+                case 'machine_discovered':
+                    console.log('New machine discovered!');
+                    debouncedRefresh();
+                    break;
+                case 'machine_updated':
+                    console.log('Machine updated!');
+                    debouncedRefresh();
+                    break;
+                case 'machine_deleted':
+                    console.log('Machine deleted!');
+                    debouncedRefresh();
+                    break;
+            }
+        };
 
         evtSource.onopen = function() {
             console.log('EventSource connected');

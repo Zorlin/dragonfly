@@ -189,7 +189,7 @@ pub async fn get_all_machines() -> Result<Vec<Machine>> {
     
     let rows = sqlx::query(
         r#"
-        SELECT id, mac_address, ip_address, hostname, os_choice, os_installed, status, disks, nameservers, created_at, updated_at, bmc_credentials 
+        SELECT id, mac_address, ip_address, hostname, os_choice, os_installed, status, disks, nameservers, created_at, updated_at, bmc_credentials, installation_progress, installation_step 
         FROM machines
         "#,
     )
@@ -256,6 +256,8 @@ pub async fn get_all_machines() -> Result<Vec<Machine>> {
             bmc_credentials,
             created_at: parse_datetime(&row.get::<String, _>(9)),
             updated_at: parse_datetime(&row.get::<String, _>(10)),
+            installation_progress: row.get::<Option<i64>, _>(12).unwrap_or(0) as u8,
+            installation_step: row.get(13),
         };
         
         machines.push(machine);
@@ -270,7 +272,7 @@ pub async fn get_machine_by_id(id: &Uuid) -> Result<Option<Machine>> {
     
     let result = sqlx::query(
         r#"
-        SELECT id, mac_address, ip_address, hostname, os_choice, os_installed, status, disks, nameservers, created_at, updated_at, bmc_credentials 
+        SELECT id, mac_address, ip_address, hostname, os_choice, os_installed, status, disks, nameservers, created_at, updated_at, bmc_credentials, installation_progress, installation_step 
         FROM machines 
         WHERE id = ?
         "#,
@@ -345,6 +347,8 @@ pub async fn get_machine_by_id(id: &Uuid) -> Result<Option<Machine>> {
             updated_at: parse_datetime(&row.get::<String, _>(10)),
             memorable_name: Some(memorable_name),
             bmc_credentials,
+            installation_progress: row.get::<Option<i64>, _>(12).unwrap_or(0) as u8,
+            installation_step: row.get(13),
         }))
     } else {
         Ok(None)
@@ -357,7 +361,7 @@ pub async fn get_machine_by_mac(mac_address: &str) -> Result<Option<Machine>> {
     
     let result = sqlx::query(
         r#"
-        SELECT id, mac_address, ip_address, hostname, os_choice, os_installed, status, disks, nameservers, created_at, updated_at, bmc_credentials 
+        SELECT id, mac_address, ip_address, hostname, os_choice, os_installed, status, disks, nameservers, created_at, updated_at, bmc_credentials, installation_progress, installation_step 
         FROM machines 
         WHERE mac_address = ?
         "#,
@@ -432,6 +436,8 @@ pub async fn get_machine_by_mac(mac_address: &str) -> Result<Option<Machine>> {
             updated_at: parse_datetime(&row.get::<String, _>(10)),
             memorable_name: Some(memorable_name),
             bmc_credentials,
+            installation_progress: row.get::<Option<i64>, _>(12).unwrap_or(0) as u8,
+            installation_step: row.get(13),
         }))
     } else {
         Ok(None)
@@ -821,6 +827,52 @@ async fn migrate_db(pool: &Pool<Sqlite>) -> Result<()> {
         .await?;
     }
     
+    // Check if installation_progress column exists
+    let result = sqlx::query(
+        r#"
+        SELECT COUNT(*) AS count FROM pragma_table_info('machines') WHERE name = 'installation_progress'
+        "#,
+    )
+    .fetch_one(pool)
+    .await?;
+    
+    let column_exists: i64 = result.get(0);
+    
+    // Add installation_progress column if it doesn't exist
+    if column_exists == 0 {
+        info!("Adding installation_progress column to machines table");
+        sqlx::query(
+            r#"
+            ALTER TABLE machines ADD COLUMN installation_progress INTEGER DEFAULT 0
+            "#,
+        )
+        .execute(pool)
+        .await?;
+    }
+    
+    // Check if installation_step column exists
+    let result = sqlx::query(
+        r#"
+        SELECT COUNT(*) AS count FROM pragma_table_info('machines') WHERE name = 'installation_step'
+        "#,
+    )
+    .fetch_one(pool)
+    .await?;
+    
+    let column_exists: i64 = result.get(0);
+    
+    // Add installation_step column if it doesn't exist
+    if column_exists == 0 {
+        info!("Adding installation_step column to machines table");
+        sqlx::query(
+            r#"
+            ALTER TABLE machines ADD COLUMN installation_step TEXT
+            "#,
+        )
+        .execute(pool)
+        .await?;
+    }
+    
     // Check if default_os column exists in app_settings table
     // First check if the app_settings table exists
     let result = sqlx::query(
@@ -1062,4 +1114,242 @@ pub async fn save_app_settings(settings: &Settings) -> Result<()> {
     .await?;
     
     Ok(())
+}
+
+// Update installation progress
+pub async fn update_installation_progress(id: &Uuid, progress: u8, step: Option<&str>) -> Result<bool> {
+    let pool = get_pool().await?;
+    let now = Utc::now();
+    let now_str = now.to_rfc3339();
+    
+    // Use different query paths based on whether step is provided
+    let result = if let Some(step_value) = step {
+        sqlx::query(
+            r#"
+            UPDATE machines 
+            SET installation_progress = ?, installation_step = ?, updated_at = ? 
+            WHERE id = ?
+            "#,
+        )
+        .bind(progress as i64)
+        .bind(step_value)
+        .bind(&now_str)
+        .bind(id.to_string())
+        .execute(pool)
+        .await?
+    } else {
+        sqlx::query(
+            r#"
+            UPDATE machines 
+            SET installation_progress = ?, updated_at = ? 
+            WHERE id = ?
+            "#,
+        )
+        .bind(progress as i64)
+        .bind(&now_str)
+        .bind(id.to_string())
+        .execute(pool)
+        .await?
+    };
+    
+    let success = result.rows_affected() > 0;
+    if success {
+        if let Some(step_value) = step {
+            info!("Installation progress updated for machine {}: {}% ({})", id, progress, step_value);
+        } else {
+            info!("Installation progress updated for machine {}: {}%", id, progress);
+        }
+    } else {
+        info!("No machine found with ID {} to update installation progress", id);
+    }
+    
+    Ok(success)
+}
+
+// Update machine in the database
+pub async fn update_machine(machine: &Machine) -> Result<bool> {
+    let pool = get_pool().await?;
+    
+    info!("Updating machine: {}", machine.id);
+    
+    // Convert the data to JSON for storage
+    let status_json = serde_json::to_string(&machine.status)?;
+    let disks_json = serde_json::to_value(&machine.disks)?;
+    let nameservers_json = serde_json::to_string(&machine.nameservers)?;
+    
+    // Create a plain SQL query to update the machine
+    let query = "
+        UPDATE machines SET 
+            hostname = $1, 
+            ip_address = $2, 
+            mac_address = $3, 
+            nameservers = $4,
+            status = $5,
+            disks = $6,
+            os_choice = $7,
+            memorable_name = $8,
+            updated_at = $9
+        WHERE id = $10
+    ";
+    
+    // Execute the update query with explicit type annotation for SqlitePool
+    let result = sqlx::query::<sqlx::Sqlite>(query)
+        .bind(machine.hostname.as_deref())
+        .bind(&machine.ip_address)
+        .bind(&machine.mac_address)
+        .bind(&nameservers_json)
+        .bind(&status_json)
+        .bind(&disks_json)
+        .bind(machine.os_choice.as_deref())
+        .bind(machine.memorable_name.as_deref())
+        .bind(machine.updated_at)
+        .bind(machine.id)
+        .execute(pool)
+        .await?;
+    
+    Ok(result.rows_affected() > 0)
+}
+
+// Add a new type for template timing data
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct TemplateTiming {
+    pub template_name: String,
+    pub action_name: String,
+    pub durations: Vec<u64>,
+}
+
+// Save template timing data to database
+pub async fn save_template_timing(template_name: &str, action_name: &str, durations: &[u64]) -> Result<bool> {
+    const MAX_TIMING_HISTORY: usize = 50; // Keep only the last 50 runs of timing data
+    
+    let pool = get_pool().await?;
+    
+    info!("Saving timing data for template {}, action {}", template_name, action_name);
+    
+    // Limit the durations to the most recent MAX_TIMING_HISTORY entries
+    let limited_durations = if durations.len() > MAX_TIMING_HISTORY {
+        &durations[durations.len() - MAX_TIMING_HISTORY..]
+    } else {
+        durations
+    };
+    
+    // Convert durations to JSON
+    let durations_json = serde_json::to_string(limited_durations)?;
+    
+    // Create a plain SQL query to insert or update timing data
+    let query = "
+        INSERT INTO template_timings (template_name, action_name, durations)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (template_name, action_name) 
+        DO UPDATE SET durations = $3
+    ";
+    
+    // Execute the query
+    let result = sqlx::query::<sqlx::Sqlite>(query)
+        .bind(template_name)
+        .bind(action_name)
+        .bind(durations_json)
+        .execute(pool)
+        .await?;
+    
+    Ok(result.rows_affected() > 0)
+}
+
+// Load all template timing data from database
+pub async fn load_template_timings() -> Result<Vec<TemplateTiming>> {
+    let pool = get_pool().await?;
+    
+    info!("Loading all template timing data");
+    
+    // Create a plain SQL query to select all timing data
+    let query = "
+        SELECT template_name, action_name, durations FROM template_timings
+    ";
+    
+    // Execute the query
+    let rows = sqlx::query::<sqlx::Sqlite>(query)
+        .fetch_all(pool)
+        .await?;
+    
+    // Convert rows to TemplateTiming structs
+    let mut timings = Vec::new();
+    for row in rows {
+        let template_name: String = row.get(0);
+        let action_name: String = row.get(1);
+        let durations_json: String = row.get(2);
+        
+        // Parse durations from JSON
+        let durations: Vec<u64> = serde_json::from_str(&durations_json)?;
+        
+        timings.push(TemplateTiming {
+            template_name,
+            action_name,
+            durations,
+        });
+    }
+    
+    Ok(timings)
+}
+
+// Initialize database schema for template timing data
+pub async fn init_timing_tables() -> Result<()> {
+    let pool = get_pool().await?;
+    
+    info!("Initializing template timing tables");
+    
+    // Create table for template timings if it doesn't exist
+    let create_table_query = "
+        CREATE TABLE IF NOT EXISTS template_timings (
+            template_name TEXT NOT NULL,
+            action_name TEXT NOT NULL,
+            durations TEXT NOT NULL,
+            PRIMARY KEY (template_name, action_name)
+        )
+    ";
+    
+    sqlx::query::<sqlx::Sqlite>(create_table_query)
+        .execute(pool)
+        .await?;
+    
+    Ok(())
+}
+
+// Get statistics about the template timing database
+pub async fn get_timing_database_stats() -> Result<(usize, usize, usize)> {
+    let pool = get_pool().await?;
+    
+    // Count the number of templates
+    let template_count_result = sqlx::query::<sqlx::Sqlite>(
+        "SELECT COUNT(DISTINCT template_name) FROM template_timings"
+    )
+    .fetch_one(pool)
+    .await?;
+    
+    let template_count: i64 = template_count_result.get(0);
+    
+    // Count the total number of template/action combinations
+    let action_count_result = sqlx::query::<sqlx::Sqlite>(
+        "SELECT COUNT(*) FROM template_timings"
+    )
+    .fetch_one(pool)
+    .await?;
+    
+    let action_count: i64 = action_count_result.get(0);
+    
+    // Calculate the total number of timing entries
+    let rows = sqlx::query::<sqlx::Sqlite>(
+        "SELECT durations FROM template_timings"
+    )
+    .fetch_all(pool)
+    .await?;
+    
+    let mut total_entries = 0;
+    for row in rows {
+        let durations_json: String = row.get(0);
+        if let Ok(durations) = serde_json::from_str::<Vec<u64>>(&durations_json) {
+            total_entries += durations.len();
+        }
+    }
+    
+    Ok((template_count as usize, action_count as usize, total_entries))
 } 

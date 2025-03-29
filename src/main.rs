@@ -11,7 +11,7 @@ async fn main() {
     info!("Starting Dragonfly server...");
     
     // For now, just defer to the server crate
-    match dragonfly_server::start().await {
+    match dragonfly_server::run().await {
         Ok(_) => {
             info!("Server shut down gracefully");
         },
