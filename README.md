@@ -58,7 +58,7 @@ More features:
 - 🖼️ Ready for Retina, ultrawide and kiosk displays
 - 🏷️ "Just Type" experience — with bulk editing, drag-fill, and autocomplete  
 - 🎨 Tailwind-powered theming — pick your aesthetic or import your own.
-- 🩻 Introspection - view all details of your machines,
+- 🩻 Introspection - view details of your machines,
   including hardware, OS, and network configuration.
 - 🔍 Search - find any machine by name, tag, or ID.
 - 📊 Granular reporting and monitoring of your machines.
