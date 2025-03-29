@@ -57,7 +57,7 @@
             View all machines
         </a>
     </div>
-    <div class="mt-4 bg-white shadow overflow-hidden sm:rounded-md">
+    <div id="machine-list" class="mt-4 bg-white shadow overflow-hidden sm:rounded-md">
         <ul class="divide-y divide-gray-200">
             {% for machine in machines %}
             <li class="hover:bg-gray-50 cursor-pointer" onclick="window.location='/machines/{{ machine.id }}'">
@@ -121,4 +121,68 @@
         </ul>
     </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Refresh function to reload the page data when machines change
+    function refreshDashboard() {
+        window.location.reload();
+    }
+
+    // Server-sent events handling
+    let evtSource = null;
+    let reconnectAttempts = 0;
+    const MAX_RECONNECT_ATTEMPTS = 5;
+
+    function connectEventSource() {
+        if (evtSource) {
+            evtSource.close();
+        }
+
+        evtSource = new EventSource('/api/events');
+        
+        evtSource.addEventListener('machine_discovered', function(event) {
+            console.log('New machine discovered!');
+            refreshDashboard();
+        });
+        
+        evtSource.addEventListener('machine_updated', function(event) {
+            console.log('Machine updated!');
+            refreshDashboard();
+        });
+        
+        evtSource.addEventListener('machine_deleted', function(event) {
+            console.log('Machine deleted!');
+            refreshDashboard();
+        });
+
+        evtSource.onopen = function() {
+            console.log('Dashboard EventSource connected');
+            reconnectAttempts = 0;
+        };
+
+        evtSource.onerror = function(err) {
+            console.error("Dashboard EventSource failed:", err);
+            evtSource.close();
+            
+            if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                reconnectAttempts++;
+                const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+                console.log(`Reconnecting in ${delay}ms (attempt ${reconnectAttempts})`);
+                setTimeout(connectEventSource, delay);
+            }
+        };
+    }
+
+    // Initial connection
+    connectEventSource();
+
+    // Clean up when leaving the page
+    window.addEventListener('beforeunload', () => {
+        if (evtSource) {
+            evtSource.close();
+        }
+    });
+</script>
 {% endblock %} 

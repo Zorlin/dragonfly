@@ -43,15 +43,17 @@
 
         <div class="border-t border-gray-200 dark:border-gray-700">
             <!-- Two-column layout for Basic Info and Network Config -->
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 p-4 sm:p-6">
                 <!-- Basic Information -->
-                <div class="px-4 py-5 sm:p-6">
-                    <h3 class="text-lg font-medium leading-6 text-gray-900 dark:text-white">Basic Information</h3>
-                    <div class="mt-5 border-t border-gray-200 dark:border-gray-700">
+                <div class="bg-gray-50 dark:bg-gray-800/50 rounded-lg shadow-sm overflow-hidden border border-gray-100 dark:border-gray-700">
+                    <div class="px-4 py-3 bg-gray-100 dark:bg-gray-700">
+                        <h3 class="text-lg font-medium leading-6 text-gray-900 dark:text-white">Basic Information</h3>
+                    </div>
+                    <div class="px-4 py-4">
                         <dl class="divide-y divide-gray-200 dark:divide-gray-700">
                             <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
                                 <dt class="text-sm font-medium text-gray-500 dark:text-gray-300">MAC Address</dt>
-                                <dd class="mt-1 text-sm text-gray-900 dark:text-gray-100 sm:mt-0 sm:col-span-2">{{ machine.mac_address }}</dd>
+                                <dd class="mt-1 text-sm text-gray-900 dark:text-gray-100 sm:mt-0 sm:col-span-2 tech-mono">{{ machine.mac_address }}</dd>
                             </div>
                             <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
                                 <dt class="text-sm font-medium text-gray-500 dark:text-gray-300">Hostname</dt>
@@ -90,13 +92,15 @@
                 </div>
 
                 <!-- Network Configuration -->
-                <div class="px-4 py-5 sm:p-6">
-                    <h3 class="text-lg font-medium leading-6 text-gray-900 dark:text-white">Network Configuration</h3>
-                    <div class="mt-5 border-t border-gray-200 dark:border-gray-700">
+                <div class="bg-blue-50 dark:bg-blue-900/10 rounded-lg shadow-sm overflow-hidden border border-blue-100 dark:border-blue-800/30">
+                    <div class="px-4 py-3 bg-blue-100 dark:bg-blue-800/30">
+                        <h3 class="text-lg font-medium leading-6 text-gray-900 dark:text-white">Network Configuration</h3>
+                    </div>
+                    <div class="px-4 py-4">
                         <dl class="divide-y divide-gray-200 dark:divide-gray-700">
                             <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
                                 <dt class="text-sm font-medium text-gray-500 dark:text-gray-300">IP Address</dt>
-                                <dd class="mt-1 text-sm text-gray-900 dark:text-gray-100 sm:mt-0 sm:col-span-2">{{ machine.ip_address }}</dd>
+                                <dd class="mt-1 text-sm text-gray-900 dark:text-gray-100 sm:mt-0 sm:col-span-2 tech-mono">{{ machine.ip_address }}</dd>
                             </div>
                             <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
                                 <dt class="text-sm font-medium text-gray-500 dark:text-gray-300">DNS Servers</dt>
@@ -105,7 +109,7 @@
                                         No DNS servers configured
                                     {% else %}
                                         {% for dns in machine.nameservers %}
-                                        {{ dns }}<br>
+                                        <span class="tech-mono">{{ dns }}</span><br>
                                         {% endfor %}
                                     {% endif %}
                                 </dd>
@@ -129,43 +133,47 @@
             </div>
 
             <!-- Storage Information (Full Width) -->
-            <div class="px-4 py-5 sm:p-6 border-t border-gray-200 dark:border-gray-700">
-                <h3 class="text-lg font-medium leading-6 text-gray-900 dark:text-white">Storage</h3>
-                <div class="mt-5">
-                    <div class="flex flex-col">
-                        <div class="-my-2 -mx-4 overflow-x-auto sm:-mx-6 lg:-mx-8">
-                            <div class="inline-block min-w-full py-2 align-middle md:px-6 lg:px-8">
-                                <div class="overflow-hidden shadow ring-1 ring-black ring-opacity-5 md:rounded-lg">
-                                    <table class="min-w-full divide-y divide-gray-300 dark:divide-gray-600">
-                                        <thead class="bg-gray-50 dark:bg-gray-700">
-                                            <tr>
-                                                <th scope="col" class="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-gray-900 dark:text-white sm:pl-6">DEVICE</th>
-                                                <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900 dark:text-white">SIZE</th>
-                                                <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900 dark:text-white">MODEL</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody class="divide-y divide-gray-200 dark:divide-gray-600 bg-white dark:bg-gray-800">
-                                            {% for disk in machine.disks %}
-                                            <tr>
-                                                <td class="whitespace-nowrap py-4 pl-4 pr-3 text-sm font-medium text-gray-900 dark:text-white sm:pl-6">{{ disk.device }}</td>
-                                                <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500 dark:text-gray-400">
-                                                    {% if disk.calculated_size.is_some() %}
-                                                        {{ disk.calculated_size.as_ref().unwrap() }}
-                                                    {% else %}
-                                                        {{ disk.size_bytes }} bytes
-                                                    {% endif %}
-                                                </td>
-                                                <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500 dark:text-gray-400">
-                                                    {% if disk.model.is_some() %}
-                                                        {{ disk.model.as_ref().unwrap() }}
-                                                    {% else %}
-                                                        Unknown
-                                                    {% endif %}
-                                                </td>
-                                            </tr>
-                                            {% endfor %}
-                                        </tbody>
-                                    </table>
+            <div class="p-4 sm:p-6">
+                <div class="bg-purple-50 dark:bg-purple-900/10 rounded-lg shadow-sm overflow-hidden border border-purple-100 dark:border-purple-800/30">
+                    <div class="px-4 py-3 bg-purple-100 dark:bg-purple-800/30">
+                        <h3 class="text-lg font-medium leading-6 text-gray-900 dark:text-white">Storage</h3>
+                    </div>
+                    <div class="px-4 py-4">
+                        <div class="flex flex-col">
+                            <div class="-mx-4 overflow-x-auto sm:-mx-6 lg:-mx-8">
+                                <div class="inline-block min-w-full py-2 align-middle px-4 sm:px-6 lg:px-8">
+                                    <div class="overflow-hidden rounded-md shadow ring-1 ring-black ring-opacity-5">
+                                        <table class="min-w-full divide-y divide-gray-300 dark:divide-gray-600">
+                                            <thead class="bg-gray-50 dark:bg-gray-700">
+                                                <tr>
+                                                    <th scope="col" class="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-gray-900 dark:text-white sm:pl-6">DEVICE</th>
+                                                    <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900 dark:text-white">SIZE</th>
+                                                    <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900 dark:text-white">MODEL</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody class="divide-y divide-gray-200 dark:divide-gray-600 bg-white dark:bg-gray-800">
+                                                {% for disk in machine.disks %}
+                                                <tr>
+                                                    <td class="whitespace-nowrap py-4 pl-4 pr-3 text-sm font-medium text-gray-900 dark:text-white sm:pl-6">{{ disk.device }}</td>
+                                                    <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500 dark:text-gray-400">
+                                                        {% if disk.calculated_size.is_some() %}
+                                                            {{ disk.calculated_size.as_ref().unwrap() }}
+                                                        {% else %}
+                                                            {{ disk.size_bytes }} bytes
+                                                        {% endif %}
+                                                    </td>
+                                                    <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500 dark:text-gray-400">
+                                                        {% if disk.model.is_some() %}
+                                                            {{ disk.model.as_ref().unwrap() }}
+                                                        {% else %}
+                                                            Unknown
+                                                        {% endif %}
+                                                    </td>
+                                                </tr>
+                                                {% endfor %}
+                                            </tbody>
+                                        </table>
+                                    </div>
                                 </div>
                             </div>
                         </div>

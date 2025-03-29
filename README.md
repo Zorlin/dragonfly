@@ -43,27 +43,27 @@ The main highlights:
 - 🧚 Powered by Tinkerbell under the hood
   for wide compatibility and support for just about any hardware.
 - 🏎️ Deployment as fast as four minutes.
-- 🛰️ Distributed storage and IPFS deployment
+- 🛰️ (WIP) Distributed storage and IPFS deployment
   for integrated data management.
 
 More features:
-- 🔒 Login system with admin/user roles and permissions
-- 🔧 Reimage any machine in two clicks
+- 🔒 (WIP) Login system with admin/user roles and permissions
+- 🔧 (WIP) Reimage any machine in two clicks
 - 🧸 **Safety Mode (Molly Guard)** — avoid accidentally nuking a machine
-- 🚀 Built-in IPMI/BMC/Redfish power control
+- 🚀 (WIP) Built-in IPMI/BMC/Redfish power control
   and SSH control support for flexible node power operations.
-- 🧠 Effortless grouping and tagging for your machines,
+- 🧠 (WIP) Effortless grouping and tagging for your machines,
   and emoji/font-awesome icon support for easy visual identification.
-- 💈 Real-time deployment tracking with progress bars and status indicators.
-- 🖼️ Ready for Retina, ultrawide and kiosk displays
-- 🏷️ "Just Type" experience — with bulk editing, drag-fill, and autocomplete  
-- 🎨 Tailwind-powered theming — pick your aesthetic or import your own.
-- 🩻 Introspection - view details of your machines,
+- 💈 (WIP) Real-time deployment tracking with progress bars and status indicators.
+- 🖼️ (WIP) Ready for Retina, ultrawide and kiosk displays
+- 🏷️ (WIP) "Just Type" experience — with bulk editing, drag-fill, and autocomplete  
+- 🎨 (WIP) Tailwind-powered theming — pick your aesthetic or import your own.
+- 🩻 (WIP) Introspection - view details of your machines,
   including hardware, OS, and network configuration.
-- 🔍 Search - find any machine by name, tag, or ID.
-- 📊 Granular reporting and monitoring of your machines.
-- 📦 Built in image management for OS and drivers.
-- 🎮 Gamepad and touchscreeen support for easy navigation of the UI.
+- 🔍 (WIP) Search - find any machine by name, tag, or ID.
+- 📊 (WIP) Granular reporting and monitoring of your machines.
+- 📦 (WIP) Built in image management for OS and drivers.
+- 🎮 (WIP) Gamepad and touchscreeen support for easy navigation of the UI.
 
 ## 🛣️ Roadmap
 

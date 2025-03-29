@@ -29,4 +29,10 @@
 
 .delete-button:hover {
     opacity: 0.8;
+}
+
+/* Add monospace class for technical data like IPs and MACs */
+.tech-mono {
+    font-family: 'JetBrains Mono', monospace;
+    letter-spacing: -0.025em;
 } 

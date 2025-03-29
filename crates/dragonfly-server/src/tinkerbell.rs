@@ -46,7 +46,43 @@ pub async fn init() -> Result<()> {
 
 // Get the Kubernetes client
 async fn get_client() -> Result<&'static Client> {
-    KUBE_CLIENT.get().ok_or_else(|| anyhow!("Kubernetes client not initialized"))
+    if KUBE_CLIENT.get().is_none() {
+        info!("Kubernetes client not initialized, initializing now");
+        
+        // Expand the tilde in KUBECONFIG if present
+        if let Ok(kubeconfig) = std::env::var("KUBECONFIG") {
+            if kubeconfig.starts_with('~') {
+                // Replace tilde with home directory
+                if let Ok(home) = std::env::var("HOME") {
+                    let expanded_path = kubeconfig.replacen('~', &home, 1);
+                    std::env::set_var("KUBECONFIG", &expanded_path);
+                    info!("Expanded KUBECONFIG path: {}", expanded_path);
+                }
+            }
+        }
+        
+        // Create a new client using the current environment (KUBECONFIG)
+        let client = match Client::try_default().await {
+            Ok(client) => client,
+            Err(e) => {
+                return Err(anyhow!("Failed to create Kubernetes client: {}", e));
+            }
+        };
+        
+        // Test the client to ensure it can connect to the cluster
+        if let Err(e) = client.apiserver_version().await {
+            return Err(anyhow!("Failed to connect to Kubernetes API server: {}", e));
+        }
+        
+        // Set the global client
+        if let Err(_) = KUBE_CLIENT.set(client) {
+            return Err(anyhow!("Failed to set global Kubernetes client"));
+        }
+        
+        info!("Kubernetes client initialized successfully");
+    }
+    
+    KUBE_CLIENT.get().ok_or_else(|| anyhow!("Kubernetes client initialization failed"))
 }
 
 // Define the Hardware Custom Resource using serde
@@ -389,8 +425,15 @@ pub async fn create_workflow(machine: &Machine, _os_choice: &str) -> Result<()> 
     info!("Creating workflow {} for machine {}", resource_name, machine.id);
     
     // Map OS choice to template reference
-    // For now, hardcode as "ubuntu" for testing as requested
-    let template_ref = "ubuntu";
+    let template_ref = match machine.os_choice.as_ref() {
+        Some(os) if os == "ubuntu-2204" => "ubuntu-2204",
+        Some(os) if os == "ubuntu-2404" => "ubuntu-2404",
+        Some(os) if os == "debian-12" => "debian-12",
+        Some(os) if os == "proxmox" => "proxmox",
+        Some(os) if os == "talos" => "talos",
+        Some(os) => os,
+        None => "ubuntu-2204", // Default if no OS choice is specified
+    };
     
     // Create the Workflow resource
     let workflow_json = serde_json::json!({

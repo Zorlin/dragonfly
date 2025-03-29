@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Json, Path, Form, FromRequest},
+    extract::{Json, Path, Form, FromRequest, State},
     http::StatusCode,
     response::{IntoResponse, Response, Html, Sse},
     response::sse::{Event, KeepAlive},
@@ -197,10 +197,10 @@ async fn get_all_machines(
                                     </div>
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap">
-                                    <div class="text-sm text-gray-500">{}</div>
+                                    <div class="text-sm text-gray-500 tech-mono">{}</div>
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap">
-                                    <div class="text-sm text-gray-500">{}</div>
+                                    <div class="text-sm text-gray-500 tech-mono">{}</div>
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap">
                                     <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {}">
@@ -446,18 +446,10 @@ async fn assign_os_internal(id: Uuid, os_choice: String) -> Response {
 }
 
 async fn update_status(
-    auth_session: AuthSession,
+    _auth_session: AuthSession,
     Path(id): Path<Uuid>,
     req: axum::http::Request<axum::body::Body>,
 ) -> Response {
-    // Check if user is authenticated as admin
-    if auth_session.user.is_none() {
-        return (StatusCode::UNAUTHORIZED, Json(json!({
-            "error": "Unauthorized",
-            "message": "Admin authentication required for this operation"
-        }))).into_response();
-    }
-
     // Check content type to determine how to extract the status
     let content_type = req.headers()
         .get(axum::http::header::CONTENT_TYPE)
@@ -512,13 +504,34 @@ async fn update_status(
 
     info!("Updating status for machine {} to {:?}", id, status);
     
-    match db::update_status(&id, status).await {
+    match db::update_status(&id, status.clone()).await {
         Ok(true) => {
             // Get the updated machine to update Tinkerbell
             if let Ok(Some(machine)) = db::get_machine_by_id(&id).await {
                 // Update the machine in Tinkerbell (don't fail if this fails)
                 if let Err(e) = crate::tinkerbell::register_machine(&machine).await {
                     warn!("Failed to update machine in Tinkerbell (continuing anyway): {}", e);
+                }
+                
+                // If the status is AwaitingAssignment, check if we should apply a default OS
+                if status == MachineStatus::AwaitingAssignment {
+                    // Check if a default OS is configured
+                    if let Ok(settings) = db::get_app_settings().await {
+                        if let Some(default_os) = settings.default_os {
+                            info!("Applying default OS '{}' to newly registered machine {}", default_os, id);
+                            // Assign the OS and trigger installation
+                            if let Ok(true) = db::assign_os(&id, &default_os).await {
+                                // Update Tinkerbell workflow
+                                if let Ok(Some(updated_machine)) = db::get_machine_by_id(&id).await {
+                                    if let Err(e) = crate::tinkerbell::create_workflow(&updated_machine, &default_os).await {
+                                        warn!("Failed to create Tinkerbell workflow for default OS (continuing anyway): {}", e);
+                                    } else {
+                                        info!("Created Tinkerbell workflow for default OS installation");
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
             
@@ -615,18 +628,10 @@ async fn update_hostname(
 }
 
 async fn update_os_installed(
-    auth_session: AuthSession,
+    _auth_session: AuthSession,
     Path(id): Path<Uuid>,
     Json(payload): Json<OsInstalledUpdateRequest>,
 ) -> Response {
-    // Check if user is authenticated as admin
-    if auth_session.user.is_none() {
-        return (StatusCode::UNAUTHORIZED, Json(json!({
-            "error": "Unauthorized",
-            "message": "Admin authentication required for this operation"
-        }))).into_response();
-    }
-
     info!("Updating OS installed for machine {} to {}", id, payload.os_installed);
     
     match db::update_os_installed(&id, &payload.os_installed).await {
@@ -1025,9 +1030,11 @@ async fn get_machine_os(Path(id): Path<String>) -> Response {
                                 name="os_choice"
                                 class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md"
                             >
+                                <option value="ubuntu-2204">Ubuntu 22.04</option>
                                 <option value="ubuntu-2404">Ubuntu 24.04</option>
                                 <option value="debian-12">Debian 12</option>
                                 <option value="proxmox">Proxmox VE</option>
+                                <option value="talos">Talos</option>
                             </select>
                         </div>
                         <div class="mt-5 sm:mt-4 sm:flex sm:flex-row-reverse">
@@ -1126,6 +1133,7 @@ fn format_os_name(os: &str) -> String {
         "ubuntu-2404" => "Ubuntu 24.04",
         "debian-12" => "Debian 12",
         "proxmox" => "Proxmox VE",
+        "talos" => "Talos",
         _ => os,
     }.to_string()
 }

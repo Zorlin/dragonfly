@@ -528,7 +528,7 @@ async fn main() -> Result<()> {
             // Update machine status with the OS information
             tracing::info!("Updating machine status with OS information...");
             let status_update = StatusUpdateRequest {
-                status: current_status,
+                status: MachineStatus::AwaitingAssignment,
                 message: None,
             };
             

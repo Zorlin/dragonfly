@@ -104,11 +104,8 @@ pub async fn init(addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
     
     // Start the server
     info!("Starting server at {}", addr);
-    axum::serve(
-        tokio::net::TcpListener::bind(addr).await?,
-        app.into_make_service()
-    )
-    .await?;
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, app.into_make_service()).await?;
     
     Ok(())
 } 

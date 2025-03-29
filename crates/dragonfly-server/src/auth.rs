@@ -48,12 +48,14 @@ pub struct Admin {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub require_login: bool,
+    pub default_os: Option<String>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
             require_login: false,
+            default_os: None,
         }
     }
 }

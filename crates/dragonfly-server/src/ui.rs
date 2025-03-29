@@ -72,6 +72,12 @@ pub struct SettingsTemplate {
     pub is_authenticated: bool,
     pub admin_username: String,
     pub require_login: bool,
+    pub default_os_none: bool,
+    pub default_os_ubuntu2204: bool,
+    pub default_os_ubuntu2404: bool,
+    pub default_os_debian12: bool,
+    pub default_os_proxmox: bool,
+    pub default_os_talos: bool,
     pub has_initial_password: bool,
     pub rendered_password: String,
     pub show_admin_settings: bool,
@@ -384,7 +390,10 @@ pub async fn settings_page(
     let is_authenticated = auth_session.user.is_some();
     
     // Get current settings
-    let require_login = app_state.settings.lock().await.require_login;
+    let settings_lock = app_state.settings.lock().await;
+    let require_login = settings_lock.require_login;
+    let default_os = settings_lock.default_os.clone();
+    drop(settings_lock);
     
     // If require_login is enabled and user is not authenticated,
     // redirect to login page
@@ -429,6 +438,12 @@ pub async fn settings_page(
         is_authenticated,
         admin_username,
         require_login,
+        default_os_none: default_os.is_none(),
+        default_os_ubuntu2204: default_os.as_deref() == Some("ubuntu-2204"),
+        default_os_ubuntu2404: default_os.as_deref() == Some("ubuntu-2404"),
+        default_os_debian12: default_os.as_deref() == Some("debian-12"),
+        default_os_proxmox: default_os.as_deref() == Some("proxmox"),
+        default_os_talos: default_os.as_deref() == Some("talos"),
         has_initial_password,
         rendered_password,
         show_admin_settings,
@@ -440,6 +455,7 @@ pub async fn settings_page(
 pub struct SettingsForm {
     pub theme: String,
     pub require_login: Option<String>,
+    pub default_os: Option<String>,
     pub username: Option<String>,
     pub old_password: Option<String>,
     pub password: Option<String>,
@@ -476,14 +492,28 @@ pub async fn update_settings(
     
     // Apply admin settings if authenticated
     if auth_session.user.is_some() {
-        // Update require_login setting
+        // Process default OS setting - if empty string, convert to None
+        let default_os = match &form.default_os {
+            Some(os) if !os.is_empty() => {
+                info!("Setting default OS to: {}", os);
+                Some(os.clone())
+            },
+            _ => {
+                info!("Clearing default OS setting");
+                None
+            }
+        };
+        
+        // Update settings
         let mut settings = app_state.settings.lock().await;
         settings.require_login = form.require_login.is_some();
+        settings.default_os = default_os.clone();
         drop(settings);
         
         // Save settings to disk
         let _ = save_settings(&Settings {
             require_login: form.require_login.is_some(),
+            default_os,
         }).await;
         
         // Update admin credentials if old password and new password are provided

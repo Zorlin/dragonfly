@@ -97,8 +97,8 @@ spec:
             timeout: 90
             pid: host
             environment:
-                BLOCK_DEVICE: {{ formatPartition ( index .Hardware.Disks 0 ) 3 }}
+                BLOCK_DEVICE: {{ formatPartition ( index .Hardware.Disks 0 ) 1 }}
                 FS_TYPE: ext4
                 KERNEL_PATH: /boot/vmlinuz
-                INITRD_PATH: /boot/initrd
-                CMD_LINE: "root={{ formatPartition ( index .Hardware.Disks 0 ) 3 }} ro"
+                INITRD_PATH: /boot/initrd.img
+                CMD_LINE: "root={{ formatPartition ( index .Hardware.Disks 0 ) 1 }} ro"

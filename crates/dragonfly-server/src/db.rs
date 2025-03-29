@@ -141,12 +141,16 @@ pub async fn register_machine(req: &RegisterRequest) -> Result<Uuid> {
         return Ok(machine_id);
     }
     
-    // Machine doesn't exist, create a new one
+    // Machine doesn't exist, create a new one with a new ID
     let machine_id = Uuid::new_v4();
     
     // Serialize disks and nameservers as JSON
     let disks_json = serde_json::to_string(&req.disks)?;
     let nameservers_json = serde_json::to_string(&req.nameservers)?;
+    
+    // Always start with AwaitingAssignment status
+    // Default OS will be applied after the status update from the agent
+    let status_json = serde_json::to_string(&MachineStatus::AwaitingAssignment)?;
     
     // Insert the new machine
     let result = sqlx::query(
@@ -159,7 +163,7 @@ pub async fn register_machine(req: &RegisterRequest) -> Result<Uuid> {
     .bind(&req.mac_address)
     .bind(&req.ip_address)
     .bind(&req.hostname)
-    .bind(serde_json::to_string(&MachineStatus::AwaitingAssignment)?)
+    .bind(status_json)
     .bind(&disks_json)
     .bind(&nameservers_json)
     .bind(&now_str)
@@ -817,6 +821,43 @@ async fn migrate_db(pool: &Pool<Sqlite>) -> Result<()> {
         .await?;
     }
     
+    // Check if default_os column exists in app_settings table
+    // First check if the app_settings table exists
+    let result = sqlx::query(
+        r#"
+        SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='app_settings'
+        "#,
+    )
+    .fetch_one(pool)
+    .await?;
+    
+    let table_exists: i64 = result.get(0);
+    
+    if table_exists > 0 {
+        // Table exists, check for the column
+        let result = sqlx::query(
+            r#"
+            SELECT COUNT(*) AS count FROM pragma_table_info('app_settings') WHERE name = 'default_os'
+            "#,
+        )
+        .fetch_one(pool)
+        .await?;
+        
+        let column_exists: i64 = result.get(0);
+        
+        // Add default_os column if it doesn't exist
+        if column_exists == 0 {
+            info!("Adding default_os column to app_settings table");
+            sqlx::query(
+                r#"
+                ALTER TABLE app_settings ADD COLUMN default_os TEXT
+                "#,
+            )
+            .execute(pool)
+            .await?;
+        }
+    }
+    
     Ok(())
 }
 
@@ -947,6 +988,7 @@ pub async fn get_app_settings() -> Result<Settings> {
         CREATE TABLE IF NOT EXISTS app_settings (
             id INTEGER PRIMARY KEY CHECK (id = 1), -- Only one settings record allowed
             require_login BOOLEAN NOT NULL,
+            default_os TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
@@ -958,7 +1000,7 @@ pub async fn get_app_settings() -> Result<Settings> {
     // Try to get settings
     let row = sqlx::query(
         r#"
-        SELECT require_login FROM app_settings WHERE id = 1
+        SELECT require_login, default_os FROM app_settings WHERE id = 1
         "#,
     )
     .fetch_optional(pool)
@@ -966,9 +1008,11 @@ pub async fn get_app_settings() -> Result<Settings> {
     
     if let Some(row) = row {
         let require_login: bool = row.get(0);
+        let default_os: Option<String> = row.get(1);
         
         Ok(Settings {
             require_login,
+            default_os,
         })
     } else {
         // No settings found, insert default settings
@@ -978,11 +1022,12 @@ pub async fn get_app_settings() -> Result<Settings> {
         
         sqlx::query(
             r#"
-            INSERT INTO app_settings (id, require_login, created_at, updated_at)
-            VALUES (1, ?, ?, ?)
+            INSERT INTO app_settings (id, require_login, default_os, created_at, updated_at)
+            VALUES (1, ?, ?, ?, ?)
             "#,
         )
         .bind(default_settings.require_login)
+        .bind(&default_settings.default_os)
         .bind(&now_str)
         .bind(&now_str)
         .execute(pool)
@@ -1001,14 +1046,16 @@ pub async fn save_app_settings(settings: &Settings) -> Result<()> {
     // Update existing settings or insert if they don't exist (upsert pattern)
     sqlx::query(
         r#"
-        INSERT INTO app_settings (id, require_login, created_at, updated_at)
-        VALUES (1, ?, ?, ?)
+        INSERT INTO app_settings (id, require_login, default_os, created_at, updated_at)
+        VALUES (1, ?, ?, ?, ?)
         ON CONFLICT (id) DO UPDATE SET
         require_login = excluded.require_login,
+        default_os = excluded.default_os,
         updated_at = excluded.updated_at
         "#,
     )
     .bind(settings.require_login)
+    .bind(&settings.default_os)
     .bind(&now_str)
     .bind(&now_str)
     .execute(pool)

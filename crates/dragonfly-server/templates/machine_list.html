@@ -198,16 +198,20 @@
 
         evtSource = new EventSource('/api/events');
         
-        evtSource.onmessage = function(event) {
-            try {
-                const data = JSON.parse(event.data);
-                if (data.type === 'machine_updated' || data.type === 'machine_discovered' || data.type === 'machine_deleted') {
-                    debouncedRefresh();
-                }
-            } catch (err) {
-                console.error('Error parsing event:', err);
-            }
-        };
+        evtSource.addEventListener('machine_discovered', function(event) {
+            console.log('New machine discovered!');
+            debouncedRefresh();
+        });
+        
+        evtSource.addEventListener('machine_updated', function(event) {
+            console.log('Machine updated!');
+            debouncedRefresh();
+        });
+        
+        evtSource.addEventListener('machine_deleted', function(event) {
+            console.log('Machine deleted!');
+            debouncedRefresh();
+        });
 
         evtSource.onopen = function() {
             console.log('EventSource connected');
