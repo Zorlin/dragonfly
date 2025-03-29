@@ -790,13 +790,6 @@ pub async fn get_workflow_info(machine: &Machine) -> Result<Option<WorkflowInfo>
                         store_timing_info(template_ref, &tasks);
                     }
                     
-                    // Update machine status to Ready
-                    if let Err(e) = update_machine_status_on_success(machine).await {
-                        warn!("Failed to update machine status after kexec detection: {}", e);
-                    } else {
-                        info!("Successfully marked machine {} as Ready", machine.id);
-                    }
-                    
                     // Create a special WorkflowInfo to indicate this was handled by the hack
                     let workflow_info = WorkflowInfo {
                         state: "STATE_SUCCESS".to_string(),
@@ -810,6 +803,24 @@ pub async fn get_workflow_info(machine: &Machine) -> Result<Option<WorkflowInfo>
                     // Store the completed workflow info
                     if let Err(e) = crate::db::store_completed_workflow(&machine.id, &workflow_info).await {
                         warn!("Failed to store completed workflow info: {}", e);
+                    } else {
+                        info!("Successfully stored completed workflow info for {}", machine.id);
+                    }
+                    
+                    // Send a machine_updated event to refresh the UI
+                    if let Some(event_manager) = get_event_manager() {
+                        info!("Sending machine_updated event after kexec detection success for: {}", machine.id);
+                        event_manager.send(format!("machine_updated:{}", machine.id));
+                    }
+                    
+                    // Add a short delay to ensure the UI has time to update and show the completion message
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    
+                    // Update machine status to Ready AFTER UI has chance to show completion message
+                    if let Err(e) = update_machine_status_on_success(machine).await {
+                        warn!("Failed to update machine status after kexec detection: {}", e);
+                    } else {
+                        info!("Successfully marked machine {} as Ready", machine.id);
                     }
                     
                     // Delete the workflow
@@ -1124,21 +1135,41 @@ async fn update_machine_status_on_failure(machine: &Machine) -> Result<()> {
 // Update machine status when workflow succeeds
 async fn update_machine_status_on_success(machine: &Machine) -> Result<()> {
     use dragonfly_common::models::MachineStatus;
+    use dragonfly_common::models::Machine;
+    use anyhow::anyhow;
     
     info!("Workflow completed successfully for machine {}, updating status to Ready", machine.id);
     
-    let mut updated_machine = machine.clone();
-    updated_machine.status = MachineStatus::Ready;
-    
-    // Calculate deployment duration from when the machine was marked as InstallingOS
-    if machine.status == MachineStatus::InstallingOS {
-        let now = chrono::Utc::now();
-        let duration = now.signed_duration_since(machine.updated_at).num_seconds();
-        updated_machine.last_deployment_duration = Some(duration);
+    // First update just the status for reliability
+    match crate::db::update_status(&machine.id, MachineStatus::Ready).await {
+        Ok(true) => {
+            info!("Successfully updated status to Ready for machine {}", machine.id);
+            
+            // Calculate deployment duration
+            if machine.status == MachineStatus::InstallingOS {
+                let now = chrono::Utc::now();
+                let duration = now.signed_duration_since(machine.updated_at).num_seconds();
+                
+                // Try to update the duration separately
+                if let Err(e) = crate::db::update_machine(&Machine {
+                    last_deployment_duration: Some(duration),
+                    ..machine.clone()
+                }).await {
+                    warn!("Failed to update deployment duration: {}", e);
+                }
+            }
+            
+            Ok(())
+        },
+        Ok(false) => {
+            error!("Failed to update machine status - machine not found: {}", machine.id);
+            Err(anyhow!("Machine not found"))
+        },
+        Err(e) => {
+            error!("Failed to update machine status: {}", e);
+            Err(e)
+        }
     }
-    
-    crate::db::update_machine(&updated_machine).await?;
-    Ok(())
 }
 
 // Helper function to format remaining time in a human-readable way

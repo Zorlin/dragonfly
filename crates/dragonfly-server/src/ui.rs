@@ -54,6 +54,7 @@ pub struct MachineListTemplate {
     pub machines: Vec<Machine>,
     pub theme: String,
     pub is_authenticated: bool,
+    pub is_admin: bool,
     pub workflow_infos: HashMap<uuid::Uuid, crate::tinkerbell::WorkflowInfo>,
 }
 
@@ -247,6 +248,7 @@ pub async fn machine_list(
     // Get theme preference from cookie
     let theme = get_theme_from_cookie(&headers);
     let is_authenticated = auth_session.user.is_some();
+    let is_admin = is_authenticated;
     
     // Check if login is required site-wide
     let require_login = app_state.settings.lock().await.require_login;
@@ -264,11 +266,22 @@ pub async fn machine_list(
                 info!("Found {} machines", machines.len());
             }
             
+            // Get workflow info for machines that are installing OS
+            let mut workflow_infos = HashMap::new();
+            for machine in &machines {
+                if machine.status == MachineStatus::InstallingOS {
+                    if let Ok(Some(info)) = crate::tinkerbell::get_workflow_info(machine).await {
+                        workflow_infos.insert(machine.id, info);
+                    }
+                }
+            }
+            
             UiTemplate::MachineList(MachineListTemplate { 
                 machines,
                 theme,
                 is_authenticated,
-                workflow_infos: HashMap::new(),
+                is_admin,
+                workflow_infos,
             }).into_response()
         },
         Err(e) => {
@@ -277,6 +290,7 @@ pub async fn machine_list(
                 machines: vec![],
                 theme: "system".to_string(),
                 is_authenticated,
+                is_admin,
                 workflow_infos: HashMap::new(),
             }).into_response()
         }

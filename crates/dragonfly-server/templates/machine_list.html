@@ -33,7 +33,7 @@
                                     OS
                                 </th>
                                 <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                                    Progress
+                                    Actions
                                 </th>
                             </tr>
                         </thead>
@@ -103,11 +103,37 @@
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
                                     {% if machine.status == MachineStatus::InstallingOS %}
                                         {% if let Some(info) = workflow_infos.get(machine.id) %}
-                                            <div class="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700">
-                                                <div class="bg-yellow-500 h-2.5 rounded-full dark:bg-yellow-600" style="width: {{ info.progress }}%"></div>
+                                            <div class="flex flex-col space-y-1">
+                                                <div class="flex justify-between text-xs">
+                                                    <span>{{ info.progress }}%</span>
+                                                    {% if info.current_action.is_some() %}
+                                                        <span class="ml-2 truncate max-w-[120px]">
+                                                            {{ info.current_action.as_ref().unwrap() }}
+                                                        </span>
+                                                    {% endif %}
+                                                </div>
+                                                <div class="w-full bg-gray-200 rounded-full h-2 dark:bg-gray-700">
+                                                    <div class="bg-yellow-500 h-2 rounded-full dark:bg-yellow-600 workflow-progress-bar" data-machine-id="{{ machine.id }}" data-progress="{{ info.progress }}" style="width: {{ info.progress }}%"></div>
+                                                </div>
                                             </div>
-                                            <div class="text-xs mt-1 text-center">{{ info.progress }}%</div>
                                         {% endif %}
+                                    {% else %}
+                                        <div class="flex space-x-1">
+                                            <a href="/machines/{{ machine.id }}" class="inline-flex items-center px-2.5 py-1 border border-transparent text-xs leading-4 font-medium rounded text-indigo-700 bg-indigo-100 hover:bg-indigo-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 dark:bg-indigo-900 dark:text-indigo-200 dark:hover:bg-indigo-800">
+                                                View
+                                            </a>
+                                            {% if is_admin %}
+                                                <button onclick="showOsModal('{{ machine.id }}')" class="inline-flex items-center px-2.5 py-1 border border-transparent text-xs leading-4 font-medium rounded text-emerald-700 bg-emerald-100 hover:bg-emerald-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 dark:bg-emerald-900 dark:text-emerald-200 dark:hover:bg-emerald-800">
+                                                    OS
+                                                </button>
+                                                <button onclick="showStatusModal('{{ machine.id }}')" class="inline-flex items-center px-2.5 py-1 border border-transparent text-xs leading-4 font-medium rounded text-yellow-700 bg-yellow-100 hover:bg-yellow-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500 dark:bg-yellow-900 dark:text-yellow-200 dark:hover:bg-yellow-800">
+                                                    Status
+                                                </button>
+                                                <button onclick="showDeleteModal('{{ machine.id }}')" class="inline-flex items-center px-2.5 py-1 border border-transparent text-xs leading-4 font-medium rounded text-red-700 bg-red-100 hover:bg-red-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 dark:bg-red-900 dark:text-red-200 dark:hover:bg-red-800">
+                                                    Delete
+                                                </button>
+                                            {% endif %}
+                                        </div>
                                     {% endif %}
                                 </td>
                             </tr>
@@ -267,6 +293,83 @@
     let evtSource = null;
     let reconnectAttempts = 0;
     const MAX_RECONNECT_ATTEMPTS = 5;
+    
+    // Map to track progress bars on the page
+    let progressBars = {};
+    let animationFrameId = null;
+    
+    // Function to update progress bars with smooth animation
+    function updateProgressBarsAnimation() {
+        let needsUpdate = false;
+        
+        // Update each progress bar
+        for (const machineId in progressBars) {
+            const {current, target} = progressBars[machineId];
+            if (Math.abs(current - target) > 0.1) {
+                // Smoothly animate towards target
+                const delta = (target - current) * 0.1;
+                progressBars[machineId].current += delta;
+                needsUpdate = true;
+                
+                // Update the DOM
+                const progressBar = document.querySelector(`.workflow-progress-bar[data-machine-id="${machineId}"]`);
+                if (progressBar) {
+                    // Update width
+                    progressBar.style.width = `${Math.round(progressBars[machineId].current)}%`;
+                    
+                    // Update text
+                    const textDisplay = progressBar.closest('div').previousElementSibling.querySelector('span:first-child');
+                    if (textDisplay) {
+                        textDisplay.textContent = `${Math.round(progressBars[machineId].current)}%`;
+                    }
+                }
+            }
+        }
+        
+        // Continue animation if needed
+        if (needsUpdate) {
+            animationFrameId = requestAnimationFrame(updateProgressBarsAnimation);
+        } else {
+            animationFrameId = null;
+        }
+    }
+    
+    // Initialize progress tracking
+    function initializeProgressBars() {
+        progressBars = {};
+        document.querySelectorAll('.workflow-progress-bar').forEach(bar => {
+            const machineId = bar.getAttribute('data-machine-id');
+            const progress = parseInt(bar.getAttribute('data-progress'), 10);
+            
+            progressBars[machineId] = {
+                current: progress,
+                target: progress
+            };
+        });
+        
+        // Start animation if not already running
+        if (Object.keys(progressBars).length > 0 && !animationFrameId) {
+            animationFrameId = requestAnimationFrame(updateProgressBarsAnimation);
+        }
+    }
+    
+    // Update progress targets when the machine list refreshes
+    document.addEventListener('htmx:afterSwap', function(event) {
+        if (event.detail.target.id === 'machine-list') {
+            // Save the current progress values
+            const oldProgressBars = {...progressBars};
+            
+            // Initialize with new elements
+            initializeProgressBars();
+            
+            // Reuse old progress values for bars that existed before
+            for (const machineId in oldProgressBars) {
+                if (progressBars[machineId]) {
+                    progressBars[machineId].current = oldProgressBars[machineId].current;
+                }
+            }
+        }
+    });
 
     function connectEventSource() {
         if (evtSource) {
@@ -315,11 +418,19 @@
 
     // Initial connection
     connectEventSource();
+    
+    // Initialize progress bars on page load
+    document.addEventListener('DOMContentLoaded', function() {
+        initializeProgressBars();
+    });
 
     // Clean up when leaving the page
     window.addEventListener('beforeunload', () => {
         if (evtSource) {
             evtSource.close();
+        }
+        if (animationFrameId) {
+            cancelAnimationFrame(animationFrameId);
         }
     });
 </script>

@@ -1,0 +1,129 @@
+<div class="border-t border-gray-200 dark:border-gray-700 p-4 sm:p-6 bg-yellow-50 dark:bg-yellow-900/10"
+     id="workflow-progress-container"
+     hx-sse="connect:/api/events">
+    <div class="mb-4">
+        <h3 class="text-lg font-medium leading-6 text-gray-900 dark:text-yellow-100">Deployment Progress</h3>
+        <p class="mt-1 text-sm text-gray-500 dark:text-gray-300">
+            Template: <span class="font-semibold">{{ workflow_info.as_ref().unwrap().template_name }}</span> 
+            {% if workflow_info.as_ref().unwrap().current_action.is_some() %}
+                • Current action: {{ workflow_info.as_ref().unwrap().current_action.as_ref().unwrap() }}
+                {% if workflow_info.as_ref().unwrap().current_action.as_ref().unwrap() == "Completed via kexec detection" %}
+                    <span class="ml-2 italic">(Auto-detected successful deployment)</span>
+                {% endif %}
+            {% endif %}
+        </p>
+    </div>
+    
+    <div class="relative pt-1">
+        <div class="flex mb-2 items-center justify-between">
+            <div>
+                <span class="text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full 
+                    {% if workflow_info.as_ref().unwrap().state == "STATE_FAILED" %}
+                        text-red-600 bg-red-200 dark:text-red-200 dark:bg-red-800/30
+                    {% else %}
+                        text-yellow-600 bg-yellow-200 dark:text-yellow-200 dark:bg-yellow-800/30
+                    {% endif %}">
+                    {% if workflow_info.as_ref().unwrap().state == "STATE_FAILED" %}
+                        Failed
+                    {% else %}
+                        In Progress
+                    {% endif %}
+                </span>
+            </div>
+            <div class="text-right">
+                <span class="text-xs font-semibold inline-block text-yellow-600 dark:text-yellow-200 workflow-progress-percent">
+                    {{ workflow_info.as_ref().unwrap().progress }}% Complete
+                </span>
+            </div>
+        </div>
+        <div class="overflow-hidden h-2 mb-4 text-xs flex rounded bg-yellow-200 dark:bg-yellow-700/30">
+            <div 
+                class="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center 
+                {% if workflow_info.as_ref().unwrap().state == "STATE_FAILED" %}
+                    bg-red-500 dark:bg-red-600
+                {% else %}
+                    bg-yellow-500 dark:bg-yellow-600
+                {% endif %} workflow-overall-progress" 
+                style="width: {{ workflow_info.as_ref().unwrap().progress }}%;"
+                data-progress="{{ workflow_info.as_ref().unwrap().progress }}">
+            </div>
+        </div>
+    </div>
+    
+    <div class="mt-4">
+        <h4 class="text-sm font-medium leading-6 text-gray-700 dark:text-gray-200 mb-2">Task Timeline</h4>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-600">
+                <thead class="bg-gray-50 dark:bg-gray-700">
+                    <tr>
+                        <th scope="col" class="px-3 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Action</th>
+                        <th scope="col" class="px-3 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Started At</th>
+                        <th scope="col" class="px-3 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Duration</th>
+                        <th scope="col" class="px-3 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Est. Duration</th>
+                        <th scope="col" class="px-3 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Status</th>
+                    </tr>
+                </thead>
+                <tbody class="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
+                    {% for task in workflow_info.as_ref().unwrap().tasks %}
+                        <tr>
+                            <td class="px-3 py-2 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-white">{{ task.name }}</td>
+                            <td class="px-3 py-2 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{{ task.started_at }}</td>
+                            <td class="px-3 py-2 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400" 
+                                data-task-name="{{ task.name }}" 
+                                data-task-status="{{ task.status }}" 
+                                data-started-at="{{ task.started_at }}"
+                                data-estimated-duration="{{ task.estimated_duration }}">
+                                {% if task.status == "STATE_SUCCESS" %}
+                                    {{ task.reported_duration }}s
+                                {% else if task.status == "STATE_RUNNING" %}
+                                    <div class="relative w-32">
+                                        <div class="overflow-hidden h-2 text-xs flex rounded bg-blue-200 dark:bg-blue-700/30">
+                                            <div class="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center bg-blue-500 dark:bg-blue-600 task-progress-bar" 
+                                                 style="width: {{ task.progress }}%">
+                                            </div>
+                                        </div>
+                                        <div class="text-xs mt-1 task-progress-percent">{{ task.progress }}%</div>
+                                    </div>
+                                {% else %}
+                                    Pending
+                                {% endif %}
+                            </td>
+                            <td class="px-3 py-2 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+                                {{ task.estimated_duration }}s
+                                {% if task.reported_duration != task.estimated_duration %}
+                                    {% if task.status == "STATE_SUCCESS" %}
+                                        {% if task.reported_duration > task.estimated_duration %}
+                                            <span class="text-red-500 ml-1">(+{{ task.reported_duration - task.estimated_duration }}s)</span>
+                                        {% else %}
+                                            <span class="text-green-500 ml-1">(-{{ task.estimated_duration - task.reported_duration }}s)</span>
+                                        {% endif %}
+                                    {% endif %}
+                                {% endif %}
+                            </td>
+                            <td class="px-3 py-2 whitespace-nowrap text-sm">
+                                <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full 
+                                    {% if task.status == "STATE_SUCCESS" %}
+                                        bg-green-100 text-green-800 dark:bg-green-400/10 dark:text-green-300
+                                    {% else if task.status == "STATE_FAILED" %}
+                                        bg-red-100 text-red-800 dark:bg-red-400/10 dark:text-red-300
+                                    {% else if task.status == "STATE_RUNNING" %}
+                                        bg-yellow-100 text-yellow-800 dark:bg-yellow-400/10 dark:text-yellow-300
+                                    {% else %}
+                                        bg-gray-100 text-gray-800 dark:bg-gray-400/10 dark:text-gray-300
+                                    {% endif %}">
+                                    {{ task.status }}
+                                </span>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        
+        {% if workflow_info.as_ref().unwrap().estimated_completion.is_some() %}
+        <div class="mt-4 text-sm text-gray-600 dark:text-gray-300">
+            <p>Estimated completion: {{ workflow_info.as_ref().unwrap().estimated_completion.as_ref().unwrap() }}</p>
+        </div>
+        {% endif %}
+    </div>
+</div> 

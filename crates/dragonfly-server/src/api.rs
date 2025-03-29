@@ -1197,6 +1197,7 @@ pub async fn get_machine_list(State(state): State<AppState>, headers: HeaderMap)
                 workflow_infos,
                 theme: crate::ui::get_theme_from_cookie(&headers),
                 is_authenticated: true, // Since this is an API endpoint, we assume auth is handled by middleware
+                is_admin: true, // Similar to is_authenticated, we assume admin auth is handled by middleware
             }.render().unwrap_or_else(|e| {
                 error!("Failed to render machine list template: {}", e);
                 "Template error".to_string()
