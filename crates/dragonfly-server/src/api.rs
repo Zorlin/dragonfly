@@ -1,6 +1,6 @@
 use axum::{
-    extract::{Json, Path, Form, FromRequest, State},
-    http::StatusCode,
+    extract::{Json, Path, Form, FromRequest, State, Extension},
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response, Html, Sse},
     response::sse::{Event, KeepAlive},
     routing::{post, get, delete, put},
@@ -18,6 +18,10 @@ use std::time::Duration;
 use serde::Serialize;
 use crate::auth::AuthSession;
 use crate::AppState;
+use std::collections::HashMap;
+use crate::ui::{MachineListTemplate, WorkflowProgressTemplate};
+use askama::Template;
+use std::sync::Arc;
 
 use crate::db;
 
@@ -38,6 +42,7 @@ pub fn api_router() -> Router<crate::AppState> {
         .route("/machines/{id}/bmc", post(update_bmc))
         .route("/machines/{id}/progress", post(update_installation_progress))
         .route("/events", get(machine_events))
+        .route("/machines/{id}/workflow-progress", get(get_workflow_progress))
 }
 
 async fn register_machine(
@@ -90,6 +95,16 @@ async fn get_all_machines(
 
     match db::get_all_machines().await {
         Ok(machines) => {
+            // Get workflow info for machines that are installing OS
+            let mut workflow_infos = HashMap::new();
+            for machine in &machines {
+                if machine.status == MachineStatus::InstallingOS {
+                    if let Ok(Some(info)) = crate::tinkerbell::get_workflow_info(machine).await {
+                        workflow_infos.insert(machine.id, info);
+                    }
+                }
+            }
+
             if is_htmx {
                 // For HTMX requests, return HTML table rows
                 if machines.is_empty() {
@@ -1161,5 +1176,67 @@ async fn update_installation_progress(
             };
             (StatusCode::INTERNAL_SERVER_ERROR, Json(error_response)).into_response()
         }
+    }
+}
+
+pub async fn get_machine_list(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    match db::get_all_machines().await {
+        Ok(machines) => {
+            // Get workflow info for machines that are installing OS
+            let mut workflow_infos = HashMap::new();
+            for machine in &machines {
+                if machine.status == MachineStatus::InstallingOS {
+                    if let Ok(Some(info)) = crate::tinkerbell::get_workflow_info(machine).await {
+                        workflow_infos.insert(machine.id, info);
+                    }
+                }
+            }
+
+            let html = MachineListTemplate {
+                machines,
+                workflow_infos,
+                theme: crate::ui::get_theme_from_cookie(&headers),
+                is_authenticated: true, // Since this is an API endpoint, we assume auth is handled by middleware
+            }.render().unwrap_or_else(|e| {
+                error!("Failed to render machine list template: {}", e);
+                "Template error".to_string()
+            });
+
+            Html(html).into_response()
+        }
+        Err(e) => {
+            error!("Failed to get machines: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response()
+        }
+    }
+}
+
+// Add a new API route for HTMX workflow progress updates
+pub async fn get_workflow_progress(
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    // Get machine from database
+    let machine = match db::get_machine_by_id(&id).await {
+        Ok(Some(machine)) => machine,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+
+    // Get workflow info
+    let workflow_info = match crate::tinkerbell::get_workflow_info(&machine).await {
+        Ok(Some(info)) => info,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(), 
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+
+    // Render just the workflow progress partial
+    let template = WorkflowProgressTemplate {
+        machine,
+        workflow_info: Some(workflow_info),
+    };
+
+    match template.render() {
+        Ok(html) => Html(html).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 } 

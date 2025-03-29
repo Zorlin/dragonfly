@@ -10,6 +10,7 @@ use serde_json;
 
 use dragonfly_common::models::{Machine, MachineStatus, RegisterRequest};
 use crate::auth::{Credentials, Settings};
+use crate::tinkerbell::WorkflowInfo;
 
 // Global database pool
 static DB_POOL: OnceCell<Pool<Sqlite>> = OnceCell::const_new();
@@ -258,6 +259,7 @@ pub async fn get_all_machines() -> Result<Vec<Machine>> {
             updated_at: parse_datetime(&row.get::<String, _>(10)),
             installation_progress: row.get::<Option<i64>, _>(12).unwrap_or(0) as u8,
             installation_step: row.get(13),
+            last_deployment_duration: None,
         };
         
         machines.push(machine);
@@ -349,6 +351,7 @@ pub async fn get_machine_by_id(id: &Uuid) -> Result<Option<Machine>> {
             bmc_credentials,
             installation_progress: row.get::<Option<i64>, _>(12).unwrap_or(0) as u8,
             installation_step: row.get(13),
+            last_deployment_duration: None,
         }))
     } else {
         Ok(None)
@@ -438,6 +441,7 @@ pub async fn get_machine_by_mac(mac_address: &str) -> Result<Option<Machine>> {
             bmc_credentials,
             installation_progress: row.get::<Option<i64>, _>(12).unwrap_or(0) as u8,
             installation_step: row.get(13),
+            last_deployment_duration: None,
         }))
     } else {
         Ok(None)
@@ -873,8 +877,30 @@ async fn migrate_db(pool: &Pool<Sqlite>) -> Result<()> {
         .await?;
     }
     
+    // Check if last_deployment_duration column exists
+    let result = sqlx::query(
+        r#"
+        SELECT COUNT(*) AS count FROM pragma_table_info('machines') WHERE name = 'last_deployment_duration'
+        "#,
+    )
+    .fetch_one(pool)
+    .await?;
+    
+    let duration_column_exists: i64 = result.get(0);
+    
+    // Add last_deployment_duration column if it doesn't exist
+    if duration_column_exists == 0 {
+        info!("Adding last_deployment_duration column to machines table");
+        sqlx::query(
+            r#"
+            ALTER TABLE machines ADD COLUMN last_deployment_duration INTEGER
+            "#,
+        )
+        .execute(pool)
+        .await?;
+    }
+    
     // Check if default_os column exists in app_settings table
-    // First check if the app_settings table exists
     let result = sqlx::query(
         r#"
         SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='app_settings'
@@ -1170,12 +1196,14 @@ pub async fn update_installation_progress(id: &Uuid, progress: u8, step: Option<
 pub async fn update_machine(machine: &Machine) -> Result<bool> {
     let pool = get_pool().await?;
     
-    info!("Updating machine: {}", machine.id);
-    
-    // Convert the data to JSON for storage
+    // Serialize the status enum to JSON for storage
     let status_json = serde_json::to_string(&machine.status)?;
-    let disks_json = serde_json::to_value(&machine.disks)?;
     let nameservers_json = serde_json::to_string(&machine.nameservers)?;
+    let disks_json = serde_json::to_string(&machine.disks)?;
+
+    // Log the update attempt with detailed info
+    info!("Updating machine {} in database: status={:?}, serialized as {}", 
+          machine.id, machine.status, status_json);
     
     // Create a plain SQL query to update the machine
     let query = "
@@ -1187,8 +1215,8 @@ pub async fn update_machine(machine: &Machine) -> Result<bool> {
             status = $5,
             disks = $6,
             os_choice = $7,
-            memorable_name = $8,
-            updated_at = $9
+            updated_at = $8,
+            last_deployment_duration = $9
         WHERE id = $10
     ";
     
@@ -1201,13 +1229,23 @@ pub async fn update_machine(machine: &Machine) -> Result<bool> {
         .bind(&status_json)
         .bind(&disks_json)
         .bind(machine.os_choice.as_deref())
-        .bind(machine.memorable_name.as_deref())
         .bind(machine.updated_at)
+        .bind(machine.last_deployment_duration)
         .bind(machine.id)
         .execute(pool)
-        .await?;
-    
-    Ok(result.rows_affected() > 0)
+        .await;
+        
+    match result {
+        Ok(result) => {
+            let rows_affected = result.rows_affected();
+            info!("Database update for machine {} affected {} rows", machine.id, rows_affected);
+            Ok(rows_affected > 0)
+        },
+        Err(e) => {
+            error!("Failed to update machine in database: {}", e);
+            Err(anyhow::anyhow!("Database error: {}", e))
+        }
+    }
 }
 
 // Add a new type for template timing data
@@ -1352,4 +1390,151 @@ pub async fn get_timing_database_stats() -> Result<(usize, usize, usize)> {
     }
     
     Ok((template_count as usize, action_count as usize, total_entries))
+}
+
+pub async fn store_completed_workflow(machine_id: &Uuid, workflow_info: &WorkflowInfo) -> Result<()> {
+    let pool = get_pool().await?;
+    
+    // Store workflow info as JSON
+    let workflow_json = serde_json::to_string(workflow_info)?;
+    let machine_id_str = machine_id.to_string();
+    
+    // Store with current timestamp using SQLite's datetime('now')
+    sqlx::query!(
+        "INSERT INTO completed_workflows (machine_id, workflow_info, completed_at) VALUES ($1, $2, datetime('now'))",
+        machine_id_str,
+        workflow_json
+    )
+    .execute(pool)
+    .await?;
+    
+    Ok(())
+}
+
+pub async fn get_completed_workflow(machine_id: &Uuid) -> Result<Option<(WorkflowInfo, chrono::DateTime<chrono::Utc>)>> {
+    let pool = get_pool().await?;
+    let machine_id_str = machine_id.to_string();
+    
+    // Get workflow info only if completed within the last minute
+    let record = sqlx::query!(
+        "SELECT workflow_info, completed_at FROM completed_workflows 
+         WHERE machine_id = $1 
+         AND completed_at > datetime('now', '-1 minute')
+         ORDER BY completed_at DESC LIMIT 1",
+        machine_id_str
+    )
+    .fetch_optional(pool)
+    .await?;
+    
+    if let Some(record) = record {
+        let workflow_info: WorkflowInfo = serde_json::from_str(&record.workflow_info)?;
+        // Parse the SQLite datetime string into chrono::DateTime<Utc>
+        let completed_at = chrono::DateTime::parse_from_rfc3339(&format!("{}Z", record.completed_at.to_string().replace(" ", "T")))?
+            .with_timezone(&chrono::Utc);
+        Ok(Some((workflow_info, completed_at)))
+    } else {
+        Ok(None)
+    }
+}
+
+// Get all machines with a specific status
+pub async fn get_machines_by_status(status: dragonfly_common::models::MachineStatus) -> Result<Vec<dragonfly_common::models::Machine>> {
+    let pool = get_pool().await?;
+    
+    // Convert the status to a JSON string for comparison
+    let status_json = serde_json::to_string(&status)?;
+    
+    // Use regular query instead of query macro to avoid compile-time verification issues
+    let rows = sqlx::query(
+        "SELECT * FROM machines WHERE status = ?"
+    )
+    .bind(status_json)
+    .fetch_all(pool)
+    .await?;
+    
+    let mut machines = Vec::with_capacity(rows.len());
+    for row in rows {
+        machines.push(map_row_to_machine(row)?);
+    }
+    
+    Ok(machines)
+}
+
+// Helper function to map a database row to a Machine struct
+fn map_row_to_machine(row: sqlx::sqlite::SqliteRow) -> Result<dragonfly_common::models::Machine> {
+    use sqlx::Row;
+    
+    let id: String = row.try_get("id")?;
+    let mac_address: String = row.try_get("mac_address")?;
+    let status_str: String = row.try_get("status")?;
+    let disks_json: Option<String> = row.try_get("disks")?;
+    let nameservers_json: Option<String> = row.try_get("nameservers")?;
+    let bmc_credentials_json: Option<String> = row.try_get("bmc_credentials")?;
+    let last_deployment_duration: Option<i64> = row.try_get("last_deployment_duration").ok();
+    
+    // Generate memorable name from MAC address
+    let memorable_name = dragonfly_common::mac_to_words::mac_to_words_safe(&mac_address);
+    
+    // Deserialize disks and nameservers from JSON or use empty vectors if null
+    let mut disks = if let Some(json) = disks_json {
+        serde_json::from_str::<Vec<dragonfly_common::models::DiskInfo>>(&json).unwrap_or_else(|_| Vec::new())
+    } else {
+        Vec::new()
+    };
+    
+    // Calculate precise disk sizes with 2 decimal places
+    for disk in &mut disks {
+        if disk.size_bytes > 1099511627776 {
+            disk.calculated_size = Some(format!("{:.2} TB", disk.size_bytes as f64 / 1099511627776.0));
+        } else if disk.size_bytes > 1073741824 {
+            disk.calculated_size = Some(format!("{:.2} GB", disk.size_bytes as f64 / 1073741824.0));
+        } else if disk.size_bytes > 1048576 {
+            disk.calculated_size = Some(format!("{:.2} MB", disk.size_bytes as f64 / 1048576.0));
+        } else if disk.size_bytes > 1024 {
+            disk.calculated_size = Some(format!("{:.2} KB", disk.size_bytes as f64 / 1024.0));
+        } else {
+            disk.calculated_size = Some(format!("{} bytes", disk.size_bytes));
+        }
+    }
+    
+    let nameservers = if let Some(json) = nameservers_json {
+        serde_json::from_str::<Vec<String>>(&json).unwrap_or_else(|_| Vec::new())
+    } else {
+        Vec::new()
+    };
+    
+    // Deserialize BMC credentials if present
+    let bmc_credentials = if let Some(json) = bmc_credentials_json {
+        serde_json::from_str::<dragonfly_common::models::BmcCredentials>(&json).ok()
+    } else {
+        None
+    };
+    
+    // Parse status and ensure os_choice is set when we have ExistingOS
+    let status = parse_status(&status_str);
+    
+    // os_choice is separate from status now
+    let os_choice: Option<String> = row.try_get("os_choice")?;
+    
+    let created_at_str: String = row.try_get("created_at")?;
+    let updated_at_str: String = row.try_get("updated_at")?;
+    
+    Ok(dragonfly_common::models::Machine {
+        id: Uuid::parse_str(&id).unwrap_or_default(),
+        mac_address,
+        ip_address: row.try_get("ip_address")?,
+        hostname: row.try_get("hostname")?,
+        os_choice,
+        os_installed: row.try_get("os_installed")?,
+        status,
+        disks,
+        nameservers,
+        created_at: parse_datetime(&created_at_str),
+        updated_at: parse_datetime(&updated_at_str),
+        memorable_name: Some(memorable_name),
+        bmc_credentials,
+        installation_progress: row.try_get::<Option<i64>, _>("installation_progress").unwrap_or(None).unwrap_or(0) as u8,
+        installation_step: row.try_get("installation_step")?,
+        last_deployment_duration,
+    })
 } 

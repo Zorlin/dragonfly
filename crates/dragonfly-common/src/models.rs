@@ -24,6 +24,7 @@ pub struct Machine {
     pub installation_progress: u8,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub installation_step: Option<String>,
+    pub last_deployment_duration: Option<i64>,  // Duration in seconds
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]

@@ -14,16 +14,26 @@
         <div class="-my-2 -mx-4 overflow-x-auto sm:-mx-6 lg:-mx-8">
             <div class="inline-block min-w-full py-2 align-middle md:px-6 lg:px-8">
                 <div class="overflow-hidden shadow ring-1 ring-black ring-opacity-5 md:rounded-lg">
-                    <table class="min-w-full divide-y divide-gray-300 dark:divide-gray-600">
-                        <thead class="bg-gray-50 dark:bg-gray-700">
+                    <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                        <thead class="bg-gray-50 dark:bg-gray-800">
                             <tr>
-                                <th scope="col" class="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-gray-900 dark:text-white sm:pl-6">Name</th>
-                                <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900 dark:text-white">MAC Address</th>
-                                <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900 dark:text-white">IP Address</th>
-                                <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900 dark:text-white">Status</th>
-                                <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900 dark:text-white">OS</th>
-                                <th scope="col" class="relative py-3.5 pl-3 pr-4 sm:pr-6">
-                                    <span class="sr-only">Actions</span>
+                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                    Name
+                                </th>
+                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                    MAC Address
+                                </th>
+                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                    IP Address
+                                </th>
+                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                    Status
+                                </th>
+                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                    OS
+                                </th>
+                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                    Progress
                                 </th>
                             </tr>
                         </thead>
@@ -34,7 +44,74 @@
                             hx-trigger="load, refreshMachines from:body"
                             hx-swap="innerHTML transition:true"
                         >
-                            <!-- Machine list will be loaded here -->
+                            {% for machine in machines %}
+                            <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                                <td class="px-6 py-4 whitespace-nowrap">
+                                    <div class="flex items-center">
+                                        <div class="text-sm font-medium text-gray-900 dark:text-white">
+                                            <a href="/machines/{{ machine.id }}" class="hover:text-indigo-600 dark:hover:text-indigo-400">
+                                                {% if machine.hostname.is_some() %}
+                                                    {{ machine.hostname.as_ref().unwrap() }}
+                                                {% else if machine.memorable_name.is_some() %}
+                                                    {{ machine.memorable_name.as_ref().unwrap() }}
+                                                {% else %}
+                                                    {% let id_str = machine.id.to_string() %}{{ id_str }}
+                                                {% endif %}
+                                            </a>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+                                    {{ machine.mac_address }}
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+                                    {{ machine.ip_address }}
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap">
+                                    {% match machine.status %}
+                                        {% when MachineStatus::AwaitingAssignment %}
+                                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200">
+                                                Awaiting Assignment
+                                            </span>
+                                        {% when MachineStatus::InstallingOS %}
+                                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-700/30 dark:text-yellow-200">
+                                                Installing OS
+                                            </span>
+                                        {% when MachineStatus::Ready %}
+                                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-700/30 dark:text-green-200">
+                                                Ready
+                                            </span>
+                                        {% when MachineStatus::Error with (msg) %}
+                                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800 dark:bg-red-700/30 dark:text-red-200" title="{{ msg }}">
+                                                Error
+                                            </span>
+                                        {% when MachineStatus::ExistingOS %}
+                                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-700/30 dark:text-blue-200">
+                                                Existing OS
+                                            </span>
+                                        {% when MachineStatus::Offline %}
+                                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200">
+                                                Offline
+                                            </span>
+                                    {% endmatch %}
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+                                    {% if machine.os_choice.is_some() %}
+                                        🖥️ {{ machine.os_choice.as_ref().unwrap() }}
+                                    {% endif %}
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+                                    {% if machine.status == MachineStatus::InstallingOS %}
+                                        {% if let Some(info) = workflow_infos.get(machine.id) %}
+                                            <div class="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700">
+                                                <div class="bg-yellow-500 h-2.5 rounded-full dark:bg-yellow-600" style="width: {{ info.progress }}%"></div>
+                                            </div>
+                                            <div class="text-xs mt-1 text-center">{{ info.progress }}%</div>
+                                        {% endif %}
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
                         </tbody>
                     </table>
                 </div>

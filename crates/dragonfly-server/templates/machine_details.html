@@ -44,7 +44,10 @@
         <!-- Deployment Progress Section - Only shown when machine is installing OS -->
         {% if machine.status == MachineStatus::InstallingOS %}
           {% if workflow_info.is_some() %}
-            <div class="border-t border-gray-200 dark:border-gray-700 p-4 sm:p-6 bg-yellow-50 dark:bg-yellow-900/10">
+            <div class="border-t border-gray-200 dark:border-gray-700 p-4 sm:p-6 bg-yellow-50 dark:bg-yellow-900/10"
+                 id="workflow-progress-container"
+                 hx-sse="connect:/api/events"
+                 hx-sse-swap="machine_updated:{{ machine.id }}">
                 <div class="mb-4">
                     <h3 class="text-lg font-medium leading-6 text-gray-900 dark:text-yellow-100">Deployment Progress</h3>
                     <p class="mt-1 text-sm text-gray-500 dark:text-gray-300">
@@ -76,62 +79,15 @@
                         </div>
                         <div class="text-right">
                             <span class="text-xs font-semibold inline-block text-yellow-600 dark:text-yellow-200">
-                                <span id="progress-percentage">{{ workflow_info.as_ref().unwrap().progress }}</span>% Complete
+                                {{ workflow_info.as_ref().unwrap().progress }}% Complete
                             </span>
                         </div>
                     </div>
                     <div class="overflow-hidden h-2 mb-4 text-xs flex rounded bg-yellow-200 dark:bg-yellow-700/30">
-                        <div id="progress-bar" 
-                            class="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center 
-                            {% if workflow_info.as_ref().unwrap().state == "STATE_FAILED" %}
-                                bg-red-500 dark:bg-red-600
-                            {% else %}
-                                bg-yellow-500 dark:bg-yellow-600
-                            {% endif %}" 
-                            data-target-progress="{{ workflow_info.as_ref().unwrap().progress }}"
-                            data-state="{{ workflow_info.as_ref().unwrap().state }}"
-                            style="width: 0%;">
+                        <div class="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center {% if workflow_info.as_ref().unwrap().state == "STATE_FAILED" %}bg-red-500 dark:bg-red-600{% else %}bg-yellow-500 dark:bg-yellow-600{% endif %}" 
+                             style="width:{{ workflow_info.as_ref().unwrap().progress }}%">
                         </div>
                     </div>
-                    <script>
-                        document.addEventListener('DOMContentLoaded', function() {
-                            // Get elements and their data attributes
-                            const progressBar = document.getElementById('progress-bar');
-                            const progressPercentage = document.getElementById('progress-percentage');
-                            const targetProgress = parseFloat(progressBar.getAttribute('data-target-progress'));
-                            const state = progressBar.getAttribute('data-state');
-                            
-                            let currentProgress = 0;
-                            
-                            // Animate the progress bar
-                            function animateProgress() {
-                                if (currentProgress < targetProgress) {
-                                    // Increment by smaller amounts for smoother animation
-                                    currentProgress += 0.5;
-                                    progressBar.style.width = currentProgress + '%';
-                                    progressPercentage.innerText = Math.round(currentProgress);
-                                    requestAnimationFrame(animateProgress);
-                                } else if (currentProgress > targetProgress) {
-                                    // In case progress decreases (rare but possible)
-                                    currentProgress = targetProgress;
-                                    progressBar.style.width = currentProgress + '%';
-                                    progressPercentage.innerText = Math.round(currentProgress);
-                                }
-                            }
-                            
-                            // Start the animation
-                            animateProgress();
-                            
-                            // Set up periodic polling for updates if deployment is still in progress
-                            if (state !== "STATE_FAILED" && state !== "STATE_SUCCESS" && 
-                                !(progressBar.getAttribute('data-state') === "STATE_SUCCESS" && 
-                                  state.includes('Completed via kexec detection'))) {
-                                setTimeout(function() {
-                                    window.location.reload();
-                                }, 5000); // Refresh every 5 seconds
-                            }
-                        });
-                    </script>
                 </div>
                 
                 <div class="mt-4">
@@ -200,6 +156,69 @@
                     {% endif %}
                 </div>
             </div>
+            
+            <script>
+              // Server-sent events handling with robust reconnection
+              let evtSource = null;
+              let reconnectAttempts = 0;
+
+              function connectEventSource() {
+                if (evtSource) {
+                  evtSource.close();
+                }
+
+                console.log("Connecting to EventSource...");
+                evtSource = new EventSource('/api/events');
+                
+                evtSource.onmessage = function(event) {
+                  console.log('Event received:', event.data);
+                  if (event.data.startsWith('machine_updated:{{ machine.id }}')) {
+                    console.log('This machine was updated, fetching new workflow data');
+                    fetch('/api/machines/{{ machine.id }}/workflow-progress')
+                      .then(response => response.text())
+                      .then(html => {
+                        const container = document.getElementById('workflow-progress-container');
+                        if (container) {
+                          container.outerHTML = html;
+                        }
+                      })
+                      .catch(err => {
+                        console.error("Error fetching workflow progress:", err);
+                      });
+                  }
+                };
+                
+                evtSource.onopen = function() {
+                  console.log('EventSource connected successfully');
+                  reconnectAttempts = 0; // Reset reconnect attempts on successful connection
+                };
+                
+                evtSource.onerror = function(err) {
+                  console.error("EventSource failed:", err);
+                  evtSource.close();
+                  
+                  // Keep trying to reconnect indefinitely with exponential backoff
+                  reconnectAttempts++;
+                  // Exponential backoff with jitter and max of 30 seconds
+                  const delay = Math.min(1000 * Math.pow(1.5, Math.min(reconnectAttempts, 10)) * (0.9 + Math.random() * 0.2), 30000);
+                  console.log(`Reconnecting in ${Math.round(delay)}ms (attempt ${reconnectAttempts})`);
+                  setTimeout(connectEventSource, delay);
+                };
+              }
+
+              // Start connection when DOM is loaded
+              document.addEventListener('DOMContentLoaded', function() {
+                connectEventSource();
+                
+                // Clean up when leaving the page
+                window.addEventListener('beforeunload', () => {
+                  if (evtSource) {
+                    console.log("Closing EventSource connection");
+                    evtSource.close();
+                  }
+                });
+              });
+            </script>
           {% endif %}
         {% endif %}
 
@@ -243,12 +262,25 @@
                                     {{ created_at_formatted }}
                                 </dd>
                             </div>
-                            <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
-                                <dt class="text-sm font-medium text-gray-500 dark:text-gray-300">Last Updated</dt>
-                                <dd class="mt-1 text-sm text-gray-900 dark:text-gray-100 sm:mt-0 sm:col-span-2">
-                                    {{ updated_at_formatted }}
+                            <div class="px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                                <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Last updated</dt>
+                                <dd class="mt-1 text-sm text-gray-900 dark:text-white sm:col-span-2 sm:mt-0">{{ updated_at_formatted }}</dd>
+                            </div>
+                            {% if machine.last_deployment_duration.is_some() %}
+                            <div class="px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                                <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Last deployment duration</dt>
+                                <dd class="mt-1 text-sm text-gray-900 dark:text-white sm:col-span-2 sm:mt-0">
+                                    {% let duration = machine.last_deployment_duration.unwrap() %}
+                                    {% if duration < 60 %}
+                                        {{ duration }} seconds
+                                    {% else if duration < 3600 %}
+                                        {{ duration / 60 }} minutes
+                                    {% else %}
+                                        {{ duration / 3600 }} hours {{ (duration % 3600) / 60 }} minutes
+                                    {% endif %}
                                 </dd>
                             </div>
+                            {% endif %}
                         </dl>
                     </div>
                 </div>

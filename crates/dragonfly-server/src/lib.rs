@@ -9,10 +9,14 @@ use tokio::sync::Mutex;
 use tower_sessions::{SessionManagerLayer, MemoryStore};
 use tower_http::trace;
 use tower_http::trace::TraceLayer;
-use tracing::{info, Level};
+use tracing::{info, Level, error};
 use std::net::SocketAddr;
 use tower_cookies::CookieManagerLayer;
 use axum_login::AuthManagerLayerBuilder;
+use axum::routing::get_service;
+use axum::http::Uri;
+use tower::ServiceBuilder;
+use tower_http::services::ServeDir;
 
 use crate::auth::{AdminBackend, auth_router, load_credentials, generate_default_credentials, load_settings, Settings};
 use crate::db::init_db;
@@ -25,6 +29,13 @@ mod filters;
 mod ui;
 mod tinkerbell;
 mod event_manager;
+
+// Global static for accessing event manager from other modules
+use std::sync::RwLock;
+use once_cell::sync::Lazy;
+pub static EVENT_MANAGER_REF: Lazy<RwLock<Option<std::sync::Arc<EventManager>>>> = Lazy::new(|| {
+    RwLock::new(None)
+});
 
 // Application state struct
 #[derive(Clone)]
@@ -45,6 +56,19 @@ pub async fn run() -> anyhow::Result<()> {
     
     // Start the timing cleanup task
     tinkerbell::start_timing_cleanup_task().await;
+    
+    // Create event manager
+    let event_manager = Arc::new(EventManager::new());
+    
+    // Store the event manager in the global static for access from other modules
+    if let Ok(mut global_ref) = EVENT_MANAGER_REF.write() {
+        *global_ref = Some(event_manager.clone());
+    } else {
+        error!("Failed to store event manager reference");
+    }
+    
+    // Start the workflow polling task
+    tinkerbell::start_workflow_polling_task(event_manager.clone()).await;
     
     // Load or generate admin credentials
     let credentials = match load_credentials().await {
@@ -75,7 +99,7 @@ pub async fn run() -> anyhow::Result<()> {
     // Create application state
     let app_state = AppState {
         settings: Arc::new(Mutex::new(settings)),
-        event_manager: Arc::new(EventManager::new()),
+        event_manager: event_manager,
     };
     
     // Set up a session store
@@ -93,6 +117,7 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(ui::ui_router())
         .route("/{mac}", get(api::ipxe_script))  // MAC route at root level for iPXE
         .nest("/api", api::api_router())
+        .nest_service("/static", ServeDir::new("crates/dragonfly-server/static"))
         .layer(CookieManagerLayer::new())
         .layer(auth_layer)
         .layer(Extension(db_pool))

@@ -18,9 +18,10 @@ use std::fs;
 use crate::db;
 use crate::auth::{self, AuthSession, Settings, save_settings, Credentials};
 use crate::filters;
+use crate::tinkerbell::WorkflowInfo;
 
 // Extract theme from cookies
-fn get_theme_from_cookie(headers: &HeaderMap) -> String {
+pub fn get_theme_from_cookie(headers: &HeaderMap) -> String {
     if let Some(cookie_header) = headers.get(header::COOKIE) {
         if let Ok(cookie_str) = cookie_header.to_str() {
             for cookie_pair in cookie_str.split(';') {
@@ -53,6 +54,7 @@ pub struct MachineListTemplate {
     pub machines: Vec<Machine>,
     pub theme: String,
     pub is_authenticated: bool,
+    pub workflow_infos: HashMap<uuid::Uuid, crate::tinkerbell::WorkflowInfo>,
 }
 
 #[derive(Template)]
@@ -83,6 +85,14 @@ pub struct SettingsTemplate {
     pub rendered_password: String,
     pub show_admin_settings: bool,
     pub error_message: Option<String>,
+}
+
+// Add a new template for just the workflow progress section
+#[derive(Template)]
+#[template(path = "partials/workflow_progress.html")]
+pub struct WorkflowProgressTemplate {
+    pub machine: Machine,
+    pub workflow_info: Option<WorkflowInfo>,
 }
 
 enum UiTemplate {
@@ -258,6 +268,7 @@ pub async fn machine_list(
                 machines,
                 theme,
                 is_authenticated,
+                workflow_infos: HashMap::new(),
             }).into_response()
         },
         Err(e) => {
@@ -266,6 +277,7 @@ pub async fn machine_list(
                 machines: vec![],
                 theme: "system".to_string(),
                 is_authenticated,
+                workflow_infos: HashMap::new(),
             }).into_response()
         }
     }
