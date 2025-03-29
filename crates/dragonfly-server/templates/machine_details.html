@@ -161,6 +161,176 @@
               // Server-sent events handling with robust reconnection
               let evtSource = null;
               let reconnectAttempts = 0;
+              
+              // Progress tracking variables
+              let taskStartTimes = {}; // Track when each task started
+              let taskEstimatedDurations = {}; // Track estimated duration of each task
+              let highestProgress = 0; // Track highest overall progress (ratchet)
+              let highestTaskProgress = {}; // Track highest progress per task (ratchet)
+              let animationFrameId = null;
+              const FPS = 24; // Target 24fps for smooth updates
+              
+              // Initialize progress tracking from initial page load
+              function initializeProgressTracking() {
+                // Extract task data from the DOM
+                document.querySelectorAll('[data-task-name]').forEach(el => {
+                  const taskName = el.getAttribute('data-task-name');
+                  const status = el.getAttribute('data-task-status');
+                  const startedAt = el.getAttribute('data-started-at');
+                  const estimatedDuration = parseInt(el.getAttribute('data-estimated-duration'), 10) || 0;
+                  
+                  // Store task data
+                  taskStartTimes[taskName] = startedAt;
+                  taskEstimatedDurations[taskName] = estimatedDuration;
+                  highestTaskProgress[taskName] = 0;
+                });
+                
+                // Get overall progress
+                const overallProgressEl = document.querySelector('.workflow-overall-progress');
+                if (overallProgressEl) {
+                  highestProgress = parseInt(overallProgressEl.getAttribute('data-progress'), 10) || 0;
+                }
+                
+                // Start the animation loop
+                startProgressAnimation();
+              }
+              
+              // Calculate progress for a running task based on elapsed time
+              function calculateTaskProgress(taskName) {
+                const startedAt = taskStartTimes[taskName];
+                const estimatedDuration = taskEstimatedDurations[taskName];
+                
+                // Skip if we don't have necessary data
+                if (!startedAt || !estimatedDuration) return 0;
+                
+                // Parse the start time
+                const startTime = new Date(startedAt).getTime();
+                const now = Date.now();
+                const elapsedMs = now - startTime;
+                const elapsedSeconds = elapsedMs / 1000;
+                
+                // Calculate raw progress as a percentage
+                let progress = (elapsedSeconds / estimatedDuration) * 100;
+                
+                // Cap at 100%
+                progress = Math.min(progress, 100);
+                
+                // Apply ratchet - never go backwards
+                if (highestTaskProgress[taskName]) {
+                  progress = Math.max(progress, highestTaskProgress[taskName]);
+                }
+                
+                // Store new highest
+                highestTaskProgress[taskName] = progress;
+                
+                return progress;
+              }
+              
+              // Calculate overall workflow progress
+              function calculateOverallProgress() {
+                let completedWeight = 0;
+                let totalWeight = 0;
+                
+                // Process each task
+                document.querySelectorAll('[data-task-name]').forEach(el => {
+                  const taskName = el.getAttribute('data-task-name');
+                  const status = el.getAttribute('data-task-status');
+                  const estimatedDuration = taskEstimatedDurations[taskName] || 0;
+                  
+                  // Skip tasks with no estimated duration
+                  if (estimatedDuration <= 0) return;
+                  
+                  // Add to total weight
+                  totalWeight += estimatedDuration;
+                  
+                  // Calculate task's contribution to overall progress
+                  if (status === 'STATE_SUCCESS') {
+                    // Completed tasks contribute 100% of their weight
+                    completedWeight += estimatedDuration;
+                  } else if (status === 'STATE_RUNNING') {
+                    // Running tasks contribute their partial progress
+                    const taskProgress = calculateTaskProgress(taskName);
+                    completedWeight += (taskProgress / 100) * estimatedDuration;
+                  }
+                  // Pending tasks contribute nothing
+                });
+                
+                // Calculate overall percentage
+                let overallProgress = totalWeight > 0 ? (completedWeight / totalWeight) * 100 : 0;
+                
+                // Apply ratchet - never go backwards
+                overallProgress = Math.max(overallProgress, highestProgress);
+                highestProgress = overallProgress;
+                
+                return overallProgress;
+              }
+              
+              // Start animation loop for smooth progress updates
+              function startProgressAnimation() {
+                if (animationFrameId) {
+                  cancelAnimationFrame(animationFrameId);
+                }
+                
+                let lastFrameTime = performance.now();
+                const frameInterval = 1000 / FPS;
+                
+                function updateFrame(now) {
+                  // Throttle to target FPS
+                  if (now - lastFrameTime < frameInterval) {
+                    animationFrameId = requestAnimationFrame(updateFrame);
+                    return;
+                  }
+                  
+                  lastFrameTime = now;
+                  
+                  // Get running tasks
+                  const runningTasks = document.querySelectorAll('[data-task-status="STATE_RUNNING"]');
+                  let needsUpdate = runningTasks.length > 0;
+                  
+                  // Update each running task's progress
+                  runningTasks.forEach(el => {
+                    const taskName = el.getAttribute('data-task-name');
+                    const progress = calculateTaskProgress(taskName);
+                    
+                    // Update UI - progress bar 
+                    const progressBar = el.querySelector('.task-progress-bar');
+                    if (progressBar) {
+                      progressBar.style.width = `${Math.round(progress)}%`;
+                    }
+                    
+                    // Update progress text
+                    const progressText = el.querySelector('.task-progress-percent');
+                    if (progressText) {
+                      progressText.textContent = `${Math.round(progress)}%`;
+                    }
+                  });
+                  
+                  // Update overall progress if there are running tasks
+                  if (needsUpdate) {
+                    const overallProgress = calculateOverallProgress();
+                    const overallBar = document.querySelector('.workflow-overall-progress');
+                    
+                    if (overallBar) {
+                      overallBar.style.width = `${Math.round(overallProgress)}%`;
+                      
+                      // Update overall progress text
+                      const percentText = document.querySelector('.workflow-progress-percent');
+                      if (percentText) {
+                        percentText.textContent = `${Math.round(overallProgress)}% Complete`;
+                      }
+                    }
+                    
+                    // Continue the animation loop
+                    animationFrameId = requestAnimationFrame(updateFrame);
+                  } else {
+                    // No running tasks, pause the animation
+                    animationFrameId = null;
+                  }
+                }
+                
+                // Start the loop
+                animationFrameId = requestAnimationFrame(updateFrame);
+              }
 
               function connectEventSource() {
                 if (evtSource) {
@@ -177,9 +347,55 @@
                     fetch('/api/machines/{{ machine.id }}/workflow-progress')
                       .then(response => response.text())
                       .then(html => {
-                        const container = document.getElementById('workflow-progress-container');
-                        if (container) {
-                          container.outerHTML = html;
+                        // Create temporary container to parse HTML
+                        const temp = document.createElement('div');
+                        temp.innerHTML = html;
+                        
+                        // Check if any task states have changed
+                        let hasStateChanges = false;
+                        
+                        // Extract and update task data
+                        temp.querySelectorAll('[data-task-name]').forEach(newEl => {
+                          const taskName = newEl.getAttribute('data-task-name');
+                          const newStatus = newEl.getAttribute('data-task-status');
+                          const newStartedAt = newEl.getAttribute('data-started-at');
+                          const newEstimatedDuration = parseInt(newEl.getAttribute('data-estimated-duration'), 10);
+                          
+                          // Get current element if it exists
+                          const currentEl = document.querySelector(`[data-task-name="${taskName}"]`);
+                          
+                          if (currentEl) {
+                            const currentStatus = currentEl.getAttribute('data-task-status');
+                            
+                            // Check if state changed
+                            if (currentStatus !== newStatus) {
+                              hasStateChanges = true;
+                              
+                              // Update task data
+                              taskStartTimes[taskName] = newStartedAt;
+                              taskEstimatedDurations[taskName] = newEstimatedDuration;
+                              
+                              // For newly completed tasks, set progress to 100%
+                              if (newStatus === 'STATE_SUCCESS') {
+                                highestTaskProgress[taskName] = 100;
+                              }
+                            }
+                          } else {
+                            // New task appeared
+                            hasStateChanges = true;
+                            taskStartTimes[taskName] = newStartedAt;
+                            taskEstimatedDurations[taskName] = newEstimatedDuration;
+                          }
+                        });
+                        
+                        // Only replace the HTML when task states change or new tasks appear
+                        if (hasStateChanges) {
+                          const container = document.getElementById('workflow-progress-container');
+                          if (container) {
+                            container.outerHTML = html;
+                            // Restart progress tracking with new data
+                            initializeProgressTracking();
+                          }
                         }
                       })
                       .catch(err => {
@@ -209,12 +425,16 @@
               // Start connection when DOM is loaded
               document.addEventListener('DOMContentLoaded', function() {
                 connectEventSource();
+                initializeProgressTracking();
                 
                 // Clean up when leaving the page
                 window.addEventListener('beforeunload', () => {
                   if (evtSource) {
                     console.log("Closing EventSource connection");
                     evtSource.close();
+                  }
+                  if (animationFrameId) {
+                    cancelAnimationFrame(animationFrameId);
                   }
                 });
               });

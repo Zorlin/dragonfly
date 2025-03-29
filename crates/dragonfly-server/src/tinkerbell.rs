@@ -904,8 +904,8 @@ pub async fn get_workflow_info(machine: &Machine) -> Result<Option<WorkflowInfo>
                             let elapsed_seconds = current_time.signed_duration_since(started_at_utc).num_seconds().max(0) as u64;
                             
                             if task.estimated_duration > 0 {
-                                // Calculate raw progress as elapsed/estimated
-                                let progress_pct = (elapsed_seconds as f64 / task.estimated_duration as f64) * 100.0;
+                                // Calculate raw progress as elapsed/estimated, capped at 100%
+                                let progress_pct = (elapsed_seconds as f64 / task.estimated_duration as f64 * 100.0).min(100.0);
                                 
                                 // Update the task progress
                                 task.progress = progress_pct as u8;
@@ -942,7 +942,7 @@ pub async fn get_workflow_info(machine: &Machine) -> Result<Option<WorkflowInfo>
                             let now = chrono::Utc::now();
                             let elapsed = now.signed_duration_since(*started_at).num_seconds() as f64;
                             
-                            // Ratio of elapsed time to expected duration
+                            // Ratio of elapsed time to expected duration, capped at 100%
                             let task_progress_ratio = if *expected_duration > 0 {
                                 (elapsed / *expected_duration as f64).min(1.0)
                             } else {
@@ -957,8 +957,25 @@ pub async fn get_workflow_info(machine: &Machine) -> Result<Option<WorkflowInfo>
                         }
                     }
 
-                    // Convert to u8 for the final progress value
-                    time_based_progress as u8
+                    // Ratchet mechanism - ensure progress doesn't go backwards
+                    // Get the previous progress for this workflow from the database
+                    let previous_progress = match crate::db::get_completed_workflow(&machine.id).await {
+                        Ok(Some((existing_wf, _))) => {
+                            // Only use previous progress if we're in the same workflow state
+                            if existing_wf.state == state {
+                                existing_wf.progress as f64
+                            } else {
+                                0.0 // Different state, reset progress
+                            }
+                        },
+                        _ => 0.0, // No previous workflow info
+                    };
+                    
+                    // Take the maximum of current progress and previous progress
+                    let final_progress = time_based_progress.max(previous_progress);
+                    
+                    // Cap at 100%
+                    final_progress.min(100.0) as u8
                 } else {
                     0
                 };
