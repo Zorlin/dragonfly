@@ -19,10 +19,10 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 use async_trait::async_trait;
+use askama::Template;
 
-// Constants
-const PASSWORD_FILE: &str = ".admin_password.txt";
-const CREDENTIALS_FILE: &str = "admin_credentials.json";
+// Constants for the initial password file (not for loading, just for UX)
+const INITIAL_PASSWORD_FILE: &str = "initial_password.txt";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Credentials {
@@ -96,6 +96,7 @@ impl AdminBackend {
         creds.password = None; // Clear any password that might be in memory
         creds.password_hash = password_hash;
         
+        // Save directly to database
         save_credentials(&creds).await
     }
     
@@ -188,59 +189,19 @@ pub fn auth_router() -> Router {
         .route("/logout", post(logout))
 }
 
+#[derive(Template)]
+#[template(path = "login.html")]
+struct LoginTemplate {}
+
 async fn login_page() -> impl IntoResponse {
-    // Simple login form HTML
-    Html(r#"
-    <!DOCTYPE html>
-    <html lang="en" class="h-full bg-gray-100">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Dragonfly - Login</title>
-        <script src="https://cdn.tailwindcss.com"></script>
-    </head>
-    <body class="h-full">
-        <div class="min-h-full flex flex-col justify-center py-12 sm:px-6 lg:px-8">
-            <div class="sm:mx-auto sm:w-full sm:max-w-md">
-                <h2 class="mt-6 text-center text-3xl font-extrabold text-gray-900">Dragonfly Admin Login</h2>
-            </div>
-
-            <div class="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
-                <div class="bg-white py-8 px-4 shadow sm:rounded-lg sm:px-10">
-                    <form class="space-y-6" action="/login" method="POST">
-                        <div>
-                            <label for="username" class="block text-sm font-medium text-gray-700">
-                                Username
-                            </label>
-                            <div class="mt-1">
-                                <input id="username" name="username" type="text" required
-                                    class="appearance-none block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
-                            </div>
-                        </div>
-
-                        <div>
-                            <label for="password" class="block text-sm font-medium text-gray-700">
-                                Password
-                            </label>
-                            <div class="mt-1">
-                                <input id="password" name="password" type="password" required
-                                    class="appearance-none block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
-                            </div>
-                        </div>
-
-                        <div>
-                            <button type="submit"
-                                class="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
-                                Sign in
-                            </button>
-                        </div>
-                    </form>
-                </div>
-            </div>
-        </div>
-    </body>
-    </html>
-    "#)
+    let template = LoginTemplate {};
+    match template.render() {
+        Ok(html) => Html(html).into_response(),
+        Err(err) => {
+            error!("Template rendering error: {}", err);
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
 
 async fn login_handler(
@@ -335,26 +296,36 @@ pub fn generate_default_credentials() -> Credentials {
         .expect("Failed to hash password")
         .to_string();
 
-    // Save the initial password to a gitignored file
-    if let Err(e) = fs::write(PASSWORD_FILE, &password) {
-        error!("Failed to write initial password to file: {}", e);
-    } else {
-        info!("Initial admin password saved to {}", PASSWORD_FILE);
-    }
-
     let credentials = Credentials {
         username,
         password: None, // We don't store the password in the credentials
         password_hash,
     };
 
-    // Create a clone to move into the tokio::spawn
-    let credentials_clone = credentials.clone();
+    // Save initial password to a file for better UX
+    // This way admins can access it later if needed
+    let password_message = format!(
+        "# Dragonfly Initial Admin Password\n\n\
+        This is your initial admin password. For security, change it after logging in.\n\n\
+        Username: admin\n\
+        Password: {}\n\n\
+        Delete this file after you've securely saved the password elsewhere.", 
+        password
+    );
     
-    // Save to credentials file - do this in a separate task to avoid blocking
+    if let Err(e) = fs::write(INITIAL_PASSWORD_FILE, password_message) {
+        error!("Failed to save initial password to file: {}", e);
+    } else {
+        info!("Initial admin password saved to {}", INITIAL_PASSWORD_FILE);
+    }
+
+    // Save credentials to database - but in a separate task to avoid blocking
+    let credentials_clone = credentials.clone();
     tokio::spawn(async move {
-        if let Err(e) = save_credentials(&credentials_clone).await {
-            error!("Failed to save admin credentials: {}", e);
+        if let Err(e) = crate::db::save_admin_credentials(&credentials_clone).await {
+            error!("Failed to save admin credentials to database: {}", e);
+        } else {
+            info!("Successfully saved admin credentials to database");
         }
     });
 
@@ -363,61 +334,31 @@ pub fn generate_default_credentials() -> Credentials {
 }
 
 pub async fn load_credentials() -> io::Result<Credentials> {
-    // First try to load from database
+    // Load only from database - no fallback to file credential loading
     match crate::db::get_admin_credentials().await {
         Ok(Some(creds)) => {
             info!("Loaded admin credentials from database");
-            return Ok(creds);
+            Ok(creds)
         },
         Ok(None) => {
             info!("No admin credentials found in database");
-            // Try to load from file as a one-time migration path
-            let path = Path::new(CREDENTIALS_FILE);
-            if path.exists() {
-                info!("Found legacy credentials file, attempting migration");
-                match fs::read_to_string(path) {
-                    Ok(data) => match serde_json::from_str::<Credentials>(&data) {
-                        Ok(creds) => {
-                            // Migrate file credentials to database
-                            if let Err(e) = crate::db::save_admin_credentials(&creds).await {
-                                error!("Failed to migrate admin credentials to database: {}", e);
-                            } else {
-                                info!("Successfully migrated admin credentials from file to database");
-                                // Delete file after successful migration
-                                if let Err(e) = fs::remove_file(path) {
-                                    warn!("Could not remove legacy credentials file: {}", e);
-                                }
-                            }
-                            return Ok(creds);
-                        },
-                        Err(e) => {
-                            error!("Legacy credentials file contains invalid data: {}", e);
-                        }
-                    },
-                    Err(e) => {
-                        error!("Could not read legacy credentials file: {}", e);
-                    }
-                }
-            }
-            
-            // No credentials found in database or file
-            return Err(io::Error::new(
+            Err(io::Error::new(
                 io::ErrorKind::NotFound,
-                "No admin credentials found",
-            ));
+                "No admin credentials found in database",
+            ))
         },
         Err(e) => {
             error!("Error loading admin credentials from database: {}", e);
-            return Err(io::Error::new(
+            Err(io::Error::new(
                 io::ErrorKind::Other,
                 format!("Database error: {}", e),
-            ));
+            ))
         }
     }
 }
 
 pub async fn save_credentials(credentials: &Credentials) -> io::Result<()> {
-    // Save to database
+    // Save to database only
     if let Err(e) = crate::db::save_admin_credentials(credentials).await {
         error!("Failed to save admin credentials to database: {}", e);
         return Err(io::Error::new(io::ErrorKind::Other, format!("Database error: {}", e)));

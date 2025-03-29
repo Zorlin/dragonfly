@@ -32,18 +32,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create config directory if it doesn't exist
     std::fs::create_dir_all(CONFIG_DIR)?;
 
-    // Initialize config DB
-    db::init().await?;
+    // Initialize config DB - make sure this happens before loading credentials
+    db::init_db().await?;
 
     // Load or generate admin credentials
-    let credentials = match auth::load_credentials() {
+    let credentials = match auth::load_credentials().await {
         Ok(creds) => {
             info!("Loaded existing admin credentials");
             creds
         },
         Err(_) => {
-            info!("No admin credentials found, generating default ones");
-            auth::generate_default_credentials()
+            info!("No admin credentials found, generating default ones (ONLY HAPPENS ON FIRST RUN)");
+            // This will both generate a random password and save it to a file for the admin
+            auth::generate_default_credentials().await
         }
     };
 

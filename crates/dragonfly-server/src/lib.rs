@@ -19,6 +19,7 @@ mod api;
 mod ui;
 mod db;
 mod tinkerbell;
+mod filters;
 
 pub use api::api_router;
 
@@ -90,6 +91,7 @@ pub async fn init(addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         .merge(api_router())
         .merge(auth_router())
         .merge(ui::ui_router().with_state(app_state.clone()))
+        .nest_service("/static", ServeDir::new("crates/dragonfly-server/static"))
         .nest_service("/js", ServeDir::new("crates/dragonfly-server/static/js"))
         .nest_service("/css", ServeDir::new("crates/dragonfly-server/static/css"))
         .nest_service("/images", ServeDir::new("crates/dragonfly-server/static/images"))

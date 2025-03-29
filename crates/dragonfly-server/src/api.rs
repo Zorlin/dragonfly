@@ -187,7 +187,7 @@ async fn get_all_machines(
                         };
                         
                         html.push_str(&format!(r#"
-                            <tr class="hover:bg-gray-50" @click="window.location='/machines/{}'">
+                            <tr class="hover:bg-gray-50 dark:hover:bg-gradient-to-r dark:hover:from-gray-800 dark:hover:to-gray-900 dark:hover:bg-opacity-50 dark:hover:backdrop-blur-sm transition-colors duration-150 cursor-pointer" @click="window.location='/machines/{}'">
                                 <td class="px-6 py-4 whitespace-nowrap">
                                     <div class="text-sm font-medium text-gray-900">
                                         {}
@@ -225,12 +225,13 @@ async fn get_all_machines(
                         machine.mac_address,
                         machine.ip_address,
                         match machine.status {
-                            MachineStatus::Ready => "bg-green-100 text-green-800",
-                            MachineStatus::InstallingOS => "bg-yellow-100 text-yellow-800",
-                            MachineStatus::AwaitingAssignment => "bg-blue-100 text-blue-800",
-                            _ => "bg-red-100 text-red-800"
+                            MachineStatus::Ready => "px-3 py-1 inline-flex text-sm leading-5 font-semibold rounded-full bg-green-100 text-green-800 dark:bg-green-400/10 dark:text-green-300 dark:border dark:border-green-500/20",
+                            MachineStatus::InstallingOS => "px-3 py-1 inline-flex text-sm leading-5 font-semibold rounded-full bg-yellow-100 text-yellow-800 dark:bg-yellow-400/10 dark:text-yellow-300 dark:border dark:border-yellow-500/20",
+                            MachineStatus::AwaitingAssignment => "px-3 py-1 inline-flex text-sm leading-5 font-semibold rounded-full bg-blue-100 text-blue-800 dark:bg-blue-400/10 dark:text-blue-300 dark:border dark:border-blue-500/20",
+                            MachineStatus::ExistingOS => "px-3 py-1 inline-flex text-sm leading-5 font-semibold rounded-full bg-sky-100 text-sky-800 dark:bg-sky-400/10 dark:text-sky-300 dark:border dark:border-sky-500/20",
+                            _ => "px-3 py-1 inline-flex text-sm leading-5 font-semibold rounded-full bg-red-100 text-red-800 dark:bg-red-400/10 dark:text-red-300 dark:border dark:border-red-500/20"
                         },
-                        match &machine.status {
+                        match &machine.status { 
                             MachineStatus::Ready => String::from("Ready for Adoption"),
                             MachineStatus::InstallingOS => String::from("Installing OS"),
                             MachineStatus::AwaitingAssignment => String::from("Awaiting Assignment"),

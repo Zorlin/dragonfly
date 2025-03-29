@@ -721,9 +721,15 @@ fn parse_status(status_str: &str) -> MachineStatus {
 
 // Helper function to parse datetime from string
 fn parse_datetime(datetime_str: &str) -> chrono::DateTime<Utc> {
-    chrono::DateTime::parse_from_rfc3339(datetime_str)
+    let dt = chrono::DateTime::parse_from_rfc3339(datetime_str)
         .map(|dt| dt.with_timezone(&Utc))
-        .unwrap_or_else(|_| Utc::now())
+        .unwrap_or_else(|_| Utc::now());
+    
+    // Format without subsecond precision and then parse back
+    let formatted = dt.format("%Y-%m-%d %H:%M:%S UTC").to_string();
+    chrono::DateTime::parse_from_str(&formatted, "%Y-%m-%d %H:%M:%S %Z")
+        .map(|dt| dt.with_timezone(&Utc))
+        .unwrap_or(dt)
 }
 
 // Apply database migrations

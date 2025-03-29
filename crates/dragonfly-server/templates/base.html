@@ -1,9 +1,48 @@
 <!DOCTYPE html>
-<html lang="en" class="">
+<html lang="en" class="no-js">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Dragonfly{% endblock %}</title>
+    <script>
+        (function() {
+            // Get the server-provided theme first, then fallback to localStorage, then system
+            const theme = ('{{ theme }}' !== '') ? '{{ theme }}' : (localStorage.getItem('theme') || 'system');
+            
+            // Check if we should use dark mode
+            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            const shouldBeDark = theme === 'dark' || (theme === 'system' && prefersDark);
+            
+            // Apply theme immediately to prevent flash
+            if (shouldBeDark) {
+                document.documentElement.classList.add('dark');
+            } else {
+                document.documentElement.classList.remove('dark');
+            }
+            
+            // Make the page visible now that theme is applied
+            document.documentElement.classList.remove('no-js');
+        })();
+    </script>
+    <!-- Improve the script to prevent flashing -->
+    <script>
+        // Immediately set theme before any rendering occurs
+        (function() {
+            const theme = '{{ theme }}' || localStorage.getItem('theme') || 'system';
+            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            
+            // Remove dark class first to ensure clean state
+            document.documentElement.classList.remove('dark');
+            
+            // Only add dark class if needed
+            if (theme === 'dark' || (theme === 'system' && prefersDark)) {
+                document.documentElement.classList.add('dark');
+            }
+            
+            // Store the current theme style to prevent flashing
+            document.documentElement.style.display = 'block';
+        })();
+    </script>
     <!-- HTMX for server interactions -->
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
     <!-- Alpine.js for UI interactivity -->
@@ -25,94 +64,80 @@
     <style>
         [x-cloak] { display: none !important; }
     </style>
-    <script>
-        // Immediately check and set theme before page renders to prevent flash
-        const savedTheme = localStorage.getItem('theme') || 'system';
-        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+
+<!-- Add styles to prevent flash of wrong theme -->
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    {% block head %}{% endblock %}
+    <style>
+        [x-cloak] { display: none !important; }
         
-        // Start with no dark class
-        document.documentElement.classList.remove('dark');
-        
-        // Only add dark if explicitly dark or system preference is dark
-        if (savedTheme === 'dark' || (savedTheme === 'system' && prefersDark)) {
-            document.documentElement.classList.add('dark');
+        /* Prevent flash of unstyled content */
+        html.no-js {
+            display: none;
         }
         
-        // Log for debugging
-        console.log('Initial theme:', savedTheme, 'System prefers dark:', prefersDark);
-    </script>
+        html:not(.no-js) {
+            display: block;
+        }
+    </style>
 </head>
-<body class="bg-gray-100 dark:bg-gray-900" x-data="{
+<body class="bg-gray-100 dark:bg-[#0d1117] flex flex-col min-h-screen" x-data="{
     settingsOpen: false,
     osModal: false,
     statusModal: false,
     deleteModal: false,
     currentMachine: null,
     theme: '{{ theme }}' || localStorage.getItem('theme') || 'system',
+    isDark: false,
     setTheme(value) {
         this.theme = value;
         localStorage.setItem('theme', value);
+        this.applyTheme();
         
         // Save the theme preference on the server
         fetch(`/theme/toggle?theme=${value}&return_to=${window.location.pathname}`);
+    },
+    applyTheme() {
+        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        this.isDark = this.theme === 'dark' || (this.theme === 'system' && prefersDark);
         
-        // Reset theme - start by removing dark class
-        document.documentElement.classList.remove('dark');
-        
-        // Only add dark class when needed
-        if (value === 'dark' || (value === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+        if (this.isDark) {
             document.documentElement.classList.add('dark');
+        } else {
+            document.documentElement.classList.remove('dark');
         }
-        
-        console.log('Theme set to:', value, 'Dark class:', document.documentElement.classList.contains('dark'));
     },
     init() {
-        // Force theme application on page load
-        this.$nextTick(() => {
-            // Always start fresh by removing the dark class
-            document.documentElement.classList.remove('dark');
-            
-            // Check if we should be in dark mode
-            const isDark = this.theme === 'dark' || 
-                (this.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-                
-            // Only add dark class if we should be in dark mode
-            if (isDark) {
-                document.documentElement.classList.add('dark');
-            }
-            
-            console.log('Theme initialized to:', this.theme, 'Dark class:', document.documentElement.classList.contains('dark'));
-        });
+        // Apply theme on page load
+        this.applyTheme();
         
         // Watch for theme changes
-        this.$watch('theme', value => this.setTheme(value));
+        this.$watch('theme', () => this.setTheme(this.theme));
         
         // Watch for system preference changes
-        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
+        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
             if (this.theme === 'system') {
-                // Reset dark class based on system preference
-                document.documentElement.classList.remove('dark');
-                if (e.matches) {
-                    document.documentElement.classList.add('dark');
-                }
-                console.log('System preference changed to:', e.matches ? 'dark' : 'light');
+                this.applyTheme();
             }
         });
     }
 }">
-    <div x-data="machineActions">
-        <nav class="bg-white dark:bg-gray-800 shadow-lg">
+    <div x-data="machineActions" class="flex-grow">
+        <nav class="bg-white dark:bg-gray-800 shadow-lg border-b border-transparent dark:border-gray-700 transition-colors duration-200">
             <div class="max-w-7xl mx-auto px-4">
                 <div class="flex justify-between h-16">
                     <div class="flex">
                         <div class="flex-shrink-0 flex items-center">
-                            <a href="/" class="text-xl font-bold text-gray-800 dark:text-white">Dragonfly</a>
+                            <a href="/" class="text-2xl font-bold bg-gradient-to-r from-green-500 to-purple-600 bg-clip-text text-transparent dark:from-indigo-400 dark:to-purple-300 dark:drop-shadow-[0_0_6px_rgba(129,140,248,0.5)]">
+                                Dragonfly
+                                <span class="block text-xs text-gray-500 dark:text-gray-400 italic font-light mt-[-5px]">metal, managed</span>
+                            </a>
                         </div>
                         <div class="hidden sm:ml-6 sm:flex sm:space-x-8">
-                            <a href="/" class="border-transparent text-gray-500 dark:text-gray-300 hover:border-gray-300 hover:text-gray-700 dark:hover:text-white inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
+                            <a href="/" class="border-transparent text-gray-500 dark:text-gray-300 hover:border-indigo-400 hover:text-gray-700 dark:hover:text-white inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium transition-all duration-200">
                                 Dashboard
                             </a>
-                            <a href="/machines" class="border-transparent text-gray-500 dark:text-gray-300 hover:border-gray-300 hover:text-gray-700 dark:hover:text-white inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
+                            <a href="/machines" class="border-transparent text-gray-500 dark:text-gray-300 hover:border-indigo-400 hover:text-gray-700 dark:hover:text-white inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium transition-all duration-200">
                                 Machines
                             </a>
                         </div>
@@ -151,17 +176,9 @@
             </div>
         </nav>
 
-        <main class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+        <main class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8 transition-all duration-200">
             {% block content %}{% endblock %}
         </main>
-
-        <footer class="bg-white dark:bg-gray-800 shadow-lg mt-8">
-            <div class="max-w-7xl mx-auto py-4 px-4 sm:px-6 lg:px-8">
-                <p class="text-center text-gray-500 dark:text-gray-400 text-sm">
-                    Dragonfly - Bare Metal Infrastructure Management
-                </p>
-            </div>
-        </footer>
 
         <!-- OS Assignment Modal -->
         <div
@@ -182,7 +199,7 @@
                         x-transition:leave-start="opacity-100 translate-y-0 sm:scale-100"
                         x-transition:leave-end="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95"
                         @click.away="osModal = false"
-                        class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6"
+                        class="relative transform overflow-hidden rounded-lg bg-white dark:bg-[#1e293b] px-4 pb-4 pt-5 text-left shadow-xl dark:shadow-[0_0_15px_rgba(0,0,0,0.4)] dark:border dark:border-white dark:border-opacity-10 transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6"
                     >
                         <div id="os-modal-content">
                             <div class="flex items-center justify-center">
@@ -213,7 +230,7 @@
                         x-transition:leave-start="opacity-100 translate-y-0 sm:scale-100"
                         x-transition:leave-end="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95"
                         @click.away="statusModal = false"
-                        class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6"
+                        class="relative transform overflow-hidden rounded-lg bg-white dark:bg-[#1e293b] px-4 pb-4 pt-5 text-left shadow-xl dark:shadow-[0_0_15px_rgba(0,0,0,0.4)] dark:border dark:border-white dark:border-opacity-10 transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6"
                     >
                         <div id="status-modal-content">
                             <div class="flex items-center justify-center">
@@ -244,7 +261,7 @@
                         x-transition:leave-start="opacity-100 translate-y-0 sm:scale-100"
                         x-transition:leave-end="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95"
                         @click.away="deleteModal = false"
-                        class="relative transform overflow-hidden rounded-lg bg-white px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6"
+                        class="relative transform overflow-hidden rounded-lg bg-white dark:bg-[#1e293b] px-4 pb-4 pt-5 text-left shadow-xl dark:shadow-[0_0_15px_rgba(0,0,0,0.4)] dark:border dark:border-white dark:border-opacity-10 transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6"
                     >
                         <div class="sm:flex sm:items-start">
                             <div class="mx-auto flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10">
@@ -320,5 +337,13 @@
             }));
         });
     </script>
+    
+    <footer class="bg-white dark:bg-gray-800 shadow-lg border-t border-transparent dark:border-gray-700 mt-auto w-full">
+        <div class="max-w-7xl mx-auto py-4 px-4 sm:px-6 lg:px-8">
+            <p class="text-center text-gray-500 dark:text-gray-400 text-sm">
+                Dragonfly - Bare Metal Infrastructure Management
+            </p>
+        </div>
+    </footer>
 </body>
-</html> 
+</html>

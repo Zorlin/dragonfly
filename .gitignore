@@ -12,6 +12,7 @@ inventories/**
 # secrets
 kubeconfig
 k3s.yaml
+initial_password.txt
 
 # sqlite
 *.db

@@ -17,31 +17,7 @@ use std::fs;
 
 use crate::db;
 use crate::auth::{AuthSession, Settings, save_settings};
-
-// Filters for Askama templates
-mod filters {
-    use askama::Result;
-
-    pub fn length<T>(collection: &[T]) -> Result<usize> {
-        Ok(collection.len())
-    }
-    
-    pub fn string<T: std::fmt::Display>(value: T) -> Result<String> {
-        Ok(format!("{}", value))
-    }
-
-    pub fn join_vec(vec: &[String], separator: &str) -> Result<String> {
-        Ok(vec.join(separator))
-    }
-    
-    // Helper to safely unwrap Option<String> values in templates
-    pub fn unwrap_or<'a>(opt: &'a Option<String>, default: &'a str) -> Result<&'a str> {
-        match opt {
-            Some(s) => Ok(s.as_str()),
-            None => Ok(default),
-        }
-    }
-}
+use crate::filters;
 
 // Extract theme from cookies
 fn get_theme_from_cookie(headers: &HeaderMap) -> String {
@@ -68,6 +44,7 @@ pub struct IndexTemplate {
     pub status_counts_json: String,
     pub theme: String,
     pub is_authenticated: bool,
+    pub formatted_dates: HashMap<uuid::Uuid, String>,
 }
 
 #[derive(Template)]
@@ -84,6 +61,8 @@ pub struct MachineDetailsTemplate {
     pub machine: Machine,
     pub theme: String,
     pub is_authenticated: bool,
+    pub created_at_formatted: String,
+    pub updated_at_formatted: String,
 }
 
 #[derive(Template)]
@@ -215,6 +194,7 @@ pub async fn index(
                 status_counts_json,
                 theme,
                 is_authenticated,
+                formatted_dates: HashMap::new(),
             }).into_response()
         },
         Err(e) => {
@@ -226,6 +206,7 @@ pub async fn index(
                 status_counts_json: "{}".to_string(),
                 theme: "system".to_string(),
                 is_authenticated,
+                formatted_dates: HashMap::new(),
             }).into_response()
         }
     }
@@ -279,10 +260,17 @@ pub async fn machine_details(
             match db::get_machine_by_id(&uuid).await {
                 Ok(Some(machine)) => {
                     info!("Rendering machine details page for machine {}", uuid);
+                    
+                    // Format dates before constructing the template
+                    let created_at_formatted = machine.created_at.format("%Y-%m-%d %H:%M:%S UTC").to_string();
+                    let updated_at_formatted = machine.updated_at.format("%Y-%m-%d %H:%M:%S UTC").to_string();
+                    
                     UiTemplate::MachineDetails(MachineDetailsTemplate { 
                         machine,
                         theme,
                         is_authenticated,
+                        created_at_formatted,
+                        updated_at_formatted,
                     }).into_response()
                 },
                 Ok(None) => {
@@ -295,6 +283,7 @@ pub async fn machine_details(
                         status_counts_json: "{}".to_string(),
                         theme: "system".to_string(),
                         is_authenticated,
+                        formatted_dates: HashMap::new(),
                     }).into_response()
                 },
                 Err(e) => {
@@ -307,6 +296,7 @@ pub async fn machine_details(
                         status_counts_json: "{}".to_string(),
                         theme: "system".to_string(),
                         is_authenticated,
+                        formatted_dates: HashMap::new(),
                     }).into_response()
                 }
             }
@@ -321,6 +311,7 @@ pub async fn machine_details(
                 status_counts_json: "{}".to_string(),
                 theme: "system".to_string(),
                 is_authenticated,
+                formatted_dates: HashMap::new(),
             }).into_response()
         }
     }
