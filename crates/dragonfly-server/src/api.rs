@@ -2146,19 +2146,18 @@ fn create_streaming_response(
         // Always accept ranges
         .header(axum::http::header::ACCEPT_RANGES, "bytes");
         
-    // Remove chunked encoding if Content-Length is known (better for ranges)
-    if content_length.is_some() && content_range.is_some() {
-         builder = builder.header(axum::http::header::CONTENT_ENCODING, "identity"); // Keep no compression
-    } else {
-         // Use chunked for full file streams where length might be unknown (downloads)
-         builder = builder.header(axum::http::header::TRANSFER_ENCODING, "chunked");
-         builder = builder.header(axum::http::header::CONTENT_ENCODING, "identity"); // Keep no compression
-    }
-    
-    // Include Content-Length (length of the part being sent)
+    // Set Content-Encoding to identity (no compression)
+    builder = builder.header(axum::http::header::CONTENT_ENCODING, "identity");
+
+    // Include Content-Length (length of the part being sent) if known
     if let Some(length) = content_length {
         builder = builder.header(axum::http::header::CONTENT_LENGTH, length.to_string());
+    } else if status_code == StatusCode::OK {
+        // Only use chunked encoding for OK responses if length is truly unknown
+        builder = builder.header(axum::http::header::TRANSFER_ENCODING, "chunked");
     }
+    // For 206 Partial Content, Content-Length is mandatory and should be set above.
+    // Avoid setting Transfer-Encoding: chunked for 206 responses.
     
     // Include Content-Range if it's a partial response
     if let Some(range_header_value) = content_range {
