@@ -67,16 +67,22 @@
                             <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer" @click="window.location='/machines/{{ machine.id }}'">
                                 <td class="px-6 py-4 whitespace-nowrap">
                                     <div class="flex items-center">
+                                        {# Main identifier display #}
                                         <div class="text-sm font-medium text-gray-900 dark:text-white">
                                             <a href="/machines/{{ machine.id }}" class="hover:text-indigo-600 dark:hover:text-indigo-400">
                                                 {% if machine.hostname.is_some() %}
                                                     {{ machine.hostname.as_ref().unwrap() }}
-                                                {% else if machine.memorable_name.is_some() %}
-                                                    {{ machine.memorable_name.as_ref().unwrap() }}
                                                 {% else %}
+                                                    {# Fallback to ID if no hostname #}
                                                     {% let id_str = machine.id.to_string() %}{{ id_str }}
                                                 {% endif %}
                                             </a>
+                                            {# Display memorable_name below if it exists #}
+                                            {% if machine.memorable_name.is_some() %}
+                                            <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                                {{ machine.memorable_name.as_ref().unwrap() }}
+                                            </div>
+                                            {% endif %}
                                         </div>
                                     </div>
                                 </td>
