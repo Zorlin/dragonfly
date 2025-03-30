@@ -2,6 +2,7 @@
 Here's things we would like to work on and add to Dragonfly next.
 
 ## Upcoming planned features
+* Lock individual nodes to prevent them from being reimaged or deleted
 * Authentication system
   * Admin login for managing and adopting machines
   * Normal user login - can see machines and adopt new ones, but not reimage or delete any machines

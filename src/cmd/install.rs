@@ -436,47 +436,93 @@ async fn wait_for_node_ready(kubeconfig_path: &PathBuf) -> Result<()> {
     
     // Print a dot every few seconds to show progress
     let mut dots_printed = 0;
+    let mut node_ready = false;
+    let mut metrics_server_ready = false;
 
     loop {
         if start_time.elapsed() > max_wait {
             color_eyre::eyre::bail!("Timed out waiting for Kubernetes node to become ready after {} seconds.", max_wait.as_secs());
         }
 
-        // Run kubectl with the simplest possible check for a Ready node
-        let output_result = Command::new("kubectl")
-            .args(["get", "nodes", "--no-headers"])
-            .env("KUBECONFIG", kubeconfig_path)
-            .output();
+        // Step 1: Check if the node itself is ready
+        if !node_ready {
+            let output_result = Command::new("kubectl")
+                .args(["get", "nodes", "--no-headers"])
+                .env("KUBECONFIG", kubeconfig_path)
+                .output();
 
-        match output_result {
-            Ok(output) => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                
-                // Node is ready if "Ready" appears in the output and "NotReady" doesn't
-                if output.status.success() && 
-                   stdout.contains(" Ready") && 
-                   !stdout.contains("NotReady") {
-                    // Add a newline after dots if we printed any
-                    if dots_printed > 0 {
-                        println!();
+            match output_result {
+                Ok(output) => {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    
+                    // Node is ready if "Ready" appears in the output and "NotReady" doesn't
+                    if output.status.success() && 
+                    stdout.contains(" Ready") && 
+                    !stdout.contains("NotReady") {
+                        debug!("Kubernetes node has become ready");
+                        node_ready = true;
+                    } else {
+                        // Node exists but is not ready yet
+                        debug!("Waiting for node to become ready: {}", stdout.trim());
                     }
-                    info!("Kubernetes node is ready");
-                    return Ok(());
+                },
+                Err(e) => {
+                    // Most likely the API server is still starting
+                    debug!("kubectl command error (will retry): {}", e);
                 }
-                
-                // Node exists but is not ready yet
-                debug!("Waiting for node to become ready: {}", stdout.trim());
-            },
-            Err(e) => {
-                // Most likely the API server is still starting
-                debug!("kubectl command error (will retry): {}", e);
             }
         }
 
-        // Print a dot to show progress
+        // Step 2: Once node is ready, check for metrics-server readiness
+        if node_ready && !metrics_server_ready {
+            // First check if metrics-server exists
+            let metrics_exists_result = Command::new("kubectl")
+                .args(["get", "pods", "-n", "kube-system", "-l", "k8s-app=metrics-server", "--no-headers"])
+                .env("KUBECONFIG", kubeconfig_path)
+                .output();
+                
+            let pod_exists = if let Ok(output) = &metrics_exists_result {
+                output.status.success() && !String::from_utf8_lossy(&output.stdout).trim().is_empty()
+            } else {
+                false
+            };
+                
+            if pod_exists {
+                // Check if metrics-server is ready
+                let metrics_status = Command::new("kubectl")
+                    .args(["get", "pods", "-n", "kube-system", "-l", "k8s-app=metrics-server", 
+                           "-o", "jsonpath='{.items[0].status.conditions[?(@.type==\"Ready\")].status}'"])
+                    .env("KUBECONFIG", kubeconfig_path)
+                    .output();
+                    
+                if let Ok(status) = metrics_status {
+                    let status_str = String::from_utf8_lossy(&status.stdout).trim().trim_matches('\'').to_string();
+                    if status_str == "True" {
+                        debug!("Metrics server is ready");
+                        metrics_server_ready = true;
+                    } else {
+                        debug!("Waiting for metrics-server to become ready: {}", status_str);
+                    }
+                }
+            } else {
+                debug!("Metrics server pod not found yet");
+            }
+        }
+
+        // Print status
         print!(".");
         std::io::stdout().flush().wrap_err("Failed to flush stdout")?;
         dots_printed += 1;
+
+        // Check if both conditions are met
+        if node_ready && metrics_server_ready {
+            // Add a newline after dots if we printed any
+            if dots_printed > 0 {
+                println!();
+            }
+            info!("Kubernetes node and metrics-server are ready");
+            return Ok(());
+        }
 
         tokio::time::sleep(check_interval).await;
     }
