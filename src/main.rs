@@ -2,7 +2,7 @@
 use clap::{Parser, Subcommand};
 use color_eyre::eyre::Result;
 use tracing::{error, info, Level};
-use tracing_subscriber::FmtSubscriber;
+use tracing_subscriber::fmt;
 
 // Reference the cmd module where subcommands live
 mod cmd;
@@ -15,6 +15,10 @@ use cmd::install::InstallArgs;
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>, // Make the command optional
+    
+    /// Verbose output - shows more detailed logs
+    #[arg(short, long)]
+    verbose: bool,
 }
 
 // Define the subcommands
@@ -37,14 +41,17 @@ struct ServerArgs {}
 async fn main() -> Result<()> {
     color_eyre::install()?; // Install better error handling
 
-    // Initialize tracing
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::INFO)
-        .finish();
-    tracing::subscriber::set_global_default(subscriber)
-        .expect("setting default subscriber failed");
-
     let cli = Cli::parse();
+    
+    // Initialize tracing with a cleaner format (no timestamps)
+    let log_level = if cli.verbose { Level::DEBUG } else { Level::INFO };
+    
+    fmt()
+        .with_max_level(log_level)
+        .without_time() // Remove timestamps
+        .with_target(false) // Hide target module path
+        .with_writer(std::io::stdout) // Write to stdout
+        .init();
 
     // Decide which command to run
     match cli.command {
@@ -53,7 +60,7 @@ async fn main() -> Result<()> {
             info!("Running Install command...");
             // Call the actual installation function from the install module
             if let Err(e) = cmd::install::run_install(args).await {
-                error!("Installation failed: {:?}", e);
+                error!("Installation failed: {:#}", e);
                 eprintln!("Error during installation: {}", e);
                 std::process::exit(1);
             }
@@ -71,7 +78,7 @@ async fn main() -> Result<()> {
                     info!("Server shut down gracefully");
                 }
                 Err(e) => {
-                    error!("Server error: {:?}", e);
+                    error!("Server error: {:#}", e);
                     eprintln!("Error running server: {}", e);
                     std::process::exit(1);
                 }

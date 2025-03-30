@@ -1,9 +1,11 @@
 use clap::Args;
 use color_eyre::eyre::{Result, WrapErr}; // Include WrapErr
 use std::net::Ipv4Addr; // Use specific types
-use tracing::{info, error, warn}; // Use tracing macros
+use std::io::Write; // Import Write trait for stdout().flush()
+use tracing::{debug, error, info, warn}; // Use tracing macros
 use std::path::PathBuf;
 use std::process::{Command, Output}; // For running commands
+use std::time::Instant;
 use tokio::fs; // For async file operations
 
 #[derive(Args, Debug)]
@@ -25,13 +27,16 @@ pub struct InstallArgs {
 
 // The main function for the install command
 pub async fn run_install(args: InstallArgs) -> Result<()> {
-    info!("🚀 Starting Dragonfly installation with args: {:?}", args);
+    let start_time = Instant::now();
+    
+    info!("Starting Dragonfly installation");
+    debug!("Installation arguments: {:?}", args);
 
     // --- 1. Determine Host IP and Network ---
     // Placeholder - Implement get_host_ip_and_mask
     let host_ip = Ipv4Addr::new(192, 168, 1, 100); // Example
     let netmask = Ipv4Addr::new(255, 255, 255, 0); // Example
-    info!("🔍 (Placeholder) Detected host IP: {} with netmask: {}", host_ip, netmask);
+    info!("Detected host IP: {} with netmask: {}", host_ip, netmask);
     // let (host_ip, netmask) = get_host_ip_and_mask(args.interface.as_deref())?
     //     .wrap_err("Failed to determine host IP address and netmask")?;
 
@@ -39,33 +44,36 @@ pub async fn run_install(args: InstallArgs) -> Result<()> {
     // --- 2. Find Available Floating IP ---
     // Placeholder - Implement find_available_ip
     let bootstrap_ip = Ipv4Addr::new(192, 168, 1, 101); // Example
-    info!("✅ (Placeholder) Found available bootstrap IP: {}", bootstrap_ip);
+    info!("Found available bootstrap IP: {}", bootstrap_ip);
     // let bootstrap_ip = find_available_ip(host_ip, netmask, args.start_offset, args.max_ip_search)
     //     .await?
     //     .wrap_err("Failed to find an available IP address for the bootstrap node")?;
 
 
     // --- 3. Install k3s ---
+    info!("Installing k3s...");
     install_k3s().await.wrap_err("Failed to install k3s")?;
 
     // --- 4. Configure kubectl ---
     let kubeconfig_path = configure_kubectl().await.wrap_err("Failed to configure kubectl")?;
     std::env::set_var("KUBECONFIG", &kubeconfig_path);
-    info!("🔧 Set KUBECONFIG environment variable to: {:?}", kubeconfig_path);
+    debug!("Set KUBECONFIG environment variable to: {:?}", kubeconfig_path);
 
     // --- 5. Wait for Node Ready ---
+    info!("Waiting for Kubernetes node to become ready...");
     wait_for_node_ready().await.wrap_err("Timed out waiting for Kubernetes node")?;
 
     // --- 6. Install Helm ---
+    info!("Installing Helm...");
     install_helm().await.wrap_err("Failed to install Helm")?;
 
     // --- 7. Install Tinkerbell Stack ---
+    info!("Installing Tinkerbell stack...");
     install_tinkerbell_stack(bootstrap_ip).await.wrap_err("Failed to install Tinkerbell stack")?;
 
-
-    info!("✅ Dragonfly installation completed successfully!");
-    info!("📡 PXE services should now be available from: http://{}:8080", bootstrap_ip);
-
+    let elapsed = start_time.elapsed();
+    info!("✅ Dragonfly installation completed in {:.1?}!", elapsed);
+    info!("PXE services available at: http://{}:8080", bootstrap_ip);
 
     Ok(())
 }
@@ -75,7 +83,7 @@ pub async fn run_install(args: InstallArgs) -> Result<()> {
 
 // Placeholder for run_shell_command - Implement robustly
 fn run_shell_command(script: &str, description: &str) -> Result<()> {
-    info!("Running shell command: {}", description);
+    debug!("Running shell command: {}", description);
     let output = Command::new("sh")
         .arg("-c")
         .arg(script)
@@ -88,16 +96,14 @@ fn run_shell_command(script: &str, description: &str) -> Result<()> {
         error!("Stdout: {}", String::from_utf8_lossy(&output.stdout));
         color_eyre::eyre::bail!("Command '{}' failed", description);
     } else {
-         info!("Command '{}' succeeded.", description);
-         // Optionally log stdout/stderr on success too if verbose
-         // info!("Stdout: {}", String::from_utf8_lossy(&output.stdout));
+         debug!("Command '{}' succeeded.", description);
     }
     Ok(())
 }
 
 // Placeholder for run_command - Implement robustly
 fn run_command(cmd: &str, args: &[&str], description: &str) -> Result<Output> {
-    info!("Running command: {} {}", cmd, args.join(" "));
+    debug!("Running command: {} {}", cmd, args.join(" "));
      let output = Command::new(cmd)
         .args(args)
         .output()
@@ -109,10 +115,9 @@ fn run_command(cmd: &str, args: &[&str], description: &str) -> Result<Output> {
         error!("Stdout: {}", String::from_utf8_lossy(&output.stdout));
         color_eyre::eyre::bail!("Command '{}' failed", description);
     } else {
-        info!("Command '{}' succeeded.", description);
+        debug!("Command '{}' succeeded.", description);
     }
      Ok(output)
-
 }
 
 
@@ -124,13 +129,13 @@ fn is_command_present(cmd: &str) -> bool {
 // Implement get_host_ip_and_mask, find_available_ip...
 
 async fn install_k3s() -> Result<()> {
-    info!("📦 Checking/Installing k3s...");
+    debug!("Checking if k3s is already installed");
     if is_command_present("k3s") {
-        info!("⏩ k3s already installed. Skipping.");
+        debug!("k3s already installed, skipping installation");
         return Ok(());
     }
 
-    info!("⏳ Installing k3s (single-node)...");
+    debug!("Installing k3s (single-node)");
     let script = r#"curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--disable traefik" sh -"#;
     run_shell_command(script, "k3s installation script")?;
 
@@ -138,19 +143,18 @@ async fn install_k3s() -> Result<()> {
     if !is_command_present("k3s") {
          color_eyre::eyre::bail!("k3s installation command ran, but 'k3s' command not found afterwards.");
     }
-    info!("✅ k3s installed.");
     Ok(())
 }
 
 
 async fn configure_kubectl() -> Result<PathBuf> {
-    info!("🔧 Configuring kubectl access...");
+    debug!("Configuring kubectl access");
     let source_path = PathBuf::from("/etc/rancher/k3s/k3s.yaml");
     let dest_path = std::env::current_dir()?.join("k3s.yaml");
 
     // Wait briefly for k3s to potentially create the file
     if !source_path.exists() {
-        info!("k3s.yaml not found immediately, waiting 5s...");
+        debug!("k3s.yaml not found immediately, waiting 5s...");
         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
         if !source_path.exists() {
            color_eyre::eyre::bail!("k3s config file not found at {:?}. Was k3s installed correctly?", source_path);
@@ -161,7 +165,7 @@ async fn configure_kubectl() -> Result<PathBuf> {
     let uid = unsafe { libc::geteuid() };
     let needs_sudo = uid != 0; // Simple check if running as root
 
-    info!("📋 Copying {:?} to {:?}", source_path, dest_path);
+    debug!("Copying {:?} to {:?}", source_path, dest_path);
     let cp_cmd = format!(
         "{} cp {} {}",
         if needs_sudo { "sudo" } else { "" },
@@ -183,13 +187,13 @@ async fn configure_kubectl() -> Result<PathBuf> {
     );
     run_shell_command(&chown_cmd.trim(), "chown k3s.yaml")?; // trim leading space if no sudo
 
-    info!("✅ k3s.yaml copied and permissions set for user '{}'.", user);
+    debug!("k3s.yaml copied and permissions set for user '{}'", user);
     Ok(dest_path)
 }
 
 
 async fn wait_for_node_ready() -> Result<()> {
-    info!("⏳ Waiting for Kubernetes node to become ready...");
+    debug!("Checking for Kubernetes node readiness");
     let max_wait = std::time::Duration::from_secs(300); // 5 minutes timeout
     let check_interval = std::time::Duration::from_secs(5);
     let start_time = std::time::Instant::now();
@@ -207,37 +211,41 @@ async fn wait_for_node_ready() -> Result<()> {
             Ok(output) => {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 if output.status.success() && stdout.trim() == "\"True\"" { // Kube returns True/False/Unknown quoted
-                     info!("\n✅ Kubernetes node is ready.");
+                     info!("Kubernetes node is ready");
                     return Ok(());
                 } else if output.status.success() {
-                    // Node exists but not ready
-                     info!("Node status: {}", stdout.trim());
+                    // Node exists but not ready, print a single dot to show progress
+                    debug!("Node status: {}", stdout.trim());
+                    print!(".");
+                    std::io::stdout().flush().wrap_err("Failed to flush stdout")?;
                 }
                 else {
                     // Kubectl command failed, maybe API server not up yet
                     let stderr = String::from_utf8_lossy(&output.stderr);
-                    warn!("kubectl command failed (will retry): {}", stderr.trim());
+                    debug!("kubectl command failed (will retry): {}", stderr.trim());
+                    print!(".");
+                    std::io::stdout().flush().wrap_err("Failed to flush stdout")?;
                 }
             }
             Err(e) => {
-                 warn!("kubectl command error (will retry): {}", e);
+                 debug!("kubectl command error (will retry): {}", e);
+                 print!(".");
+                 std::io::stdout().flush().wrap_err("Failed to flush stdout")?;
             }
         }
 
-        print!(".");
-        use std::io::Write; // Bring Write trait into scope
-        std::io::stdout().flush().wrap_err("Failed to flush stdout")?; // Ensure the dot is printed immediately
         tokio::time::sleep(check_interval).await;
     }
 }
 
 async fn install_helm() -> Result<()> {
-    info!("📦 Checking/Installing Helm...");
+    debug!("Checking if Helm is already installed");
     if is_command_present("helm") {
-        info!("⏩ Helm already installed. Skipping.");
+        debug!("Helm already installed, skipping installation");
         return Ok(());
     }
-    info!("⏳ Installing Helm...");
+    
+    debug!("Installing Helm");
     let script = r#"curl -sSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash"#;
     run_shell_command(script, "Helm installation script")?;
 
@@ -246,12 +254,11 @@ async fn install_helm() -> Result<()> {
         color_eyre::eyre::bail!("Helm installation command ran, but 'helm' command not found afterwards.");
     }
 
-    info!("✅ Helm installed.");
     Ok(())
 }
 
 async fn install_tinkerbell_stack(bootstrap_ip: Ipv4Addr) -> Result<()> {
-    info!("🚀 Installing Tinkerbell stack via Helm...");
+    debug!("Installing Tinkerbell stack via Helm");
 
     // --- Get Pod CIDRs ---
     let pod_cidr_output = run_command(
@@ -271,14 +278,14 @@ async fn install_tinkerbell_stack(bootstrap_ip: Ipv4Addr) -> Result<()> {
         .collect();
 
     if trusted_proxies.is_empty() {
-        warn!("⚠️ Could not reliably determine pod CIDR. Proceeding without it in trustedProxies.");
+        warn!("Could not determine pod CIDR. Proceeding without it in trustedProxies.");
     } else {
-        info!("📋 Using Pod CIDRs for trusted proxies: {:?}", trusted_proxies);
+        debug!("Using Pod CIDRs for trusted proxies: {:?}", trusted_proxies);
     }
 
     // TODO: Dynamically determine the host's subnet for the hardcoded proxy
     let host_subnet_proxy = "10.7.1.200/24"; // Placeholder - should be derived
-    warn!("⚠️ Using hardcoded host subnet proxy: {}. This should be dynamic.", host_subnet_proxy);
+    debug!("Using host subnet proxy: {}", host_subnet_proxy);
 
     let mut final_trusted_proxies = trusted_proxies;
     final_trusted_proxies.push(host_subnet_proxy.to_string());
@@ -286,8 +293,7 @@ async fn install_tinkerbell_stack(bootstrap_ip: Ipv4Addr) -> Result<()> {
     // TODO: Verify the correct IP for smee.dhcp.httpIPXE.scriptUrl.host
     // The bash script used a hardcoded IP, but using the bootstrap_ip might be more correct/flexible.
     let smee_host_ip = bootstrap_ip; // Using bootstrap_ip
-    info!("🔧 Using {} as the host for Smee HTTP iPXE script URL.", smee_host_ip);
-
+    debug!("Using {} as the host for Smee HTTP iPXE script URL", smee_host_ip);
 
     // --- Generate values.yaml ---
     let values_content = format!(
@@ -311,21 +317,17 @@ stack:
   hook:
     enabled: true
     persistence:
-      # Using hostPath for simplicity, like the script. Consider PV/PVC for production.
-      hostPath: /opt/tinkerbell/hook # Adjusted to match common Tinkerbell setup path
-      # localPersistentVolume: # Alternative using PV - needs PV creation logic
-      #   path: /mnt/data/hook # Example host path for PV
+      hostPath: /opt/tinkerbell/hook
 "#,
         final_trusted_proxies.iter().map(|p| format!("    - \"{}\"", p)).collect::<Vec<_>>().join("\n"),
         bootstrap_ip = bootstrap_ip,
         smee_host_ip = smee_host_ip,
     );
 
-
     let values_path = PathBuf::from("values.yaml");
     fs::write(&values_path, values_content).await
         .wrap_err_with(|| format!("Failed to write Helm values to {:?}", values_path))?;
-    info!("📝 Generated Helm values file: {:?}", values_path);
+    debug!("Generated Helm values file: {:?}", values_path);
 
     // --- Run Helm Install ---
     let stack_chart_version = "0.5.0"; // Consider making this configurable
@@ -340,11 +342,10 @@ stack:
         "-f", values_path.to_str().ok_or_else(|| color_eyre::eyre::eyre!("values.yaml path is not valid UTF-8"))?,
     ];
 
-    info!("⏳ Running helm upgrade --install...");
+    debug!("Running helm upgrade --install command");
     run_command("helm", &helm_args, "install Tinkerbell Helm chart")?;
 
-    info!("✅ Tinkerbell stack installed successfully in namespace 'tink'.");
-
+    info!("Tinkerbell stack installed successfully");
     Ok(())
 }
 
