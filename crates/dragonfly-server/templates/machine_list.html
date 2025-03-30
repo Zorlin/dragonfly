@@ -61,7 +61,7 @@
                             hx-select="#machine-list > tr"
                             hx-target="#machine-list"
                             hx-trigger="load, refreshMachines from:body"
-                            hx-swap="innerHTML transition:true"
+                            hx-swap="morph"
                         >
                             {% for machine in machines %}
                             <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer" @click="window.location='/machines/{{ machine.id }}'">
@@ -145,7 +145,7 @@
                                             {% endif %}
                                         {% else %}
                                             {% if is_admin %} {# Wrap all actions in is_admin check #}
-                                            <div class="flex space-x-1 items-center" @click.stop>
+                                            <div class="flex space-x-1 items-center" @click.stop hx-preserve="true">
                                                 {# Common Actions - Tags #}
                                                 <button 
                                                     @click="openTagModal(
@@ -406,6 +406,10 @@
 {% endblock %}
 
 {% block scripts %}
+{# Add the idiomorph script BEFORE your main script block if possible #}
+{# Ideally, move this to your base.html head or before the main htmx script #}
+<script src="https://unpkg.com/idiomorph/dist/idiomorph-ext.min.js"></script> 
+
 <script>
     // Check if user is authenticated before allowing admin actions
     function requireAdmin(callback) {

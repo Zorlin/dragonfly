@@ -46,6 +46,10 @@ cookie = "0.18"
 bincode = "1.3"
 tower-cookies = "0.10.0"
 
+# Networking / DNS
+# dns_lookup = "2.0.4" # Removed synchronous resolver
+hickory-resolver = { version = "0.24.4", features = ["tokio-runtime"] } # Renamed from trust-dns-resolver
+
 # Local dependencies
 dragonfly-common = { path = "../dragonfly-common" }
 

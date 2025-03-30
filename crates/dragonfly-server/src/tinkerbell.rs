@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::OnceCell;
 use tracing::{error, info, warn};
 use dragonfly_common::models::Machine;
+use std::str::FromStr;
+use hickory_resolver::AsyncResolver;
+use hickory_resolver::config::{ResolverConfig, ResolverOpts};
 
 // Define a static Kubernetes client
 static KUBE_CLIENT: OnceCell<Client> = OnceCell::const_new();
@@ -187,11 +190,52 @@ pub async fn register_machine(machine: &Machine) -> Result<()> {
     // Create a unique name for the hardware resource based on MAC address
     let resource_name = format!("machine-{}", machine.mac_address.replace(":", "-"));
     
-    // Extract hostname from machine
-    let hostname = machine.hostname.clone().unwrap_or_else(|| resource_name.clone());
+    // --- Determine Hostname (Final Complete Rewrite) ---
+    // Start with the fallback/default (MAC-based name)
+    let mut resolved_hostname = resource_name.clone(); 
+    
+    // Try hostname if set (Fallback 2)
+    if let Some(hostname) = &machine.hostname {
+        resolved_hostname = hostname.clone();
+    }
 
-    // Extract the memorable name from the machine
-    let memorable_name = machine.memorable_name.clone().unwrap_or_else(|| resource_name.clone());
+    // Attempt reverse DNS lookup if we have a valid IP
+    if let Ok(ip_addr) = std::net::IpAddr::from_str(&machine.ip_address) {
+        // Create resolver - note: this function returns the resolver itself, not a Result
+        let resolver = hickory_resolver::AsyncResolver::tokio(
+            hickory_resolver::config::ResolverConfig::default(), 
+            hickory_resolver::config::ResolverOpts::default()
+        );
+        
+        // Try reverse lookup
+        if let Ok(response) = resolver.reverse_lookup(ip_addr).await {
+            if let Some(name) = response.iter().next() {
+                let rdns_name = name.to_utf8().trim_end_matches('.').to_string();
+                info!("Using hostname from reverse DNS lookup for {}: {}", ip_addr, rdns_name);
+                resolved_hostname = rdns_name;
+            } else {
+                warn!("Reverse DNS lookup returned empty result for {}", ip_addr);
+            }
+        } else {
+            warn!("Reverse DNS lookup failed for {}", ip_addr);
+        }
+    } else {
+        warn!("Invalid IP address format for DNS lookup: '{}'", machine.ip_address);
+    }
+    
+    // --- End Determine Hostname ---
+
+    register_machine_internal(client, machine, &resource_name, &resolved_hostname).await
+}
+
+// Internal function to handle the actual machine registration with Tinkerbell
+async fn register_machine_internal(
+    client: &'static Client,
+    machine: &Machine,
+    resource_name: &str,
+    resolved_hostname: &str,
+) -> Result<()> {
+    let memorable_name = machine.memorable_name.clone().unwrap_or_else(|| resource_name.to_string());
 
     info!("Registering machine {} with Tinkerbell", resource_name);
     
@@ -201,15 +245,15 @@ pub async fn register_machine(machine: &Machine) -> Result<()> {
         api_version: "tinkerbell.org/v1alpha1".to_string(),
         kind: "Hardware".to_string(),
         metadata: Metadata {
-            name: resource_name.clone(),
+            name: resource_name.to_string(),
             namespace: "tink".to_string(),
             labels: None,
         },
         spec: HardwareSpec {
             metadata: Some(HardwareMetadata {
                 instance: Instance {
-                    id: memorable_name.clone(),
-                    hostname: hostname.clone(),
+                    id: memorable_name,
+                    hostname: resolved_hostname.to_string(),
                 },
             }),
             disks: Some(machine.disks.iter().map(|disk| DiskSpec {
@@ -218,7 +262,7 @@ pub async fn register_machine(machine: &Machine) -> Result<()> {
             interfaces: Some(vec![InterfaceSpec {
                 dhcp: Some(DHCPSpec {
                     arch: Some("x86_64".to_string()),
-                    hostname: Some(hostname),
+                    hostname: Some(resolved_hostname.to_string()),
                     ip: Some(IPSpec {
                         address: machine.ip_address.clone(),
                         gateway: None,
@@ -258,7 +302,7 @@ pub async fn register_machine(machine: &Machine) -> Result<()> {
     // Create a DynamicObject from our hardware_json
     let mut dynamic_obj = DynamicObject {
         metadata: kube::core::ObjectMeta {
-            name: Some(resource_name.clone()),
+            name: Some(resource_name.to_string()),
             namespace: Some("tink".to_string()),
             ..Default::default()
         },
@@ -300,7 +344,7 @@ pub async fn register_machine(machine: &Machine) -> Result<()> {
             
             // For creation, ensure we have a clean metadata without resourceVersion
             dynamic_obj.metadata = kube::core::ObjectMeta {
-                name: Some(resource_name.clone()),
+                name: Some(resource_name.to_string()),
                 namespace: Some("tink".to_string()),
                 ..Default::default()
             };

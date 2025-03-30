@@ -47,6 +47,7 @@ The main highlights:
   for integrated data management.
 
 More features:
+- 🌍 (WIP) Uses DNS to find machine hostnames automatically
 - 🔒 (WIP) Login system with admin/user roles and permissions
 - 🔧 (WIP) Reimage any machine in two clicks
 - 🧸 **Safety Mode (Molly Guard)** — avoid accidentally nuking a machine
