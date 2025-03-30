@@ -1995,6 +1995,11 @@ async fn read_file_as_stream(
                     let _ = tx.send(Ok(Bytes::new())).await;
                     break;
                 },
+                Ok(_) => {
+                    // This case shouldn't happen in practice, but we need to handle it for exhaustiveness
+                    debug!("Unexpected zero-byte read without EOF for file {}", path_buf.display());
+                    // Just continue the loop to try reading again
+                },
                 Err(e) => {
                     // Send the error wrapped in our Error type
                     let err = Error::Internal(format!("File read error for {}: {}", path_buf.display(), e));

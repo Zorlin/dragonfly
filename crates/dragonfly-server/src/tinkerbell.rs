@@ -46,7 +46,7 @@ pub async fn init() -> Result<()> {
 }
 
 // Get the Kubernetes client
-async fn get_client() -> Result<&'static Client> {
+pub async fn get_client() -> Result<&'static Client> {
     if KUBE_CLIENT.get().is_none() {
         info!("Kubernetes client not initialized, initializing now");
         

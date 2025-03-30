@@ -22,6 +22,7 @@ mod filters;
 mod ui;
 mod tinkerbell;
 mod event_manager;
+mod os_templates;
 
 // Global static for accessing event manager from other modules
 use std::sync::RwLock;
@@ -59,6 +60,15 @@ pub async fn run() -> anyhow::Result<()> {
         }
     } else {
         info!("HookOS artifacts already exist");
+    }
+    
+    // --- Initialize OS Templates ---
+    info!("Initializing OS templates...");
+    if let Err(e) = os_templates::init_os_templates().await {
+        warn!("Failed to initialize OS templates: {}", e);
+        // Continue startup even if template initialization fails
+    } else {
+        info!("OS templates initialized successfully");
     }
     
     // --- Graceful Shutdown Setup ---

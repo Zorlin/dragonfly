@@ -19,12 +19,11 @@ spec:
           GLOBAL_VALUE: "my global value"
         actions:
           - name: "stream image"
-            image: quay.io/tinkerbell/actions/image2disk:latest
+            image: quay.io/tinkerbell/actions/qemuimg2disk:latest
             timeout: 9600
             environment:
               DEST_DISK: {{ index .Hardware.Disks 0 }}
-              IMG_URL: "http://10.7.1.30:8080/ubuntu/jammy-server-cloudimg-amd64.raw.gz"
-              COMPRESSED: true
+              IMG_URL: "http://{{ base_url_bare }}:3000/ipxe/ubuntu/jammy-server-cloudimg-amd64.img"
 
           - name: "write cloud-init config"
             image: quay.io/tinkerbell/actions/writefile:latest
@@ -40,7 +39,7 @@ spec:
               CONTENTS: |
                 datasource:
                   Ec2:
-                    metadata_urls: ["http://10.7.1.30:50061"]
+                    metadata_urls: ["http://{{ base_url_bare }}:50061"]
                     strict_id: false
                 manage_etc_hosts: localhost
                 warnings:
