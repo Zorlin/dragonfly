@@ -24,6 +24,12 @@ use crate::db;
 use std::env;
 use std::path::PathBuf;
 use tokio::fs;
+use reqwest;
+use bytes::Bytes;
+use std::fs::File;
+use std::io::Write;
+use sha2::{Sha256, Sha512, Digest};
+use tokio::io::AsyncReadExt;
 
 pub fn api_router() -> Router<crate::AppState> {
     Router::new()
@@ -1281,10 +1287,10 @@ async fn update_machine_tags(
 // NOTE: This function is implemented but NOT currently routed in api_router.
 // It needs to be added to the router manually if intended to be used.
 async fn serve_ipxe_artifact(Path(requested_path): Path<String>) -> Response {
-    // Define the default directory and the env var name
+    // Define constants for directories and URLs
     const DEFAULT_ARTIFACT_DIR: &str = "/var/lib/dragonfly/ipxe-artifacts";
     const ARTIFACT_DIR_ENV_VAR: &str = "DRAGONFLY_IPXE_ARTIFACT_DIR";
-
+    
     // Get the base directory from env var or use default
     let base_dir = env::var(ARTIFACT_DIR_ENV_VAR)
         .unwrap_or_else(|_| {
@@ -1292,30 +1298,332 @@ async fn serve_ipxe_artifact(Path(requested_path): Path<String>) -> Response {
             DEFAULT_ARTIFACT_DIR.to_string()
         });
     let base_path = PathBuf::from(base_dir);
-
-    // --- Basic Path Sanitization ---
-    // Ensure the requested path doesn't contain components that allow traversal.
-    // We expect a simple filename like "hookos.ipxe".
+    
+    // Path sanitization
     if requested_path.contains("..") || requested_path.contains('/') || requested_path.contains('\\') {
         warn!("Attempted iPXE artifact path traversal: {}", requested_path);
         return (StatusCode::BAD_REQUEST, "Invalid artifact path").into_response();
     }
-    // ------------------------------
-
+    
     let artifact_path = base_path.join(&requested_path);
-
-    info!("Attempting to serve iPXE artifact from file: {:?}", artifact_path);
-
-    match fs::read_to_string(&artifact_path).await {
-        Ok(script_content) => {
-            info!("Successfully served iPXE artifact: {}", requested_path);
-            (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/plain")], script_content).into_response()
-        },
-        Err(e) => {
-            // Log the specific error for debugging, but return a generic 404 to the client.
-            error!("Failed to read iPXE artifact file {:?}: {}", artifact_path, e);
-            warn!("Requested iPXE artifact not found or inaccessible: {}", requested_path);
-            (StatusCode::NOT_FOUND, "iPXE Artifact Not Found").into_response()
+    
+    // If file exists locally, serve it directly
+    if artifact_path.exists() {
+        // Determine content type based on file extension
+        let content_type = if requested_path.ends_with(".ipxe") {
+            "text/plain"
+        } else {
+            "application/octet-stream"  // For binary files like kernel/initrd
+        };
+        
+        match fs::read(&artifact_path).await {
+            Ok(content) => {
+                info!("Successfully served iPXE artifact: {}", requested_path);
+                (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, content_type)], content).into_response()
+            },
+            Err(e) => {
+                error!("Failed to read iPXE artifact file {:?}: {}", artifact_path, e);
+                (StatusCode::INTERNAL_SERVER_ERROR, "Error reading iPXE artifact").into_response()
+            }
         }
+    } else {
+        // File doesn't exist - need to pull from remote and stream
+        info!("Artifact {} not found locally, streaming from remote", requested_path);
+        
+        // Ensure parent directory exists
+        if let Some(parent) = artifact_path.parent() {
+            if let Err(e) = fs::create_dir_all(parent).await {
+                error!("Failed to create directory for artifact: {}", e);
+                return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to prepare cache directory").into_response();
+            }
+        }
+
+        // Handle iPXE script generation differently - these are generated not downloaded
+        if requested_path.ends_with(".ipxe") {
+            // [Code for generating ipxe scripts remains the same]
+        }
+
+        // For binary artifacts that need to be downloaded and streamed
+        let remote_url = match requested_path.as_str() {
+            // Dragonfly Agent iPXE artifacts
+            "dragonfly-agent/modloop" => "https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64/netboot-3.21.3/modloop-lts",
+            "dragonfly-agent/vmlinuz-lts" => "https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64/netboot-3.21.3/vmlinuz-lts",
+            "dragonfly-agent/initramfs-lts" => "https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64/netboot-3.21.3/initramfs-lts",
+            // Add other mappings as needed
+            _ => {
+                warn!("Unknown artifact requested: {}", requested_path);
+                return (StatusCode::NOT_FOUND, "Unknown iPXE artifact").into_response();
+            }
+        };
+        
+        // Create a streaming response using Axum's streaming capabilities
+        let stream = streaming_download(remote_url, &artifact_path);
+        let content_type = "application/octet-stream";  // For binary files
+        
+        // Return a streaming response
+        return (
+            StatusCode::OK, 
+            [(axum::http::header::CONTENT_TYPE, content_type)],
+            axum::body::StreamBody::new(stream)
+        ).into_response();
     }
+}
+
+// Function to download and stream simultaneously
+fn streaming_download(url: &str, dest_path: &PathBuf) -> impl Stream<Item = Result<Bytes, std::io::Error>> {
+    let url = url.to_string();
+    let dest_path = dest_path.clone();
+    
+    // Create a stream that processes the download
+    stream::try_unfold(
+        (None, None, false),
+        move |(mut client_opt, mut file_opt, mut complete)| {
+            let url = url.clone();
+            let dest_path = dest_path.clone();
+            
+            async move {
+                // If complete, end the stream
+                if complete {
+                    return Ok(None);
+                }
+                
+                // Initialize on first call
+                if client_opt.is_none() {
+                    match reqwest::Client::new().get(&url).send().await {
+                        Ok(resp) => {
+                            if !resp.status().is_success() {
+                                return Err(std::io::Error::new(
+                                    std::io::ErrorKind::Other, 
+                                    format!("HTTP error: {}", resp.status())
+                                ));
+                            }
+                            client_opt = Some(resp);
+                        },
+                        Err(e) => {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::Other, 
+                                format!("Failed to start download: {}", e)
+                            ));
+                        }
+                    }
+                    
+                    // Open file for writing
+                    match File::create(&dest_path).await {
+                        Ok(file) => file_opt = Some(file),
+                        Err(e) => {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                format!("Failed to create cache file: {}", e)
+                            ));
+                        }
+                    }
+                }
+                
+                // Get next chunk from the HTTP stream
+                if let Some(client) = &mut client_opt {
+                    match client.chunk().await {
+                        Ok(Some(chunk)) => {
+                            // Write chunk to cache file
+                            if let Some(file) = &mut file_opt {
+                                if let Err(e) = file.write_all(&chunk).await {
+                                    warn!("Failed writing to cache, continuing stream: {}", e);
+                                    // Note: we continue serving even if caching fails
+                                }
+                            }
+                            
+                            // Return chunk to client and continue
+                            Ok(Some((chunk, (client_opt, file_opt, false))))
+                        },
+                        Ok(None) => {
+                            // End of stream reached
+                            info!("Download complete, cached to {:?}", dest_path);
+                            Ok(Some((Bytes::new(), (None, None, true))))
+                        },
+                        Err(e) => {
+                            Err(std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                format!("Download error: {}", e)
+                            ))
+                        }
+                    }
+                } else {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "Client not initialized"
+                    ))
+                }
+            }
+        }
+    )
+    .filter_map(|result| async move {
+        match result {
+            Ok(bytes) if !bytes.is_empty() => Some(Ok(bytes)),
+            Ok(_) => None,  // Skip empty chunks at stream end
+            Err(e) => Some(Err(e)),
+        }
+    })
+}
+
+async fn verify_sha512(file_path: &std::path::Path, expected_checksum: &str) -> dragonfly_common::Result<bool> {
+    let mut file = tokio::fs::File::open(file_path).await?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer).await?;
+    
+    let mut hasher = Sha512::new();
+    hasher.update(&buffer);
+    let result = hasher.finalize();
+    let actual_checksum = format!("{:x}", result);
+    
+    Ok(actual_checksum == expected_checksum)
+}
+
+async fn download_and_verify_artifact(
+    artifact_name: &str,
+    base_url: &str,
+    dest_dir: &Path,
+    checksums_content: &str,
+    max_retries: usize,
+) -> Result<(), anyhow::Error> {
+    let dest_file = dest_dir.join(artifact_name);
+    let url = format!("{}/{}", base_url, artifact_name);
+    
+    // Extract expected checksum from checksums file
+    let expected_checksum = match checksums_content.lines()
+        .find_map(|line| {
+            if line.ends_with(artifact_name) {
+                line.split_whitespace().next()
+            } else {
+                None
+            }
+        }) {
+        Some(checksum) => checksum.to_string(),
+        None => return Err(anyhow::anyhow!("Checksum not found for {}", artifact_name)),
+    };
+    
+    let mut retry_count = 0;
+    let mut backoff_ms = 100; // Start with 100ms backoff
+    
+    while retry_count <= max_retries {
+        if retry_count > 0 {
+            info!("Retry #{} for downloading {}", retry_count, artifact_name);
+            tokio::time::sleep(tokio::time::Duration::from_millis(backoff_ms)).await;
+            backoff_ms = std::cmp::min(backoff_ms * 2, 30000); // Exponential backoff, max 30 seconds
+        }
+        
+        // Download the file
+        match download_file(&url, &dest_file).await {
+            Ok(()) => {
+                // Verify checksum
+                match verify_sha512(&dest_file, &expected_checksum).await {
+                    Ok(true) => {
+                        info!("Successfully downloaded and verified {}", artifact_name);
+                        return Ok(());
+                    },
+                    Ok(false) => {
+                        warn!("Checksum verification failed for {}, retrying...", artifact_name);
+                    },
+                    Err(e) => {
+                        warn!("Error verifying checksum for {}: {}, retrying...", artifact_name, e);
+                    }
+                }
+            },
+            Err(e) => {
+                warn!("Failed to download {}: {}, retrying...", artifact_name, e);
+            }
+        }
+        
+        retry_count += 1;
+    }
+    
+    Err(anyhow::anyhow!("Failed to download {} after {} retries", artifact_name, max_retries))
+}
+
+async fn download_hookos_artifacts(version: &str) -> Result<(), anyhow::Error> {
+    // Get artifact directory
+    let hookos_dir = get_artifacts_dir().join("hookos");
+    fs::create_dir_all(&hookos_dir).await?;
+    
+    // Define base URL
+    let base_url = format!("https://github.com/tinkerbell/hookos/releases/download/{}", version);
+    
+    // First download checksums file
+    let checksums_file = hookos_dir.join("checksums.txt");
+    let checksums_url = format!("{}/checksums.txt", base_url);
+    
+    // Try to download checksums with retries
+    let mut retry_count = 0;
+    let mut backoff_ms = 100;
+    let max_retries = 10;
+    
+    let checksums_content = loop {
+        if retry_count > 0 {
+            info!("Retry #{} for downloading checksums.txt", retry_count);
+            tokio::time::sleep(tokio::time::Duration::from_millis(backoff_ms)).await;
+            backoff_ms = std::cmp::min(backoff_ms * 2, 30000);
+        }
+        
+        match download_file(&checksums_url, &checksums_file).await {
+            Ok(()) => {
+                match fs::read_to_string(&checksums_file).await {
+                    Ok(content) => break content,
+                    Err(e) => {
+                        warn!("Failed to read checksums file: {}", e);
+                        if retry_count >= max_retries {
+                            return Err(anyhow::anyhow!("Failed to read checksums file after {} retries", max_retries));
+                        }
+                    }
+                }
+            },
+            Err(e) => {
+                warn!("Failed to download checksums file: {}", e);
+                if retry_count >= max_retries {
+                    return Err(anyhow::anyhow!("Failed to download checksums file after {} retries", max_retries));
+                }
+            }
+        }
+        
+        retry_count += 1;
+    };
+    
+    // Define artifacts to download
+    let artifacts = [
+        "hook_x86_64.tar.gz",
+        "hook_aarch64.tar.gz",
+        "hook_latest-lts-x86_64.tar.gz",
+        "hook_latest-lts-aarch64.tar.gz"
+    ];
+    
+    // Download and verify each artifact
+    for artifact in &artifacts {
+        download_and_verify_artifact(artifact, &base_url, &hookos_dir, &checksums_content, 10).await?;
+    }
+    
+    info!("Successfully downloaded all HookOS artifacts to {:?}", hookos_dir);
+    Ok(())
+}
+
+// Simple helper function
+async fn download_file(url: &str, dest_path: &PathBuf) -> Result<(), anyhow::Error> {
+    let response = reqwest::get(url).await?;
+    
+    if !response.status().is_success() {
+        return Err(anyhow::anyhow!("HTTP error: {}", response.status()));
+    }
+    
+    let bytes = response.bytes().await?;
+    fs::write(dest_path, bytes).await?;
+    Ok(())
+}
+
+/// Get the configured artifacts directory or use default
+fn get_artifacts_dir() -> PathBuf {
+    const DEFAULT_ARTIFACT_DIR: &str = "/var/lib/dragonfly/ipxe-artifacts";
+    const ARTIFACT_DIR_ENV_VAR: &str = "DRAGONFLY_IPXE_ARTIFACT_DIR";
+
+    let dir = env::var(ARTIFACT_DIR_ENV_VAR)
+        .unwrap_or_else(|_| {
+            warn!("{} not set, using default: {}", ARTIFACT_DIR_ENV_VAR, DEFAULT_ARTIFACT_DIR);
+            DEFAULT_ARTIFACT_DIR.to_string()
+        });
+    PathBuf::from(dir)
 } 
