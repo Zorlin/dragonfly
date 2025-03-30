@@ -1974,6 +1974,9 @@ async fn stream_download_with_caching(
             // If download_error is true, the inner match already broke, so we'll exit.
         }
         
+        // Explicitly drop the response stream to release network resources potentially sooner
+        drop(stream);
+
         // Ensure file is flushed and closed first
         if let Ok(mut file) = Arc::try_unwrap(file).map_err(|_| "Failed to unwrap Arc").and_then(|mutex| Ok(mutex.into_inner())) {
             if let Err(e) = file.flush().await {
