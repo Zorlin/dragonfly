@@ -10,6 +10,7 @@ use tracing::{info, Level, error, warn};
 use std::net::SocketAddr;
 use tower_cookies::CookieManagerLayer;
 use tower_http::services::ServeDir;
+use tokio::signal::unix::{signal, SignalKind};
 
 use crate::auth::{AdminBackend, auth_router, load_credentials, generate_default_credentials, load_settings, Settings};
 use crate::db::init_db;
@@ -38,7 +39,16 @@ pub struct AppState {
     pub event_manager: Arc<EventManager>,
 }
 
+// Global allocator setup for heap profiling
+#[cfg(feature = "dhat-heap")]
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
+
 pub async fn run() -> anyhow::Result<()> {
+    // Initialize dhat heap profiler if feature is enabled
+    #[cfg(feature = "dhat-heap")]
+    let _profiler = dhat::Profiler::new_heap();
+
     // Initialize the database 
     let db_pool = init_db().await?;
     
@@ -174,10 +184,33 @@ pub async fn run() -> anyhow::Result<()> {
 
     // Define the shutdown signal future
     let shutdown_signal = async move {
-        tokio::signal::ctrl_c().await
-            .expect("Failed to install Ctrl+C handler");
-        info!("Received Ctrl+C, initiating shutdown...");
+        let ctrl_c = async {
+            tokio::signal::ctrl_c().await
+                .expect("Failed to install Ctrl+C handler");
+        };
+
+        #[cfg(unix)]
+        let terminate = async {
+            signal(SignalKind::terminate())
+                .expect("Failed to install signal handler")
+                .recv()
+                .await;
+        };
+
+        #[cfg(not(unix))] // Fallback for non-Unix systems
+        let terminate = std::future::pending::<()>();
+
+        tokio::select! {
+            _ = ctrl_c => {
+                 info!("Received SIGINT (Ctrl+C), initiating shutdown...");
+            },
+            _ = terminate => {
+                 info!("Received SIGTERM, initiating shutdown...");
+            },
+        }
+
         // Send the shutdown signal to background tasks
+        info!("Sending shutdown signal to background tasks...");
         let _ = shutdown_tx.send(());
     };
 
