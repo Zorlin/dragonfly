@@ -36,6 +36,9 @@ use tokio::sync::mpsc;
 use std::sync::{Arc};
 use tokio_stream::wrappers::ReceiverStream;
 use url::Url; // Add Url import
+use tempfile::tempdir;
+use std::os::unix::fs::symlink as unix_symlink; // For creating the symlink
+use tokio::process::Command;
 
 pub fn api_router() -> Router<crate::AppState> {
     Router::new()
@@ -1435,6 +1438,9 @@ pub async fn serve_ipxe_artifact(Path(requested_path): Path<String>) -> Response
     // Define constants for directories and URLs
     const DEFAULT_ARTIFACT_DIR: &str = "/var/lib/dragonfly/ipxe-artifacts";
     const ARTIFACT_DIR_ENV_VAR: &str = "DRAGONFLY_IPXE_ARTIFACT_DIR";
+    const ALLOWED_IPXE_SCRIPTS: &[&str] = &["hookos", "dragonfly-agent"]; // Define allowlist
+    const AGENT_APKOVL_PATH: &str = "dragonfly-agent/localhost.apkovl.tar.gz";
+    const AGENT_BINARY_URL: &str = "https://github.com/Zorlin/dragonfly/raw/refs/heads/main/dragonfly-agent"; // TODO: Make configurable
     
     // Get the base directory from env var or use default
     let base_dir = env::var(ARTIFACT_DIR_ENV_VAR)
@@ -1451,26 +1457,36 @@ pub async fn serve_ipxe_artifact(Path(requested_path): Path<String>) -> Response
     }
     
     let artifact_path = base_path.join(&requested_path);
-    
-    // Check if file exists locally
+
+    // --- Serve from Cache First ---
     if artifact_path.exists() {
-        // Determine content type based on file extension
+        // Determine content type AND if it's an IPXE script
         let (content_type, is_ipxe) = if requested_path.ends_with(".ipxe") {
             ("text/plain", true)
+        } else if requested_path.ends_with(".tar.gz") {
+            ("application/gzip", false) // Ensure this returns a tuple
         } else {
-            ("application/octet-stream", false) // For binary files like kernel/initrd
+            ("application/octet-stream", false) // Ensure this returns a tuple
         };
 
         // Allowlist check for IPXE scripts from cache
-        if is_ipxe && !(requested_path == "hookos.ipxe" || requested_path == "dragonfly-agent.ipxe") {
-            warn!("Attempt to serve non-allowlisted IPXE script from cache: {}", requested_path);
-            return (StatusCode::NOT_FOUND, "iPXE Script Not Found").into_response();
+        if is_ipxe { // Check the boolean flag
+            let stem = StdPath::new(&requested_path).file_stem().and_then(|s| s.to_str());
+            if let Some(stem_str) = stem {
+                if !ALLOWED_IPXE_SCRIPTS.contains(&stem_str) {
+                    warn!("Attempt to serve non-allowlisted IPXE script stem from cache: {}", stem_str);
+                    return (StatusCode::NOT_FOUND, "iPXE Script Not Found").into_response();
+                }
+            } else {
+                 warn!("Could not extract stem from IPXE script path: {}", requested_path);
+                 return (StatusCode::BAD_REQUEST, "Invalid IPXE Script Path").into_response();
+            }
         }
         
-        // Serve allowed script or binary artifact from cache
+        // Serve allowed script or binary artifact from cache using streaming
         match read_file_as_stream(&artifact_path).await {
             Ok(stream) => {
-                info!("Streaming cached iPXE artifact from disk: {}", requested_path);
+                info!("Streaming cached artifact from disk: {}", requested_path);
                 return create_streaming_response(stream, content_type);
             },
             Err(e) => {
@@ -1878,3 +1894,117 @@ fn create_streaming_response(
                 .unwrap()
         })
 } 
+
+/// Generates the localhost.apkovl.tar.gz file needed by the Dragonfly Agent iPXE script.
+async fn generate_agent_apkovl(
+    target_apkovl_path: &StdPath, 
+    base_url: &str, 
+    agent_binary_url: &str,
+) -> Result<()> {
+    info!("Generating agent APK overlay at: {:?}", target_apkovl_path);
+
+    // 1. Create a temporary directory
+    let temp_dir = tempdir().map_err(|e| 
+        Error::Internal(format!("Failed to create temp directory for apkovl: {}", e))
+    )?;
+    let temp_path = temp_dir.path();
+    info!("Building apkovl structure in: {:?}", temp_path);
+
+    // 2. Create directory structure
+    fs::create_dir_all(temp_path.join("etc/local.d")).await.map_err(|e| Error::Internal(format!("Failed to create dir etc/local.d: {}", e)))?;
+    fs::create_dir_all(temp_path.join("etc/apk/protected_paths.d")).await.map_err(|e| Error::Internal(format!("Failed to create dir etc/apk/protected_paths.d: {}", e)))?;
+    fs::create_dir_all(temp_path.join("etc/runlevels/default")).await.map_err(|e| Error::Internal(format!("Failed to create dir etc/runlevels/default: {}", e)))?;
+    fs::create_dir_all(temp_path.join("usr/local/bin")).await.map_err(|e| Error::Internal(format!("Failed to create dir usr/local/bin: {}", e)))?;
+
+    // 3. Write static files
+    fs::write(temp_path.join("etc/hosts"), HOSTS_CONTENT).await.map_err(|e| Error::Internal(format!("Failed to write etc/hosts: {}", e)))?;
+    fs::write(temp_path.join("etc/hostname"), HOSTNAME_CONTENT).await.map_err(|e| Error::Internal(format!("Failed to write etc/hostname: {}", e)))?;
+    fs::write(temp_path.join("etc/apk/arch"), APK_ARCH_CONTENT).await.map_err(|e| Error::Internal(format!("Failed to write etc/apk/arch: {}", e)))?;
+    fs::write(temp_path.join("etc/apk/protected_paths.d/lbu.list"), LBU_LIST_CONTENT).await.map_err(|e| Error::Internal(format!("Failed to write lbu.list: {}", e)))?;
+    fs::write(temp_path.join("etc/apk/repositories"), REPOSITORIES_CONTENT).await.map_err(|e| Error::Internal(format!("Failed to write repositories: {}", e)))?;
+    fs::write(temp_path.join("etc/apk/world"), WORLD_CONTENT).await.map_err(|e| Error::Internal(format!("Failed to write world: {}", e)))?;
+    // Create empty mtab needed by Alpine init
+    fs::write(temp_path.join("etc/mtab"), "").await.map_err(|e| Error::Internal(format!("Failed to write etc/mtab: {}", e)))?;
+    // Create empty .default_boot_services
+    fs::write(temp_path.join("etc/.default_boot_services"), "").await.map_err(|e| Error::Internal(format!("Failed to write .default_boot_services: {}", e)))?;
+
+    // 4. Write dynamic dragonfly-agent.start script
+    let start_script_path = temp_path.join("etc/local.d/dragonfly-agent.start");
+    let start_script_content = format!(r#"#!/bin/sh\n\n# Start dragonfly-agent\n/usr/local/bin/dragonfly-agent --server {} --setup\n\nexit 0\n"#, base_url);
+    fs::write(&start_script_path, start_script_content).await.map_err(|e| Error::Internal(format!("Failed to write start script: {}", e)))?;
+    // Make it executable
+    set_executable_permission(&start_script_path).await?; // Keep this as is, already fixed
+
+    // 5. Create the symlink (Unchanged, uses std::os::unix)
+    let link_target = "/etc/init.d/local";
+    let link_path = temp_path.join("etc/runlevels/default/local");
+    unix_symlink(link_target, &link_path).map_err(|e| 
+        Error::Internal(format!("Failed to create symlink {:?} -> {}: {}", link_path, link_target, e))
+    )?;
+
+    // 6. Download the agent binary (Uses download_file which handles errors internally)
+    let agent_binary_path = temp_path.join("usr/local/bin/dragonfly-agent");
+    download_file(agent_binary_url, &agent_binary_path).await?;
+    // Make it executable
+    set_executable_permission(&agent_binary_path).await?; // Keep this as is, already fixed
+
+    // 7. Create the tar.gz archive (Unchanged, uses Command which handles errors)
+    info!("Creating tarball: {:?}", target_apkovl_path);
+    let output = Command::new("tar")
+        .arg("-czf")
+        .arg(target_apkovl_path)
+        .arg("-C")
+        .arg(temp_path)
+        .arg(".")
+        .output()
+        .await
+        .map_err(|e| Error::Internal(format!("Failed to execute tar command: {}", e)))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(Error::Internal(format!("Tar command failed: {}", stderr)));
+    }
+
+    info!("Successfully generated apkovl: {:?}", target_apkovl_path);
+
+    Ok(())
+}
+
+// Helper function to set executable permission (Unix specific)
+async fn set_executable_permission(path: &StdPath) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let metadata = fs::metadata(path).await.map_err(|e| 
+        Error::Internal(format!("Failed to get metadata for {:?}: {}", path, e))
+    )?; // Use map_err instead of ? directly
+    let mut perms = metadata.permissions();
+    perms.set_mode(0o755); // rwxr-xr-x
+    fs::set_permissions(path, perms).await.map_err(|e| 
+        Error::Internal(format!("Failed to set executable permission on {:?}: {}", path, e))
+    ) // map_err already used here
+}
+
+// Content constants
+const HOSTS_CONTENT: &str = r#"127.0.0.1       localhost
+::1     localhost ip6-localhost ip6-loopback
+fe00::  ip6-localnet
+ff00::  ip6-mcastprefix
+ff02::1 ip6-allnodes
+ff02::2 ip6-allrouters
+"#;
+const HOSTNAME_CONTENT: &str = "localhost";
+const APK_ARCH_CONTENT: &str = "x86_64"; // Assuming amd64/x86_64 for now
+const LBU_LIST_CONTENT: &str = "+usr/local";
+const REPOSITORIES_CONTENT: &str = r#"https://dl-cdn.alpinelinux.org/alpine/v3.21/main
+https://dl-cdn.alpinelinux.org/alpine/v3.21/community
+"#;
+const WORLD_CONTENT: &str = r#"alpine-baselayout
+alpine-conf
+alpine-keys
+alpine-release
+apk-tools
+busybox
+libc-utils
+kexec-tools
+libgcc
+wget
+"#;
