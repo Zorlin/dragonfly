@@ -367,7 +367,26 @@ async fn assign_os_internal(id: Uuid, os_choice: String) -> Response {
             // Get the machine to create a workflow for OS installation
             let machine_name = if let Ok(Some(machine)) = db::get_machine_by_id(&id).await {
                 // Create a workflow for OS installation
-                if let Err(e) = crate::tinkerbell::create_workflow(&machine, &os_choice).await {
+                let workflow_result = crate::tinkerbell::create_workflow(&machine, &os_choice).await;
+                
+                if let Err(e) = workflow_result {
+                    // Improved error handling with more specific error message
+                    error!("Failed to create Tinkerbell workflow: {}", e);
+                    
+                    // Check if this is a template not found error
+                    if e.to_string().contains("Template") && e.to_string().contains("not found") {
+                        // Return an HTML error message specifically for template not found
+                        let template_name = machine.os_choice.as_ref().unwrap_or(&os_choice);
+                        let error_html = format!(r###"
+                            <div class="p-4 mb-4 text-sm text-red-700 bg-red-100 rounded-lg" role="alert">
+                                <span class="font-medium">Error!</span> Template for OS "{}" not found in Tinkerbell. 
+                                <p class="mt-2">The OS choice was saved, but you will need to create the missing Tinkerbell template 
+                                before the installation can proceed.</p>
+                            </div>
+                        "###, template_name);
+                        return (StatusCode::INTERNAL_SERVER_ERROR, [(axum::http::header::CONTENT_TYPE, "text/html")], error_html).into_response();
+                    }
+                    
                     warn!("Failed to create Tinkerbell workflow (continuing anyway): {}", e);
                 } else {
                     info!("Created Tinkerbell workflow for OS installation for machine {}", id);
@@ -1339,11 +1358,13 @@ async fn generate_ipxe_script(script_name: &str) -> Result<String> {
 echo Loading HookOS via Dragonfly...
 
 set arch ${{buildarch}}
-# Adjust arch if necessary (iPXE buildarch might not match runtime)
+# Dragonfly + Tinkerbell only supports 64 bit archectures.
+# The build architecture does not necessarily represent the architecture of the machine on which iPXE is running.
+# https://ipxe.org/cfg/buildarch
+
 iseq ${{arch}} i386 && set arch x86_64 ||
 iseq ${{arch}} arm32 && set arch aarch64 ||
 iseq ${{arch}} arm64 && set arch aarch64 ||
-
 set base-url {}
 set retries:int32 0
 set retry_delay:int32 0
@@ -1361,9 +1382,9 @@ echo tinkerbell_tls={}
 set idx:int32 0
 :retry_kernel
 kernel ${{base-url}}/ipxe/hookos/vmlinuz-${{arch}} \
-    syslog_host=${{syslog_host}} grpc_authority=${{grpc_authority}} tinkerbell_tls=${{tinkerbell_tls}} worker_id=${{worker_id}} hw_addr=${{mac}} \
-    console=tty1 console=tty2 console=ttyAMA0,115200 console=ttyAMA1,115200 console=ttyS0,115200 console=ttyS1,115200 tink_worker_image=quay.io/tinkerbell/tink-worker:v0.12.1 \
-    intel_iommu=on iommu=pt tink_worker_image=quay.io/tinkerbell/tink-worker:v0.12.1 initrd=initramfs-${{arch}} && goto download_initrd || iseq ${{idx}} ${{retries}} && goto kernel-error || inc idx && echo retry in ${{retry_delay}} seconds ; sleep ${{retry_delay}} ; goto retry_kernel
+syslog_host=${{syslog_host}} grpc_authority=${{grpc_authority}} tinkerbell_tls=${{tinkerbell_tls}} worker_id=${{worker_id}} hw_addr=${{mac}} \
+console=tty1 console=tty2 console=ttyAMA0,115200 console=ttyAMA1,115200 console=ttyS0,115200 console=ttyS1,115200 tink_worker_image=quay.io/tinkerbell/tink-worker:v0.12.1 \
+intel_iommu=on iommu=pt initrd=initramfs-${{arch}} && goto download_initrd || iseq ${{idx}} ${{retries}} && goto kernel-error || inc idx && echo retry in ${{retry_delay}} seconds ; sleep ${{retry_delay}} ; goto retry_kernel
 
 :download_initrd
 set idx:int32 0
@@ -1835,7 +1856,7 @@ async fn download_file(url: &str, dest_path: &StdPath) -> Result<()> {
     Ok(())
 }
 
-// Keep the NEW stream_download_with_caching function
+// Update stream_download_with_caching to ensure proper EOF handling
 async fn stream_download_with_caching(
     url: &str,
     cache_path: &StdPath
@@ -1861,6 +1882,12 @@ async fn stream_download_with_caching(
         return Err(Error::Internal(format!("HTTP error: {}", response.status())));
     }
     
+    // Get content length if available
+    let content_length = response.content_length();
+    if let Some(length) = content_length {
+        debug!("Download size: {} bytes", length);
+    }
+    
     let file = fs::File::create(cache_path).await.map_err(|e| Error::Internal(format!("Failed to create cache file: {}", e)))?;
     let file = Arc::new(tokio::sync::Mutex::new(file));
     let (tx, rx) = mpsc::channel::<Result<Bytes>>(32);
@@ -1871,11 +1898,20 @@ async fn stream_download_with_caching(
         // Use futures::StreamExt to handle the response body stream
         let mut stream = response.bytes_stream(); 
         let mut error_occurred = false;
+        let mut bytes_transferred: u64 = 0;
 
         while let Some(chunk_result) = stream.next().await { // Use stream.next().await
             match chunk_result { // chunk_result is Result<Bytes, reqwest::Error>
                 Ok(chunk) => {
                     let chunk_clone = chunk.clone();
+                    let chunk_size = chunk.len() as u64;
+                    bytes_transferred += chunk_size;
+                    
+                    if let Some(total) = content_length {
+                        let percent = (bytes_transferred * 100) / total;
+                        debug!("Download progress: {}% ({}/{})", percent, bytes_transferred, total);
+                    }
+                    
                     let file_clone = Arc::clone(&file);
                     
                     let write_handle = tokio::spawn(async move {
@@ -1909,8 +1945,23 @@ async fn stream_download_with_caching(
                 }
             }
         }
-        if !error_occurred { info!("Download complete and cached for {}", url_clone); }
+        
+        // Send an empty chunk as EOF signal
+        if !error_occurred {
+            debug!("Download complete, sending EOF marker for {}", url_clone);
+            let _ = tx.send(Ok(Bytes::new())).await;
+            info!("Download complete and cached for {}", url_clone);
+        }
+        
+        // Ensure file is flushed and closed
+        if let Ok(mut file) = Arc::try_unwrap(file).map_err(|_| "Failed to unwrap Arc").and_then(|mutex| Ok(mutex.into_inner())) {
+            if let Err(e) = file.flush().await {
+                warn!("Failed to flush cache file {}: {}", cache_path_clone.display(), e);
+            }
+            // File is closed when it goes out of scope
+        }
     });
+    
     Ok(tokio_stream::wrappers::ReceiverStream::new(rx))
 }
 
@@ -1925,17 +1976,25 @@ async fn read_file_as_stream(
     tokio::spawn(async move {
         let mut file = file;
         let mut buffer = vec![0; 65536];
+        
         loop {
             match file.read(&mut buffer).await {
                 Ok(n) if n > 0 => {
+                    // Create a new chunk with exactly n bytes read
                     let chunk = Bytes::copy_from_slice(&buffer[0..n]);
+                    
                     // Send Ok(chunk) to the stream
                     if tx.send(Ok(chunk)).await.is_err() {
                         warn!("Client stream receiver dropped for file {}", path_buf.display());
                         break;
                     }
                 },
-                Ok(_) => break, // EOF
+                Ok(0) => {
+                    // Reached EOF - explicitly send an empty chunk as a final marker
+                    debug!("Reached EOF for file {}, sending final marker", path_buf.display());
+                    let _ = tx.send(Ok(Bytes::new())).await;
+                    break;
+                },
                 Err(e) => {
                     // Send the error wrapped in our Error type
                     let err = Error::Internal(format!("File read error for {}: {}", path_buf.display(), e));
@@ -1946,7 +2005,10 @@ async fn read_file_as_stream(
                 }
             }
         }
+        
+        debug!("Finished streaming file: {}", path_buf.display());
     });
+    
     Ok(tokio_stream::wrappers::ReceiverStream::new(rx))
 }
 

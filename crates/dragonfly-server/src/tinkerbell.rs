@@ -477,6 +477,30 @@ pub async fn create_workflow(machine: &Machine, _os_choice: &str) -> Result<()> 
         None => "ubuntu-2204", // Default if no OS choice is specified
     };
     
+    // First check if the Template exists
+    let template_api_resource = kube::core::ApiResource {
+        group: "tinkerbell.org".to_string(),
+        version: "v1alpha1".to_string(),
+        kind: "Template".to_string(),
+        api_version: "tinkerbell.org/v1alpha1".to_string(),
+        plural: "templates".to_string(),
+    };
+    
+    let template_api: Api<DynamicObject> = Api::namespaced_with(client.clone(), "tink", &template_api_resource);
+    
+    match template_api.get(template_ref).await {
+        Ok(_) => {
+            info!("Template '{}' found in Tinkerbell, proceeding with workflow creation", template_ref);
+        },
+        Err(KubeError::Api(ae)) if ae.code == 404 => {
+            error!("Template '{}' not found in Tinkerbell! Workflow creation will fail. Please create this template first.", template_ref);
+            return Err(anyhow!("Template '{}' not found in Tinkerbell namespace. Workflow creation aborted.", template_ref));
+        },
+        Err(e) => {
+            warn!("Error checking for template '{}': {}. Proceeding with workflow creation anyway.", template_ref, e);
+        }
+    }
+    
     // Create the Workflow resource
     let workflow_json = serde_json::json!({
         "apiVersion": "tinkerbell.org/v1alpha1",
