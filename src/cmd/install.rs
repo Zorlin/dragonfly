@@ -51,21 +51,21 @@ pub async fn run_install(args: InstallArgs) -> Result<()> {
 
 
     // --- 3. Install k3s ---
-    info!("Installing k3s...");
-    install_k3s().await.wrap_err("Failed to install k3s")?;
+    info!("Setting up k3s...");
+    install_k3s().await.wrap_err("Failed to set up k3s")?;
 
     // --- 4. Configure kubectl ---
+    info!("Configuring kubectl...");
     let kubeconfig_path = configure_kubectl().await.wrap_err("Failed to configure kubectl")?;
     std::env::set_var("KUBECONFIG", &kubeconfig_path);
     debug!("Set KUBECONFIG environment variable to: {:?}", kubeconfig_path);
 
     // --- 5. Wait for Node Ready ---
-    info!("Waiting for Kubernetes node to become ready...");
     wait_for_node_ready().await.wrap_err("Timed out waiting for Kubernetes node")?;
 
     // --- 6. Install Helm ---
-    info!("Installing Helm...");
-    install_helm().await.wrap_err("Failed to install Helm")?;
+    info!("Setting up Helm...");
+    install_helm().await.wrap_err("Failed to set up Helm")?;
 
     // --- 7. Install Tinkerbell Stack ---
     info!("Installing Tinkerbell stack...");
@@ -130,35 +130,110 @@ fn is_command_present(cmd: &str) -> bool {
 
 async fn install_k3s() -> Result<()> {
     debug!("Checking if k3s is already installed");
-    if is_command_present("k3s") {
-        debug!("k3s already installed, skipping installation");
+    
+    // Check for existing k3s config and service
+    let config_exists = check_file_exists("/etc/rancher/k3s/k3s.yaml").await;
+    let service_exists = is_command_present("k3s");
+    let is_running = check_service_running("k3s").await;
+    
+    if service_exists && config_exists && is_running {
+        info!("K3s is already installed and running");
         return Ok(());
     }
-
-    debug!("Installing k3s (single-node)");
+    
+    // Handle partially installed k3s
+    if service_exists && !is_running {
+        info!("K3s service exists but isn't running, starting service...");
+        restart_k3s_service().await?;
+        return Ok(());
+    }
+    
+    // Full installation needed
+    info!("Installing k3s (single-node)");
     let script = r#"curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--disable traefik" sh -"#;
     run_shell_command(script, "k3s installation script")?;
 
     // Verify installation
     if !is_command_present("k3s") {
-         color_eyre::eyre::bail!("k3s installation command ran, but 'k3s' command not found afterwards.");
+        color_eyre::eyre::bail!("k3s installation command ran, but 'k3s' command not found afterwards.");
     }
+    
+    // Wait briefly for k3s to create its config
+    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    
+    // Make sure the service is up
+    if !check_service_running("k3s").await {
+        info!("Starting k3s service...");
+        restart_k3s_service().await?;
+    }
+    
+    info!("K3s installed successfully");
     Ok(())
 }
 
+async fn check_service_running(service_name: &str) -> bool {
+    let output = Command::new("systemctl")
+        .args(["is-active", service_name])
+        .output();
+        
+    match output {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            stdout.trim() == "active"
+        },
+        Err(_) => false,
+    }
+}
+
+async fn restart_k3s_service() -> Result<()> {
+    debug!("Restarting k3s service");
+    let restart_cmd = "sudo systemctl restart k3s";
+    run_shell_command(restart_cmd, "restart k3s service")?;
+    
+    // Check if service started successfully
+    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+    if check_service_running("k3s").await {
+        debug!("K3s service started successfully");
+        Ok(())
+    } else {
+        color_eyre::eyre::bail!("Failed to start k3s service after restart attempt");
+    }
+}
 
 async fn configure_kubectl() -> Result<PathBuf> {
     debug!("Configuring kubectl access");
     let source_path = PathBuf::from("/etc/rancher/k3s/k3s.yaml");
     let dest_path = std::env::current_dir()?.join("k3s.yaml");
 
-    // Wait briefly for k3s to potentially create the file
-    if !source_path.exists() {
-        debug!("k3s.yaml not found immediately, waiting 5s...");
-        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-        if !source_path.exists() {
-           color_eyre::eyre::bail!("k3s config file not found at {:?}. Was k3s installed correctly?", source_path);
+    // Check if the destination file already exists and is valid
+    if dest_path.exists() {
+        debug!("kubectl config already exists at {:?}, testing validity", dest_path);
+        
+        // Test if the existing config works
+        let test_result = Command::new("kubectl")
+            .args(["--kubeconfig", dest_path.to_str().unwrap(), "cluster-info"])
+            .output();
+            
+        if let Ok(output) = test_result {
+            if output.status.success() {
+                debug!("Existing kubectl config is valid");
+                return Ok(dest_path);
+            }
+            
+            debug!("Existing kubectl config is invalid, will recreate");
         }
+    }
+
+    // Wait for k3s to create the config file
+    let mut attempts = 0;
+    while !source_path.exists() && attempts < 12 {
+        debug!("Waiting for k3s.yaml to be created (attempt {}/12)...", attempts + 1);
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+        attempts += 1;
+    }
+    
+    if !source_path.exists() {
+        color_eyre::eyre::bail!("k3s config file not found at {:?} after 60 seconds. Was k3s installed correctly?", source_path);
     }
 
     // Determine if sudo is likely needed for copy/chown
@@ -190,7 +265,6 @@ async fn configure_kubectl() -> Result<PathBuf> {
     debug!("k3s.yaml copied and permissions set for user '{}'", user);
     Ok(dest_path)
 }
-
 
 async fn wait_for_node_ready() -> Result<()> {
     info!("Waiting for Kubernetes node to become ready...");
@@ -248,11 +322,20 @@ async fn wait_for_node_ready() -> Result<()> {
 async fn install_helm() -> Result<()> {
     debug!("Checking if Helm is already installed");
     if is_command_present("helm") {
-        debug!("Helm already installed, skipping installation");
-        return Ok(());
+        // Additionally check the helm version works
+        let version_check = Command::new("helm")
+            .args(["version", "--short"])
+            .output();
+            
+        if let Ok(output) = version_check {
+            if output.status.success() {
+                info!("Helm is already installed and working");
+                return Ok(());
+            }
+        }
     }
     
-    debug!("Installing Helm");
+    info!("Installing Helm");
     let script = r#"curl -sSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash"#;
     run_shell_command(script, "Helm installation script")?;
 
@@ -261,10 +344,50 @@ async fn install_helm() -> Result<()> {
         color_eyre::eyre::bail!("Helm installation command ran, but 'helm' command not found afterwards.");
     }
 
+    info!("Helm installed successfully");
     Ok(())
 }
 
 async fn install_tinkerbell_stack(bootstrap_ip: Ipv4Addr) -> Result<()> {
+    debug!("Checking if Tinkerbell stack is already installed");
+    
+    // Check if the tink namespace exists
+    let namespace_check = Command::new("kubectl")
+        .args(["get", "namespace", "tink", "--no-headers", "--ignore-not-found"])
+        .output()?;
+        
+    let namespace_exists = namespace_check.status.success() && 
+                           !String::from_utf8_lossy(&namespace_check.stdout).trim().is_empty();
+                           
+    // Check if the tink-stack release exists
+    let release_check = Command::new("helm")
+        .args(["list", "-n", "tink", "--filter", "tink-stack", "--short"])
+        .output()?;
+        
+    let release_exists = release_check.status.success() && 
+                         !String::from_utf8_lossy(&release_check.stdout).trim().is_empty();
+                         
+    if namespace_exists && release_exists {
+        // Check if it's running properly
+        let pods_check = Command::new("kubectl")
+            .args(["get", "pods", "-n", "tink", "--no-headers"])
+            .output()?;
+            
+        let pods_output = String::from_utf8_lossy(&pods_check.stdout).trim().to_string();
+        let all_pods_running = pods_check.status.success() && 
+                               !pods_output.is_empty() && 
+                               !pods_output.contains("Pending") &&
+                               !pods_output.contains("Error") &&
+                               !pods_output.contains("CrashLoopBackOff");
+                               
+        if all_pods_running {
+            info!("Tinkerbell stack is already installed and running");
+            return Ok(());
+        } else {
+            info!("Tinkerbell stack is installed but not all pods are running, will reinstall");
+        }
+    }
+
     debug!("Installing Tinkerbell stack via Helm");
 
     // --- Get Pod CIDRs ---
@@ -336,6 +459,17 @@ stack:
         .wrap_err_with(|| format!("Failed to write Helm values to {:?}", values_path))?;
     debug!("Generated Helm values file: {:?}", values_path);
 
+    // If the release exists but isn't working, try uninstalling it first
+    if release_exists {
+        debug!("Uninstalling existing Tinkerbell stack before reinstalling");
+        let _ = Command::new("helm")
+            .args(["uninstall", "tink-stack", "-n", "tink"])
+            .output();
+            
+        // Give it a moment to clean up
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+    }
+
     // --- Run Helm Install ---
     let stack_chart_version = "0.5.0"; // Consider making this configurable
     let helm_args = [
@@ -356,6 +490,14 @@ stack:
     Ok(())
 }
 
+// Helper function to check if a file exists and is readable
+async fn check_file_exists(path: impl AsRef<std::path::Path>) -> bool {
+    if let Ok(metadata) = tokio::fs::metadata(path.as_ref()).await {
+        metadata.is_file()
+    } else {
+        false
+    }
+}
 
 // --- TODO: Implement these crucial functions ---
 
