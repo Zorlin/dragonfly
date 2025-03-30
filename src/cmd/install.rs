@@ -1,5 +1,5 @@
 use clap::Args;
-use color_eyre::eyre::{Result, WrapErr}; // Include WrapErr
+use color_eyre::eyre::{bail, Result, WrapErr}; // Add bail!
 use std::net::Ipv4Addr; // Use specific types
 use std::io::Write; // Import Write trait for stdout().flush()
 use tracing::{debug, error, info, warn}; // Use tracing macros
@@ -7,6 +7,9 @@ use std::path::PathBuf;
 use std::process::{Command, Output}; // For running commands
 use std::time::Instant;
 use tokio::fs; // For async file operations
+use ipnetwork::Ipv4Network;
+use network_interface::{NetworkInterface, NetworkInterfaceConfig};
+use network_interface::Addr;
 
 #[derive(Args, Debug)]
 pub struct InstallArgs {
@@ -33,22 +36,17 @@ pub async fn run_install(args: InstallArgs) -> Result<()> {
     debug!("Installation arguments: {:?}", args);
 
     // --- 1. Determine Host IP and Network ---
-    // Placeholder - Implement get_host_ip_and_mask
-    let host_ip = Ipv4Addr::new(192, 168, 1, 100); // Example
-    let netmask = Ipv4Addr::new(255, 255, 255, 0); // Example
-    info!("Detected host IP: {} with netmask: {}", host_ip, netmask);
-    // let (host_ip, netmask) = get_host_ip_and_mask(args.interface.as_deref())?
-    //     .wrap_err("Failed to determine host IP address and netmask")?;
-
+    info!("Detecting network configuration...");
+    let (host_ip, netmask, network) = get_host_ip_and_mask(args.interface.as_deref())
+        .wrap_err("Failed to determine host IP address and netmask")?;
+    info!("Detected host IP: {} with netmask: {} (network: {})", host_ip, netmask, network);
 
     // --- 2. Find Available Floating IP ---
-    // Placeholder - Implement find_available_ip
-    let bootstrap_ip = Ipv4Addr::new(192, 168, 1, 101); // Example
+    info!("Finding available IP for bootstrap node...");
+    let bootstrap_ip = find_available_ip(host_ip, network, args.start_offset, args.max_ip_search)
+        .await
+        .wrap_err("Failed to find an available IP address for the bootstrap node")?;
     info!("Found available bootstrap IP: {}", bootstrap_ip);
-    // let bootstrap_ip = find_available_ip(host_ip, netmask, args.start_offset, args.max_ip_search)
-    //     .await?
-    //     .wrap_err("Failed to find an available IP address for the bootstrap node")?;
-
 
     // --- 3. Install k3s ---
     info!("Setting up k3s...");
@@ -73,7 +71,7 @@ pub async fn run_install(args: InstallArgs) -> Result<()> {
 
     let elapsed = start_time.elapsed();
     info!("✅ Dragonfly installation completed in {:.1?}!", elapsed);
-    info!("PXE services available at: http://{}:8080", bootstrap_ip);
+    info!("PXE services available at: http://{}:3000", bootstrap_ip);
 
     Ok(())
 }
@@ -126,7 +124,171 @@ fn is_command_present(cmd: &str) -> bool {
     Command::new(cmd).arg("--version").output().is_ok() // Simple check
 }
 
-// Implement get_host_ip_and_mask, find_available_ip...
+// Helper function to find the primary network interface and its IP/netmask
+fn get_host_ip_and_mask(interface_name: Option<&str>) -> Result<(Ipv4Addr, Ipv4Addr, Ipv4Network)> {
+    use network_interface::{NetworkInterface, NetworkInterfaceConfig};
+
+    // Get all network interfaces
+    let interfaces = NetworkInterface::show()
+        .wrap_err("Failed to retrieve network interfaces")?;
+    
+    debug!("Found {} network interfaces", interfaces.len());
+
+    let mut candidate: Option<(Ipv4Addr, Ipv4Addr, Ipv4Network)> = None;
+
+    // Loop through interfaces to find a suitable one
+    for iface in interfaces {
+        // Skip loopback or interfaces without MAC address
+        // The flags API has changed; we now check if interface name is "lo" or has no MAC
+        if iface.name == "lo" || iface.mac_addr.is_none() {
+            debug!("Skipping interface {}: loopback or virtual", iface.name);
+            continue;
+        }
+
+        // If a specific interface is requested, only consider that one
+        if let Some(name) = interface_name {
+            if iface.name != name {
+                debug!("Skipping interface {}: not the requested interface", iface.name);
+                continue;
+            }
+        }
+
+        // Find first IPv4 address with netmask
+        for addr in &iface.addr {
+            if let network_interface::Addr::V4(v4_addr) = addr {
+                // Check both IP and netmask are defined
+                let ip = v4_addr.ip;
+                
+                // Make sure we have a netmask
+                if let Some(netmask) = v4_addr.netmask {
+                    // Try to create a network from the IP and netmask
+                    match Ipv4Network::with_netmask(ip, netmask) {
+                        Ok(network) => {
+                            debug!("Found interface {}: IP={}, netmask={}, network={}", 
+                                   iface.name, ip, netmask, network);
+                            
+                            // If user specified this interface, return it immediately
+                            if interface_name.is_some() {
+                                return Ok((ip, netmask, network));
+                            }
+                            
+                            // Otherwise, save as a candidate and prefer non-local IPs
+                            if !is_private_or_local_ip(ip) {
+                                // Public IP gets priority
+                                return Ok((ip, netmask, network));
+                            } else if candidate.is_none() {
+                                // First private IP we found
+                                candidate = Some((ip, netmask, network));
+                            }
+                        },
+                        Err(e) => {
+                            warn!("Invalid network for interface {}: {}", iface.name, e);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // If we have a candidate, use it
+    if let Some((ip, netmask, network)) = candidate {
+        return Ok((ip, netmask, network));
+    }
+
+    // If we reached here, we couldn't find a suitable interface
+    if let Some(name) = interface_name {
+        bail!("Could not find a usable IPv4 address on interface '{}'", name)
+    } else {
+        bail!("Could not find any network interface with a usable IPv4 address. Try specifying an interface with --interface")
+    }
+}
+
+// Check if an IP is private (RFC1918) or link-local
+fn is_private_or_local_ip(ip: Ipv4Addr) -> bool {
+    ip.is_private() || ip.is_link_local() || ip.is_loopback() || ip.is_unspecified()
+}
+
+// Find an available IP address on the network
+async fn find_available_ip(
+    host_ip: Ipv4Addr,
+    network: ipnetwork::Ipv4Network,
+    start_offset: u8,
+    max_tries: u8,
+) -> Result<Ipv4Addr> {
+    info!("Searching for available IP in network {} starting from offset {} of host {}", 
+          network, start_offset, host_ip);
+
+    // Calculate starting IP by adding offset to host IP
+    let start_ip_int = u32::from(host_ip).wrapping_add(start_offset as u32);
+    let mut current_ip = Ipv4Addr::from(start_ip_int);
+    
+    // Get network and broadcast addresses
+    let network_addr = network.network();
+    let broadcast_addr = network.broadcast();
+
+    for i in 0..max_tries {
+        // Ensure the IP is actually within the calculated network range
+        if !network.contains(current_ip) {
+            warn!("IP search crossed subnet boundary at {}. Stopping search.", current_ip);
+            break; // Stop if we leave the subnet
+        }
+
+        // Skip network address, broadcast address, and the host's own IP
+        if current_ip == network_addr || current_ip == broadcast_addr || current_ip == host_ip {
+            debug!("Skipping reserved/host IP: {}", current_ip);
+        } else {
+            debug!("Checking if IP {} is available...", current_ip);
+            
+            // Check if the IP is available using ping
+            match check_ip_availability(current_ip).await {
+                Ok(true) => {
+                    info!("IP {} appears to be available", current_ip);
+                    return Ok(current_ip); // Found an available IP
+                }
+                Ok(false) => {
+                    debug!("IP {} is already in use", current_ip);
+                }
+                Err(e) => {
+                    warn!("Error checking IP {}: {}", current_ip, e);
+                }
+            }
+        }
+
+        // Move to the next IP
+        let next_ip_int = u32::from(current_ip).wrapping_add(1);
+        current_ip = Ipv4Addr::from(next_ip_int);
+
+        // Safety check to avoid infinite loops
+        if i + 1 == max_tries {
+            warn!("Reached maximum IP search attempts ({})", max_tries);
+        }
+    }
+
+    bail!("Could not find an available IP address in network {} after checking {} addresses", 
+          network, max_tries)
+}
+
+// Check if an IP address is available (not in use)
+async fn check_ip_availability(ip: Ipv4Addr) -> Result<bool> {
+    let ip_str = ip.to_string();
+    debug!("Checking availability of IP: {}", ip_str);
+    
+    // Determine the right ping command arguments based on platform
+    #[cfg(target_os = "windows")]
+    let args = ["-n", "1", "-w", "500", &ip_str]; // Windows: -n count, -w timeout in ms
+    
+    #[cfg(not(target_os = "windows"))]
+    let args = ["-c", "1", "-W", "1", &ip_str]; // Unix: -c count, -W timeout in seconds
+    
+    // Run ping command with a timeout
+    let output = Command::new("ping")
+        .args(&args)
+        .output()
+        .wrap_err_with(|| format!("Failed to execute ping command for {}", ip_str))?;
+    
+    // Check result: if ping succeeds, the IP is taken; if it fails, the IP is likely available
+    Ok(!output.status.success())
+}
 
 async fn install_k3s() -> Result<()> {
     debug!("Checking if k3s is already installed");
@@ -498,32 +660,4 @@ async fn check_file_exists(path: impl AsRef<std::path::Path>) -> bool {
         false
     }
 }
-
-// --- TODO: Implement these crucial functions ---
-
-// fn get_host_ip_and_mask(interface_name: Option<&str>) -> Result<(Ipv4Addr, Ipv4Addr)> {
-//     // Use libraries like `pnet` or `network-interface` to find the IP and mask
-//     // Handle interface selection (specified vs. default route)
-//     // Return error if no suitable IPv4 interface found
-//     unimplemented!("get_host_ip_and_mask")
-// }
-
-// async fn find_available_ip(host_ip: Ipv4Addr, netmask: Ipv4Addr, start_offset: u8, max_tries: u8) -> Result<Ipv4Addr> {
-//     // Calculate network range based on host_ip and netmask
-//     // Iterate starting from host_ip + start_offset
-//     // For each candidate IP:
-//     //   - Check if it's within the subnet
-//     //   - Check if it's the network or broadcast address
-//     //   - Check availability (e.g., using ping or arping)
-//     // Return the first available IP found
-//     // Return error if no IP found within max_tries
-//     unimplemented!("find_available_ip")
-// }
-
-// async fn check_ip_availability(ip: Ipv4Addr) -> Result<bool> {
-//     // Use `tokio::process::Command` to run `ping -c 1 -W 1 <ip>` or `arping -c 1 -W 1 <ip>`
-//     // Return Ok(true) if unreachable/timeout (available), Ok(false) if reply received (unavailable)
-//     // Return Err if the command fails unexpectedly
-//     unimplemented!("check_ip_availability")
-// }
 
