@@ -47,8 +47,11 @@ pub async fn run() -> anyhow::Result<()> {
     // Load historical timing data
     tinkerbell::load_historical_timings().await?;
     
-    // Start the timing cleanup task
-    tinkerbell::start_timing_cleanup_task().await;
+    // --- Graceful Shutdown Setup ---
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
+
+    // Start the timing cleanup task with shutdown signal
+    tinkerbell::start_timing_cleanup_task(shutdown_rx.clone()).await;
     
     // Create event manager
     let event_manager = Arc::new(EventManager::new());
@@ -60,8 +63,8 @@ pub async fn run() -> anyhow::Result<()> {
         error!("Failed to store event manager reference");
     }
     
-    // Start the workflow polling task
-    tinkerbell::start_workflow_polling_task(event_manager.clone()).await;
+    // Start the workflow polling task with shutdown signal
+    tinkerbell::start_workflow_polling_task(event_manager.clone(), shutdown_rx.clone()).await;
     
     // Load or generate admin credentials
     let credentials = match load_credentials().await {
@@ -113,7 +116,18 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(ui::ui_router())
         .route("/{mac}", get(api::ipxe_script))  // MAC route at root level for iPXE
         .nest("/api", api::api_router())
-        .nest_service("/static", ServeDir::new("crates/dragonfly-server/static"))
+        .nest_service("/static", {
+            let preferred_path = "/opt/dragonfly/static";
+            let fallback_path = "crates/dragonfly-server/static";
+            
+            let static_path = if std::path::Path::new(preferred_path).exists() {
+                preferred_path
+            } else {
+                fallback_path
+            };
+            
+            ServeDir::new(static_path)
+        })
         .layer(CookieManagerLayer::new())
         .layer(auth_layer)
         .layer(Extension(db_pool.clone())) // Pass the pool clone
@@ -126,11 +140,26 @@ pub async fn run() -> anyhow::Result<()> {
         )
         .with_state(app_state);
     
-    // Run the server directly (no select! needed)
+    // --- Start Server with Graceful Shutdown ---
     info!("Starting server on 0.0.0.0:3000");
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app.into_make_service()).await?;
+
+    // Define the shutdown signal future
+    let shutdown_signal = async move {
+        tokio::signal::ctrl_c().await
+            .expect("Failed to install Ctrl+C handler");
+        info!("Received Ctrl+C, initiating shutdown...");
+        // Send the shutdown signal to background tasks
+        let _ = shutdown_tx.send(());
+    };
+
+    // Run the server with graceful shutdown
+    axum::serve(listener, app.into_make_service())
+        .with_graceful_shutdown(shutdown_signal)
+        .await?;
+
+    info!("Server shutdown complete.");
 
     Ok(())
 } 

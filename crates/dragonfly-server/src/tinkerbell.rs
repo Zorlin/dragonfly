@@ -8,8 +8,6 @@ use tokio::sync::OnceCell;
 use tracing::{error, info, warn};
 use dragonfly_common::models::Machine;
 use std::str::FromStr;
-use hickory_resolver::AsyncResolver;
-use hickory_resolver::config::{ResolverConfig, ResolverOpts};
 
 // Define a static Kubernetes client
 static KUBE_CLIENT: OnceCell<Client> = OnceCell::const_new();
@@ -1323,17 +1321,23 @@ pub async fn cleanup_historical_timings() -> anyhow::Result<()> {
 }
 
 // Periodically clean up historical timing data
-pub async fn start_timing_cleanup_task() {
+pub async fn start_timing_cleanup_task(mut shutdown_rx: tokio::sync::watch::Receiver<()>) {
     tokio::spawn(async move {
         // Run the cleanup task every 24 hours
         let cleanup_interval = std::time::Duration::from_secs(24 * 60 * 60);
         
         loop {
-            tokio::time::sleep(cleanup_interval).await;
-            
-            info!("Running timing cleanup task");
-            if let Err(e) = cleanup_historical_timings().await {
-                error!("Error during timing cleanup: {}", e);
+            tokio::select! {
+                _ = tokio::time::sleep(cleanup_interval) => {
+                    info!("Running timing cleanup task");
+                    if let Err(e) = cleanup_historical_timings().await {
+                        error!("Error during timing cleanup: {}", e);
+                    }
+                }
+                _ = shutdown_rx.changed() => {
+                    info!("Shutdown signal received, stopping timing cleanup task.");
+                    break; // Exit the loop
+                }
             }
         }
     });
@@ -1427,7 +1431,10 @@ async fn estimate_completion_time(template_name: &str, current_action: &str, tas
 }
 
 // Start a background task to poll for workflow updates
-pub async fn start_workflow_polling_task(event_manager: std::sync::Arc<crate::event_manager::EventManager>) {
+pub async fn start_workflow_polling_task(
+    event_manager: std::sync::Arc<crate::event_manager::EventManager>,
+    mut shutdown_rx: tokio::sync::watch::Receiver<()>
+) {
     use dragonfly_common::models::MachineStatus;
     use std::collections::HashMap;
     use std::time::Duration;
@@ -1443,83 +1450,80 @@ pub async fn start_workflow_polling_task(event_manager: std::sync::Arc<crate::ev
         let mut last_seen_states: HashMap<uuid::Uuid, (String, Option<String>)> = HashMap::new();
         
         loop {
-            // Wait for the poll interval
-            tokio::time::sleep(poll_interval).await;
-            
-            // Get all machines with InstallingOS status
-            let machines = match crate::db::get_machines_by_status(MachineStatus::InstallingOS).await {
-                Ok(machines) => machines,
-                Err(e) => {
-                    error!("Failed to get machines for workflow polling: {}", e);
-                    continue;
-                }
-            };
-            
-            if machines.is_empty() {
-                // No machines are currently installing OS
-                continue;
-            }
-            
-            // Check each machine's workflow
-            for machine in &machines {
-                match get_workflow_info(machine).await {
-                    Ok(Some(workflow_info)) => {
-                        // Create a tuple of (state, current_action) to detect changes
-                        let current_state = (
-                            workflow_info.state.clone(),
-                            workflow_info.current_action.clone()
-                        );
-                        
-                        // Check if we've seen this machine before
-                        if let Some(last_state) = last_seen_states.get(&machine.id) {
-                            // Only send events if state or current_action has changed
-                            if *last_state != current_state {
-                                // Only log when there's an actual change
-                                info!("Workflow change: machine={} state={} action={:?}", 
-                                    machine.id, 
-                                    current_state.0,
-                                    current_state.1
-                                );
-                                
-                                // Send machine updated event
-                                event_manager_clone.send(format!("machine_updated:{}", machine.id));
-                                
-                                // Update the last seen state
-                                last_seen_states.insert(machine.id, current_state);
-                            }
-                        } else {
-                            // First time seeing this machine - log it once
-                            info!("New workflow: machine={} state={} action={:?}",
-                                machine.id, 
-                                current_state.0, 
-                                current_state.1
-                            );
-                            
-                            // Send initial machine updated event
-                            event_manager_clone.send(format!("machine_updated:{}", machine.id));
-                            
-                            // Add to last seen states
-                            last_seen_states.insert(machine.id, current_state);
+            // Wait for the poll interval or shutdown signal
+            tokio::select! {
+                _ = tokio::time::sleep(poll_interval) => { 
+                    // Get all machines with InstallingOS status
+                    let machines = match crate::db::get_machines_by_status(MachineStatus::InstallingOS).await {
+                        Ok(machines) => machines,
+                        Err(e) => {
+                            error!("Failed to get machines for workflow polling: {}", e);
+                            continue;
                         }
-                    },
-                    Ok(None) => {
-                        // If we previously had a workflow but now it's gone, send an event
-                        if last_seen_states.remove(&machine.id).is_some() {
-                            info!("Workflow completed for machine {}", machine.id);
-                            event_manager_clone.send(format!("machine_updated:{}", machine.id));
-                        }
-                    },
-                    Err(e) => {
-                        error!("Error fetching workflow for machine {}: {}", machine.id, e);
+                    };
+                    
+                    if machines.is_empty() {
+                        // No machines are currently installing OS
+                        continue;
                     }
+                    
+                    // Check each machine's workflow
+                    for machine in machines.iter() {
+                        match get_workflow_info(machine).await {
+                            Ok(Some(info)) => {
+                                let current_state = (info.state.clone(), info.current_action.clone());
+                                
+                                if let Some(last_state) = last_seen_states.get(&machine.id) {
+                                    if *last_state != current_state {
+                                        info!("Workflow update: machine={} old_state={} -> new_state={} action={:?}", 
+                                            machine.id, 
+                                            last_state.0, 
+                                            current_state.0, 
+                                            current_state.1
+                                        );
+                                        // Send machine updated event on state change
+                                        event_manager_clone.send(format!("machine_updated:{}", machine.id));
+                                        last_seen_states.insert(machine.id, current_state);
+                                    }
+                                } else {
+                                    // First time seeing this machine - log it once
+                                    info!("New workflow: machine={} state={} action={:?}",
+                                        machine.id, 
+                                        current_state.0, 
+                                        current_state.1
+                                    );
+                                    
+                                    // Send initial machine updated event
+                                    event_manager_clone.send(format!("machine_updated:{}", machine.id));
+                                    
+                                    // Add to last seen states
+                                    last_seen_states.insert(machine.id, current_state);
+                                }
+                            },
+                            Ok(None) => {
+                                // If we previously had a workflow but now it's gone, send an event
+                                if last_seen_states.remove(&machine.id).is_some() {
+                                    info!("Workflow completed for machine {}", machine.id);
+                                    event_manager_clone.send(format!("machine_updated:{}", machine.id));
+                                }
+                            },
+                            Err(e) => {
+                                error!("Error fetching workflow for machine {}: {}", machine.id, e);
+                            }
+                        }
+                    }
+                    
+                    // Clean up stale entries without logging - just remove machines no longer installing OS
+                    let active_machine_ids: std::collections::HashSet<uuid::Uuid> = 
+                        machines.iter().map(|m| m.id).collect();
+                    
+                    last_seen_states.retain(|machine_id, _| active_machine_ids.contains(machine_id));
+                }
+                _ = shutdown_rx.changed() => {
+                    info!("Shutdown signal received, stopping workflow polling task.");
+                    break; // Exit the loop
                 }
             }
-            
-            // Clean up stale entries without logging - just remove machines no longer installing OS
-            let active_machine_ids: std::collections::HashSet<uuid::Uuid> = 
-                machines.iter().map(|m| m.id).collect();
-            
-            last_seen_states.retain(|machine_id, _| active_machine_ids.contains(machine_id));
         }
     });
 } 

@@ -312,7 +312,7 @@ async fn install_k3s() -> Result<()> {
     
     // Full installation needed
     info!("Installing k3s (single-node)");
-    let script = r#"curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--disable traefik" sh -"#;
+    let script = r#"curl -sfL https://get.k3s.io | sh -"#;
     run_shell_command(script, "k3s installation script")?;
 
     // Verify installation
@@ -639,14 +639,14 @@ smee:
         scheme: "http"
         host: "{smee_host_ip}"
         port: 3000
-        path: ""
+        path: "/"
   additionalArgs:
     - "--dhcp-http-ipxe-script-prepend-mac=true"
 stack:
   hook:
     enabled: true
     persistence:
-      hostPath: /opt/tinkerbell/hook
+      hostPath: /var/lib/dragonfly
 "#,
         trusted_proxies.iter().map(|p| format!("    - \"{}\"", p)).collect::<Vec<_>>().join("\n"),
         bootstrap_ip = bootstrap_ip,

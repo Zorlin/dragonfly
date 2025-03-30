@@ -25,6 +25,8 @@ FROM rust:slim-bookworm AS runner
 
 # Copy the binary from the builder container.
 COPY --from=builder /app/target/release/dragonfly /usr/local/bin/dragonfly
+# Copy static assets to /opt/dragonfly/
+COPY --from=builder /app/crates/dragonfly-server/static /opt/dragonfly/static
 
 # Expose the port that the application will run on.
 EXPOSE 3000

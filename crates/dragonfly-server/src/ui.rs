@@ -33,7 +33,7 @@ pub fn get_theme_from_cookie(headers: &HeaderMap) -> String {
             }
         }
     }
-    "system".to_string()
+    "light".to_string()
 }
 
 #[derive(Template)]
@@ -419,7 +419,6 @@ pub async fn toggle_theme(
     let mut cookie = Cookie::new("dragonfly_theme", theme);
     cookie.set_path("/");
     cookie.set_max_age(time::Duration::days(365));
-    cookie.set_http_only(true);
     cookie.set_same_site(SameSite::Lax);
     
     // Get the return URL from parameters or default to home page
@@ -583,6 +582,15 @@ pub async fn update_settings(
         *guard = settings;
     }
     
-    // Redirect back to settings page
-    Redirect::to("/settings").into_response()
+    // Set the theme cookie based on the form submission
+    let mut cookie = Cookie::new("dragonfly_theme", form.theme);
+    cookie.set_path("/");
+    cookie.set_max_age(time::Duration::days(365));
+    cookie.set_same_site(SameSite::Lax);
+
+    // Redirect back to settings page with the theme cookie set
+    (
+        [(header::SET_COOKIE, cookie.to_string())],
+        Redirect::to("/settings")
+    ).into_response()
 } 
