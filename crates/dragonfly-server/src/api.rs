@@ -21,6 +21,9 @@ use std::collections::HashMap;
 use crate::ui::WorkflowProgressTemplate;
 use askama::Template;
 use crate::db;
+use std::env;
+use std::path::PathBuf;
+use tokio::fs;
 
 pub fn api_router() -> Router<crate::AppState> {
     Router::new()
@@ -42,6 +45,7 @@ pub fn api_router() -> Router<crate::AppState> {
         .route("/machines/{id}/tags", put(update_machine_tags))
         .route("/events", get(machine_events))
         .route("/machines/{id}/workflow-progress", get(get_workflow_progress))
+        .route("/ipxe/*path", get(serve_ipxe_artifact))
 }
 
 async fn register_machine(
@@ -779,21 +783,40 @@ async fn get_hostname_form(
     }
 }
 
-// Handler for iPXE script generation
+// Handler for initial iPXE script generation (DHCP points here)
+// Determines whether to chain to HookOS or the Dragonfly Agent
 pub async fn ipxe_script(Path(mac): Path<String>) -> Response {
     if !mac.contains(':') || mac.split(':').count() != 6 {
-        return (StatusCode::NOT_FOUND, "Not Found").into_response();
+        warn!("Received invalid MAC format in iPXE request: {}", mac);
+        return (StatusCode::BAD_REQUEST, "Invalid MAC Address Format").into_response();
     }
-    
-    info!("Generating iPXE script for MAC: {}", mac);
-    
+
+    info!("Generating initial iPXE script for MAC: {}", mac);
+
+    // Read required base URL from environment variable
+    let base_url = match env::var("DRAGONFLY_BASE_URL") {
+        Ok(url) => url,
+        Err(_) => {
+            error!("CRITICAL: DRAGONFLY_BASE_URL environment variable is not set. iPXE booting requires this configuration.");
+            let error_response = ErrorResponse {
+                error: "Configuration Error".to_string(),
+                message: "Server is missing required DRAGONFLY_BASE_URL configuration.".to_string(),
+            };
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(error_response)).into_response();
+        }
+    };
+
     match db::get_machine_by_mac(&mac).await {
         Ok(Some(_)) => {
-            let script = format!("#!ipxe\nchain http://10.7.1.30:8080/hookos.ipxe");
+            // Known machine: Chain to Dragonfly's OS installation hook script (hookos.ipxe)
+            info!("Known MAC {}, chaining to HookOS script", mac);
+            let script = format!("#!ipxe\nchain {}/ipxe/hookos.ipxe", base_url);
             (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/plain")], script).into_response()
         },
         Ok(None) => {
-            let script = format!("#!ipxe\nchain http://10.7.1.30:8080/sparxplug.ipxe");
+            // Unknown machine: Chain to the Dragonfly agent script
+            info!("Unknown MAC {}, chaining to Dragonfly Agent iPXE script", mac);
+            let script = format!("#!ipxe\nchain {}/ipxe/dragonfly-agent.ipxe", base_url);
             (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/plain")], script).into_response()
         },
         Err(e) => {
@@ -807,7 +830,6 @@ pub async fn ipxe_script(Path(mac): Path<String>) -> Response {
     }
 }
 
-// Update the delete_machine function to use kube-rs instead of kubectl
 async fn delete_machine(
     State(state): State<AppState>,
     auth_session: AuthSession,
@@ -1251,6 +1273,49 @@ async fn update_machine_tags(
         Err(e) => {
             error!("Failed to update tags for machine {}: {}", id, e);
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "message": "Failed to update tags" }))).into_response()
+        }
+    }
+}
+
+// Function to serve an iPXE artifact file from a configured directory
+// NOTE: This function is implemented but NOT currently routed in api_router.
+// It needs to be added to the router manually if intended to be used.
+async fn serve_ipxe_artifact(Path(requested_path): Path<String>) -> Response {
+    // Define the default directory and the env var name
+    const DEFAULT_ARTIFACT_DIR: &str = "/var/lib/dragonfly/ipxe-artifacts";
+    const ARTIFACT_DIR_ENV_VAR: &str = "DRAGONFLY_IPXE_ARTIFACT_DIR";
+
+    // Get the base directory from env var or use default
+    let base_dir = env::var(ARTIFACT_DIR_ENV_VAR)
+        .unwrap_or_else(|_| {
+            warn!("{} not set, using default: {}", ARTIFACT_DIR_ENV_VAR, DEFAULT_ARTIFACT_DIR);
+            DEFAULT_ARTIFACT_DIR.to_string()
+        });
+    let base_path = PathBuf::from(base_dir);
+
+    // --- Basic Path Sanitization ---
+    // Ensure the requested path doesn't contain components that allow traversal.
+    // We expect a simple filename like "hookos.ipxe".
+    if requested_path.contains("..") || requested_path.contains('/') || requested_path.contains('\\') {
+        warn!("Attempted iPXE artifact path traversal: {}", requested_path);
+        return (StatusCode::BAD_REQUEST, "Invalid artifact path").into_response();
+    }
+    // ------------------------------
+
+    let artifact_path = base_path.join(&requested_path);
+
+    info!("Attempting to serve iPXE artifact from file: {:?}", artifact_path);
+
+    match fs::read_to_string(&artifact_path).await {
+        Ok(script_content) => {
+            info!("Successfully served iPXE artifact: {}", requested_path);
+            (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/plain")], script_content).into_response()
+        },
+        Err(e) => {
+            // Log the specific error for debugging, but return a generic 404 to the client.
+            error!("Failed to read iPXE artifact file {:?}: {}", artifact_path, e);
+            warn!("Requested iPXE artifact not found or inaccessible: {}", requested_path);
+            (StatusCode::NOT_FOUND, "iPXE Artifact Not Found").into_response()
         }
     }
 } 
