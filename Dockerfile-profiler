@@ -18,7 +18,7 @@ COPY . .
 RUN cargo build --release
 
 # Run the application.
-CMD ["cargo", "build", "--release", "--features dhat-heap"]
+CMD ["cargo", "build", "--release", "--features", "dhat-heap"]
 
 # New container
 FROM rust:slim-bookworm AS runner

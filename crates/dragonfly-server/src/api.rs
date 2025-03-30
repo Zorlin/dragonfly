@@ -1911,15 +1911,14 @@ async fn stream_download_with_caching(
     let url_clone = url.to_string();
     let cache_path_clone = cache_path.to_path_buf();
     tokio::spawn(async move {
-        // Use futures::StreamExt to handle the response body stream
-        let mut stream = response.bytes_stream(); 
-        drop(response);
-
         let mut client_disconnected = false;
-        let mut download_error = false; // Track actual download/write errors
+        let mut download_error = false;
 
-        while let Some(chunk_result) = stream.next().await { // Use stream.next().await
-            match chunk_result { // chunk_result is Result<Bytes, reqwest::Error>
+        // Get the stream. `bytes_stream` consumes the response object.
+        let mut stream = response.bytes_stream(); 
+
+        while let Some(chunk_result) = stream.next().await {
+            match chunk_result {
                 Ok(chunk) => {
                     let chunk_clone = chunk.clone();
                     
