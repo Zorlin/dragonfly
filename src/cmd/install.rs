@@ -437,7 +437,7 @@ async fn wait_for_node_ready(kubeconfig_path: &PathBuf) -> Result<()> {
     // Print a dot every few seconds to show progress
     let mut dots_printed = 0;
     let mut node_ready = false;
-    let mut metrics_server_ready = false;
+    let mut coredns_ready = false;
 
     loop {
         if start_time.elapsed() > max_wait {
@@ -473,39 +473,39 @@ async fn wait_for_node_ready(kubeconfig_path: &PathBuf) -> Result<()> {
             }
         }
 
-        // Step 2: Once node is ready, check for metrics-server readiness
-        if node_ready && !metrics_server_ready {
-            // First check if metrics-server exists
-            let metrics_exists_result = Command::new("kubectl")
-                .args(["get", "pods", "-n", "kube-system", "-l", "k8s-app=metrics-server", "--no-headers"])
+        // Step 2: Once node is ready, check for CoreDNS readiness
+        if node_ready && !coredns_ready {
+            // First check if CoreDNS pods exist
+            let coredns_exists_result = Command::new("kubectl")
+                .args(["get", "pods", "-n", "kube-system", "-l", "k8s-app=kube-dns", "--no-headers"])
                 .env("KUBECONFIG", kubeconfig_path)
                 .output();
                 
-            let pod_exists = if let Ok(output) = &metrics_exists_result {
+            let pods_exist = if let Ok(output) = &coredns_exists_result {
                 output.status.success() && !String::from_utf8_lossy(&output.stdout).trim().is_empty()
             } else {
                 false
             };
                 
-            if pod_exists {
-                // Check if metrics-server is ready
-                let metrics_status = Command::new("kubectl")
-                    .args(["get", "pods", "-n", "kube-system", "-l", "k8s-app=metrics-server", 
-                           "-o", "jsonpath='{.items[0].status.conditions[?(@.type==\"Ready\")].status}'"])
+            if pods_exist {
+                // Check if at least one CoreDNS pod is ready
+                let coredns_status = Command::new("kubectl")
+                    .args(["get", "pods", "-n", "kube-system", "-l", "k8s-app=kube-dns", 
+                           "-o", "jsonpath='{.items[*].status.conditions[?(@.type==\"Ready\")].status}'"])
                     .env("KUBECONFIG", kubeconfig_path)
                     .output();
                     
-                if let Ok(status) = metrics_status {
+                if let Ok(status) = coredns_status {
                     let status_str = String::from_utf8_lossy(&status.stdout).trim().trim_matches('\'').to_string();
-                    if status_str == "True" {
-                        debug!("Metrics server is ready");
-                        metrics_server_ready = true;
+                    if status_str.contains("True") {
+                        debug!("CoreDNS is ready");
+                        coredns_ready = true;
                     } else {
-                        debug!("Waiting for metrics-server to become ready: {}", status_str);
+                        debug!("Waiting for CoreDNS to become ready: {}", status_str);
                     }
                 }
             } else {
-                debug!("Metrics server pod not found yet");
+                debug!("CoreDNS pods not found yet");
             }
         }
 
@@ -515,12 +515,12 @@ async fn wait_for_node_ready(kubeconfig_path: &PathBuf) -> Result<()> {
         dots_printed += 1;
 
         // Check if both conditions are met
-        if node_ready && metrics_server_ready {
+        if node_ready && coredns_ready {
             // Add a newline after dots if we printed any
             if dots_printed > 0 {
                 println!();
             }
-            info!("Kubernetes node and metrics-server are ready");
+            info!("Kubernetes node and CoreDNS are ready");
             return Ok(());
         }
 
