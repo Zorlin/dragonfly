@@ -18,7 +18,7 @@ use std::time::Duration;
 use crate::auth::AuthSession;
 use crate::AppState;
 use std::collections::HashMap;
-use crate::ui::{MachineListTemplate, WorkflowProgressTemplate};
+use crate::ui::WorkflowProgressTemplate;
 use askama::Template;
 use crate::db;
 
@@ -38,6 +38,8 @@ pub fn api_router() -> Router<crate::AppState> {
         .route("/machines/{id}/os_installed", post(update_os_installed))
         .route("/machines/{id}/bmc", post(update_bmc))
         .route("/machines/{id}/progress", post(update_installation_progress))
+        .route("/machines/{id}/tags", get(get_machine_tags))
+        .route("/machines/{id}/tags", put(update_machine_tags))
         .route("/events", get(machine_events))
         .route("/machines/{id}/workflow-progress", get(get_workflow_progress))
 }
@@ -1202,5 +1204,53 @@ pub async fn get_workflow_progress(
     match template.render() {
         Ok(html) => Html(html).into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+// New handler to get machine tags
+async fn get_machine_tags(
+    State(_state): State<AppState>,
+    Path(id): Path<Uuid>,
+    auth_session: AuthSession, // Ensure user is authenticated/authorized
+) -> Response {
+    // Basic authentication check (replace with proper authorization if needed)
+    if auth_session.user.is_none() {
+        return (StatusCode::UNAUTHORIZED, Json(json!({ "message": "Authentication required" }))).into_response();
+    }
+
+    match db::get_machine_tags(&id).await { // Assuming db::get_machine_tags exists
+        Ok(tags) => {
+            (StatusCode::OK, Json(tags)).into_response()
+        },
+        Err(e) => {
+            error!("Failed to retrieve tags for machine {}: {}", id, e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "message": "Failed to retrieve tags" }))).into_response()
+        }
+    }
+}
+
+// New handler to update machine tags
+async fn update_machine_tags(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    auth_session: AuthSession, // Ensure user is authenticated/authorized (admin?)
+    Json(tags): Json<Vec<String>>, // Expect a JSON array of strings
+) -> Response {
+    // Basic admin check (replace/enhance with proper authorization)
+    if auth_session.user.is_none() {
+        return (StatusCode::FORBIDDEN, Json(json!({ "message": "Admin privileges required" }))).into_response();
+    }
+
+    match db::update_machine_tags(&id, &tags).await { // Assuming db::update_machine_tags exists
+        Ok(_) => {
+            info!("Updated tags for machine {}: {:?}", id, tags);
+            // Emit event for SSE refresh
+            state.event_manager.send(format!("machine_updated:{}", id)); 
+            (StatusCode::OK, Json(json!({ "message": "Tags updated successfully" }))).into_response()
+        },
+        Err(e) => {
+            error!("Failed to update tags for machine {}: {}", id, e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "message": "Failed to update tags" }))).into_response()
+        }
     }
 } 

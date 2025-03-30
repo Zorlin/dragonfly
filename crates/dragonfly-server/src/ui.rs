@@ -11,7 +11,7 @@ use tracing::{error, info};
 use std::collections::HashMap;
 use serde_json;
 use uuid;
-use time;
+use chrono::{DateTime, Utc};
 use cookie::{Cookie, SameSite};
 use std::fs;
 
@@ -45,7 +45,7 @@ pub struct IndexTemplate {
     pub status_counts_json: String,
     pub theme: String,
     pub is_authenticated: bool,
-    pub formatted_dates: HashMap<uuid::Uuid, String>,
+    pub display_dates: HashMap<String, String>,
 }
 
 #[derive(Template)]
@@ -186,6 +186,11 @@ fn count_machines_by_status(machines: &[Machine]) -> HashMap<String, usize> {
     counts
 }
 
+// Helper to format DateTime<Utc> to a friendly string
+fn format_datetime(dt: &DateTime<Utc>) -> String {
+    dt.format("%Y-%m-%d %H:%M:%S UTC").to_string()
+}
+
 pub async fn index(
     State(app_state): State<crate::AppState>,
     headers: HeaderMap,
@@ -214,6 +219,13 @@ pub async fn index(
             // Convert status counts to JSON for the chart
             let status_counts_json = serde_json::to_string(&status_counts)
                 .unwrap_or_else(|_| "{}".to_string());
+
+            // Prepare display dates
+            let mut display_dates = HashMap::new();
+            for machine in &machines {
+                // Store date with UUID as string key for template access
+                display_dates.insert(machine.id.to_string(), format_datetime(&machine.created_at));
+            }
             
             UiTemplate::Index(IndexTemplate {
                 title: "Dragonfly".to_string(),
@@ -222,7 +234,7 @@ pub async fn index(
                 status_counts_json,
                 theme,
                 is_authenticated,
-                formatted_dates: HashMap::new(),
+                display_dates,
             }).into_response()
         },
         Err(e) => {
@@ -234,7 +246,7 @@ pub async fn index(
                 status_counts_json: "{}".to_string(),
                 theme: "system".to_string(),
                 is_authenticated,
-                formatted_dates: HashMap::new(),
+                display_dates: HashMap::new(),
             }).into_response()
         }
     }
@@ -362,7 +374,7 @@ pub async fn machine_details(
                         status_counts_json: "{}".to_string(),
                         theme: "system".to_string(),
                         is_authenticated,
-                        formatted_dates: HashMap::new(),
+                        display_dates: HashMap::new(),
                     }).into_response()
                 },
                 Err(e) => {
@@ -375,7 +387,7 @@ pub async fn machine_details(
                         status_counts_json: "{}".to_string(),
                         theme: "system".to_string(),
                         is_authenticated,
-                        formatted_dates: HashMap::new(),
+                        display_dates: HashMap::new(),
                     }).into_response()
                 }
             }
@@ -390,7 +402,7 @@ pub async fn machine_details(
                 status_counts_json: "{}".to_string(),
                 theme: "system".to_string(),
                 is_authenticated,
-                formatted_dates: HashMap::new(),
+                display_dates: HashMap::new(),
             }).into_response()
         }
     }

@@ -9,9 +9,13 @@ description = "API server for Dragonfly bare metal infrastructure management"
 # Web Framework
 axum = { version = "0.8", features = ["macros"] }
 # Authentication
+# Revert axum-login back to stable version
 axum-login = { version = "0.17.0" }
 axum-extra = "0.10.1"
-tower-sessions = { version = "0.14.0", features = ["memory-store"] }
+# Sessions
+tower-sessions = { version = "0.14.0" }
+# Use sqlx store - trying version 0.15.0 for compatibility
+tower-sessions-sqlx-store = { version = "0.15.0", features = ["sqlite"] }
 async-session = "3.0.0"
 async-trait = "0.1.79"
 # Password hashing
@@ -45,6 +49,6 @@ tower-cookies = "0.10.0"
 # Local dependencies
 dragonfly-common = { path = "../dragonfly-common" }
 
-# Kubernetes integration can be added if needed 
+# Kubernetes integration can be added if needed
 kube = { version = "0.87.1", features = ["client", "derive", "runtime"] }
 k8s-openapi = { version = "0.20.0", features = ["v1_28"] } 

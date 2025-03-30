@@ -3,47 +3,59 @@
 {% block title %}Dragonfly - Dashboard{% endblock %}
 
 {% block content %}
-<div class="bg-white shadow overflow-hidden sm:rounded-lg">
+<div class="bg-white dark:bg-gray-800 shadow overflow-hidden sm:rounded-lg">
     <div class="px-4 py-5 sm:px-6">
-        <h3 class="text-lg leading-6 font-medium text-gray-900">
-            
+        <h3 class="text-lg leading-6 font-medium text-gray-900 dark:text-gray-100">
+            Infrastructure Overview
         </h3>
-        <p class="mt-1 max-w-2xl text-sm text-gray-500">
-            Overview of your bare metal infrastructure
+        <p class="mt-1 max-w-2xl text-sm text-gray-500 dark:text-gray-400">
+            Summary of your bare metal infrastructure
         </p>
     </div>
-    <div class="border-t border-gray-200">
+    <div class="border-t border-gray-200 dark:border-gray-700">
         <dl>
-            <div class="bg-gray-50 px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
-                <dt class="text-sm font-medium text-gray-500">
+            <div class="bg-gray-50 dark:bg-gray-750 px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">
                     Total Machines
                 </dt>
-                <dd class="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
+                <dd class="mt-1 text-sm text-gray-900 dark:text-gray-100 sm:mt-0 sm:col-span-2">
                     {{ machines|length }}
                 </dd>
             </div>
-            <div class="bg-white px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
-                <dt class="text-sm font-medium text-gray-500">
+            <div class="bg-white dark:bg-gray-800 px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">
                     Machines Awaiting OS
                 </dt>
-                <dd class="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
-                    0
+                <dd class="mt-1 text-sm text-gray-900 dark:text-gray-100 sm:mt-0 sm:col-span-2">
+                    {% if status_counts.contains_key("ReadyForAdoption") %}
+                        {{ status_counts["ReadyForAdoption"] }}
+                    {% else %}
+                        0
+                    {% endif %}
                 </dd>
             </div>
-            <div class="bg-gray-50 px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
-                <dt class="text-sm font-medium text-gray-500">
+            <div class="bg-gray-50 dark:bg-gray-750 px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">
                     Machines Installing OS
                 </dt>
-                <dd class="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
-                    0
+                <dd class="mt-1 text-sm text-gray-900 dark:text-gray-100 sm:mt-0 sm:col-span-2">
+                    {% if status_counts.contains_key("InstallingOS") %}
+                        {{ status_counts["InstallingOS"] }}
+                    {% else %}
+                        0
+                    {% endif %}
                 </dd>
             </div>
-            <div class="bg-white px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
-                <dt class="text-sm font-medium text-gray-500">
+            <div class="bg-white dark:bg-gray-800 px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">
                     Ready Machines
                 </dt>
-                <dd class="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
-                    0
+                <dd class="mt-1 text-sm text-gray-900 dark:text-gray-100 sm:mt-0 sm:col-span-2">
+                    {% if status_counts.contains_key("Ready") %}
+                        {{ status_counts["Ready"] }}
+                    {% else %}
+                        0
+                    {% endif %}
                 </dd>
             </div>
         </dl>
@@ -52,42 +64,42 @@
 
 <div class="mt-8">
     <div class="flex justify-between items-center">
-        <h2 class="text-lg font-medium text-gray-900">Recent Machines</h2>
-        <a href="/machines" class="text-sm font-medium text-indigo-600 hover:text-indigo-500">
+        <h2 class="text-lg font-medium text-gray-900 dark:text-gray-100">Recent Machines</h2>
+        <a href="/machines" class="text-sm font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400 dark:hover:text-indigo-300">
             View all machines
         </a>
     </div>
-    <div id="machine-list" class="mt-4 bg-white shadow overflow-hidden sm:rounded-md">
-        <ul class="divide-y divide-gray-200">
+    <div id="machine-list" class="mt-4 bg-white dark:bg-gray-800 shadow overflow-hidden sm:rounded-md">
+        <ul class="divide-y divide-gray-200 dark:divide-gray-700">
             {% for machine in machines %}
-            <li class="hover:bg-gray-50 cursor-pointer" onclick="window.location='/machines/{{ machine.id }}'">
+            <li class="hover:bg-gray-50 dark:hover:bg-gray-750 cursor-pointer" onclick="window.location='/machines/{{ machine.id }}'">
                 <div class="px-4 py-4 sm:px-6">
                     <div class="flex items-center justify-between">
-                        <p class="text-sm font-medium text-indigo-600 truncate">
-                            {% if machine.hostname.is_some() %}
-                                {{ machine.hostname.as_ref().unwrap() }}
-                            {% else %}
-                                {% if machine.memorable_name.is_some() %}
-                                    {{ machine.memorable_name.as_ref().unwrap() }}
+                        <div>
+                            <p class="text-sm font-medium text-indigo-600 dark:text-indigo-400 truncate">
+                                {% if machine.hostname.is_some() %}
+                                    {{ machine.hostname.as_ref().unwrap() }}
                                 {% else %}
-                                    {{ machine.id }}
+                                    <!-- Fallback to ID if no hostname or memorable name -->
+                                    <span class="tech-mono">{{ machine.id }}</span>
                                 {% endif %}
+                            </p>
+                            {% if machine.memorable_name.is_some() %}
+                                <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                    ({{ machine.memorable_name.as_ref().unwrap() }})
+                                </p>
                             {% endif %}
-                        </p>
+                        </div>
                         <div class="ml-2 flex-shrink-0 flex">
                             <p class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full 
                                 {% if machine.status|string == "Ready" %}
-                                    bg-green-100 text-green-800
+                                    bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200
+                                {% else if machine.status|string == "InstallingOS" %}
+                                    bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200
+                                {% else if machine.status|string == "ReadyForAdoption" %}
+                                    bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200
                                 {% else %}
-                                    {% if machine.status|string == "InstallingOS" %}
-                                        bg-yellow-100 text-yellow-800
-                                    {% else %}
-                                        {% if machine.status|string == "ReadyForAdoption" %}
-                                            bg-blue-100 text-blue-800
-                                        {% else %}
-                                            bg-red-100 text-red-800
-                                        {% endif %}
-                                    {% endif %}
+                                    bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200
                                 {% endif %}">
                                 {{ machine.status }}
                             </p>
@@ -95,27 +107,27 @@
                     </div>
                     <div class="mt-2 sm:flex sm:justify-between">
                         <div class="sm:flex">
-                            <p class="flex items-center text-sm text-gray-500">
-                                MAC: {{ machine.mac_address }}
+                            <p class="flex items-center text-sm text-gray-500 dark:text-gray-400">
+                                MAC: <span class="ml-1 tech-mono">{{ machine.mac_address }}</span>
                             </p>
-                            <p class="mt-2 flex items-center text-sm text-gray-500 sm:mt-0 sm:ml-6">
-                                IP: {{ machine.ip_address }}
+                            <p class="mt-2 flex items-center text-sm text-gray-500 dark:text-gray-400 sm:mt-0 sm:ml-6">
+                                IP: <span class="ml-1 tech-mono">{{ machine.ip_address }}</span>
                             </p>
-                            {% if machine.hostname.is_some() %}
-                                {% if machine.memorable_name.is_some() %}
-                                    <p class="mt-2 flex items-center text-sm text-gray-500 sm:mt-0 sm:ml-6">
-                                        ID: {{ machine.memorable_name.as_ref().unwrap() }}
-                                    </p>
-                                {% endif %}
-                            {% endif %}
                         </div>
-                        <div class="mt-2 flex items-center text-sm text-gray-500 sm:mt-0">
+                        <div class="mt-2 flex items-center text-sm text-gray-500 dark:text-gray-400 sm:mt-0">
                             <p>
-                                Registered {{ machine.created_at }}
+                                Registered 
+                                <span class="ml-1 tech-mono">
+                                    {{ machine.created_at|string }}
+                                </span>
                             </p>
                         </div>
                     </div>
                 </div>
+            </li>
+            {% else %}
+            <li class="px-4 py-4 sm:px-6">
+                <p class="text-center text-gray-500 dark:text-gray-400">No machines discovered yet.</p>
             </li>
             {% endfor %}
         </ul>

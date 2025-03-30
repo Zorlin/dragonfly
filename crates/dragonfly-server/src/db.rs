@@ -682,30 +682,22 @@ pub async fn update_nameservers(id: &Uuid, nameservers: &[String]) -> Result<boo
     let now = Utc::now();
     let now_str = now.to_rfc3339();
     
-    // Convert nameservers to JSON
     let nameservers_json = serde_json::to_string(nameservers)?;
     
     let result = sqlx::query(
         r#"
         UPDATE machines 
-        SET nameservers = ?, updated_at = ? 
+        SET nameservers = ?, updated_at = ?
         WHERE id = ?
         "#,
     )
     .bind(nameservers_json)
-    .bind(&now_str)
+    .bind(now_str)
     .bind(id.to_string())
     .execute(pool)
     .await?;
     
-    let success = result.rows_affected() > 0;
-    if success {
-        info!("Nameservers updated for machine {}", id);
-    } else {
-        info!("No machine found with ID {} to update nameservers", id);
-    }
-    
-    Ok(success)
+    Ok(result.rows_affected() > 0)
 }
 
 // Helper function to parse status from string
@@ -1537,4 +1529,25 @@ fn map_row_to_machine(row: sqlx::sqlite::SqliteRow) -> Result<dragonfly_common::
         installation_step: row.try_get("installation_step")?,
         last_deployment_duration,
     })
-} 
+}
+
+// ---- START TAGS FUNCTIONS ----
+
+// STUB: Get machine tags
+pub async fn get_machine_tags(id: &Uuid) -> Result<Vec<String>> {
+    info!("STUB: Called get_machine_tags for machine {}", id);
+    // TODO: Implement database logic to fetch tags for the given machine ID.
+    // This will likely require schema changes (e.g., a separate machine_tags table or a tags column in machines).
+    Ok(vec!["stub_tag".to_string()]) // Return dummy data for now
+}
+
+// STUB: Update machine tags
+pub async fn update_machine_tags(id: &Uuid, tags: &[String]) -> Result<bool> {
+    info!("STUB: Called update_machine_tags for machine {} with tags: {:?}", id, tags);
+    // TODO: Implement database logic to update tags for the given machine ID.
+    // This will likely involve deleting existing tags and inserting the new ones.
+    // Requires schema changes.
+    Ok(true) // Assume success for now
+}
+
+// ---- END TAGS FUNCTIONS ---- 

@@ -1,6 +1,7 @@
 use axum::{routing::{get, post}, extract::Extension, Router, response::{IntoResponse, Response}};
 use axum_login::{AuthManagerLayerBuilder};
-use tower_sessions::{SessionManagerLayer, MemoryStore};
+use tower_sessions::{SessionManagerLayer};
+use tower_sessions_sqlx_store::SqliteStore;
 use std::sync::{Arc};
 use tokio::sync::Mutex;
 use tower_http::trace;
@@ -94,10 +95,13 @@ pub async fn run() -> anyhow::Result<()> {
         event_manager: event_manager,
     };
     
-    // Set up a session store
-    let session_store = MemoryStore::default();
+    // Set up the persistent session store using the sqlx store
+    let session_store = SqliteStore::new(db_pool.clone());
+    session_store.migrate().await?; // Create the sessions table
+
+    // Configure the session layer with the SqliteStore
     let session_layer = SessionManagerLayer::new(session_store)
-        .with_secure(false); // Ensure session layer is configured (secure flag might depend on deployment)
+        .with_secure(false);
     
     // Create session-based authentication
     let backend = AdminBackend::new(credentials);
@@ -112,7 +116,7 @@ pub async fn run() -> anyhow::Result<()> {
         .nest_service("/static", ServeDir::new("crates/dragonfly-server/static"))
         .layer(CookieManagerLayer::new())
         .layer(auth_layer)
-        .layer(Extension(db_pool))
+        .layer(Extension(db_pool.clone())) // Pass the pool clone
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(trace::DefaultMakeSpan::new()
@@ -122,11 +126,11 @@ pub async fn run() -> anyhow::Result<()> {
         )
         .with_state(app_state);
     
-    // Start the server
+    // Run the server directly (no select! needed)
     info!("Starting server on 0.0.0.0:3000");
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app.into_make_service()).await?;
-    
+
     Ok(())
 } 
