@@ -644,7 +644,7 @@ smee:
     - "--dhcp-http-ipxe-script-prepend-mac=true"
 stack:
   hook:
-    enabled: true
+    enabled: false # We handle Hook downloads via the Dragonfly server
     persistence:
       hostPath: /var/lib/dragonfly
 "#,

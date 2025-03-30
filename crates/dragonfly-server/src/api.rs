@@ -1746,7 +1746,57 @@ pub async fn download_hookos_artifacts(version: &str) -> Result<()> {
         download_and_verify_artifact(artifact, &base_url, &hookos_dir, &checksum_content, 10).await?;
     }
     
-    info!("Successfully downloaded all HookOS artifacts to {:?}", hookos_dir);
+    // Extract the downloaded tar.gz files in parallel
+    info!("Extracting HookOS artifacts in parallel in {:?}", hookos_dir);
+    
+    // Create a vector of futures for parallel extraction
+    let extract_futures = artifacts.iter().map(|artifact| {
+        let artifact_path = hookos_dir.join(artifact);
+        let artifact_name = artifact.to_string();
+        let dir = hookos_dir.clone();
+        
+        // Return a future that extracts one artifact
+        async move {
+            info!("Extracting {}", artifact_name);
+            
+            // Use tokio::process::Command to run tar
+            let output = Command::new("tar")
+                .args(["--no-same-permissions", "--overwrite", "-ozxf"])
+                .arg(&artifact_path)
+                .current_dir(&dir)
+                .output()
+                .await;
+                
+            match output {
+                Ok(output) => {
+                    if !output.status.success() {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        warn!("Error extracting {}: {}", artifact_name, stderr);
+                        false
+                    } else {
+                        true
+                    }
+                },
+                Err(e) => {
+                    warn!("Failed to extract {}: {}", artifact_name, e);
+                    false
+                }
+            }
+        }
+    }).collect::<Vec<_>>();
+    
+    // Run all extractions in parallel and collect results
+    let results = futures::future::join_all(extract_futures).await;
+    
+    // Check if all extractions were successful
+    let all_successful = results.iter().all(|&success| success);
+    
+    if all_successful {
+        info!("Successfully downloaded and extracted all HookOS artifacts to {:?}", hookos_dir);
+    } else {
+        warn!("Some HookOS artifacts failed to extract, but continuing anyway");
+    }
+    
     Ok(())
 }
 
