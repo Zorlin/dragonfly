@@ -39,16 +39,7 @@ pub struct AppState {
     pub event_manager: Arc<EventManager>,
 }
 
-// Global allocator setup for heap profiling
-#[cfg(feature = "dhat-heap")]
-#[global_allocator]
-static ALLOC: dhat::Alloc = dhat::Alloc;
-
 pub async fn run() -> anyhow::Result<()> {
-    // Initialize dhat heap profiler if feature is enabled
-    #[cfg(feature = "dhat-heap")]
-    let _profiler = dhat::Profiler::new_heap();
-
     // Initialize the database 
     let db_pool = init_db().await?;
     

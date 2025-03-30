@@ -1,3 +1,8 @@
+// Global allocator setup for heap profiling
+#[cfg(feature = "dhat-heap")]
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
+
 // Main binary that starts the server
 use clap::{Parser, Subcommand};
 use color_eyre::eyre::Result;
@@ -39,6 +44,10 @@ struct ServerArgs {}
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Initialize dhat heap profiler if feature is enabled
+    #[cfg(feature = "dhat-heap")]
+    let _profiler = dhat::Profiler::new_heap();
+
     color_eyre::install()?; // Install better error handling
 
     let cli = Cli::parse();

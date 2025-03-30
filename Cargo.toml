@@ -26,7 +26,14 @@ edition = "2021"
 authors = ["Sparx"]
 description = "A web application for managing bare metal datacenter infrastructure"
 
+[features]
+default = []
+dhat-heap = ["dhat"]
+
 [dependencies]
+# Profiling (Optional)
+dhat = { version = "0.3", optional = true }
+
 # Web Framework
 axum = { version = "0.8", features = ["macros"] }
 tokio = { workspace = true }

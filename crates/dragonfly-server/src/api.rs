@@ -1913,7 +1913,9 @@ async fn stream_download_with_caching(
     tokio::spawn(async move {
         // Use futures::StreamExt to handle the response body stream
         let mut stream = response.bytes_stream(); 
-        let mut client_disconnected = false; // Track if client has disconnected
+        drop(response);
+
+        let mut client_disconnected = false;
         let mut download_error = false; // Track actual download/write errors
 
         while let Some(chunk_result) = stream.next().await { // Use stream.next().await
