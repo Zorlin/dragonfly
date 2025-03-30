@@ -658,12 +658,37 @@ stack:
         .wrap_err_with(|| format!("Failed to write Helm values to {:?}", values_path))?;
     debug!("Generated Helm values file: {:?}", values_path);
 
-    // --- Run Helm Install/Upgrade ---
-    let stack_chart_version = "0.5.0"; 
+    // --- Clone the GitHub repository for the Helm chart ---
+    info!("Fetching Dragonfly Helm charts from GitHub...");
+    
+    // Create a temporary directory for the repo
+    let repo_dir = std::env::temp_dir().join("dragonfly-charts");
+    
+    // Remove the directory if it already exists
+    if repo_dir.exists() {
+        fs::remove_dir_all(&repo_dir).await
+            .wrap_err_with(|| format!("Failed to clean up previous charts directory: {:?}", repo_dir))?;
+    }
+    
+    // Clone the repository
+    let clone_cmd = format!(
+        "git clone --depth 1 https://github.com/Zorlin/dragonfly-charts.git {}",
+        repo_dir.display()
+    );
+    run_shell_command(&clone_cmd, "clone Dragonfly Helm charts").wrap_err("Failed to clone Helm charts repository")?;
+    
+    // Path to the chart
+    let chart_path = repo_dir.join("tinkerbell").join("stack");
+    
+    // Check if the chart path exists
+    if !chart_path.exists() {
+        bail!("Helm chart not found in expected location: {:?}", chart_path);
+    }
+    
+    // --- Run Helm Install/Upgrade with the local chart path ---
     let helm_args = [
         "upgrade", "--install", "tink-stack",
-        "oci://ghcr.io/tinkerbell/charts/stack",
-        "--version", stack_chart_version,
+        chart_path.to_str().ok_or_else(|| color_eyre::eyre::eyre!("Chart path is not valid UTF-8"))?,
         "--create-namespace",
         "--namespace", "tink",
         "--wait",
@@ -671,8 +696,8 @@ stack:
         "-f", values_path.to_str().ok_or_else(|| color_eyre::eyre::eyre!("values.yaml path is not valid UTF-8"))?,
     ];
 
-    info!("Deploying Tinkerbell stack...");
-    run_command("helm", &helm_args, "install/upgrade Tinkerbell Helm chart")?;
+    info!("Deploying Dragonfly Tinkerbell stack...");
+    run_command("helm", &helm_args, "install/upgrade Dragonfly Tinkerbell Helm chart")?;
 
     // Verify the deployment
     let deployment_check = Command::new("kubectl")
@@ -687,14 +712,18 @@ stack:
            !pods_output.contains("Pending") && 
            !pods_output.contains("Error") && 
            !pods_output.contains("CrashLoopBackOff") {
-            info!("Tinkerbell stack is running properly");
+            info!("Dragonfly Tinkerbell stack is running properly");
         } else {
-            warn!("Tinkerbell stack deployed but some pods may not be ready. Check with 'kubectl --kubeconfig={} get pods -n tink'", 
+            warn!("Dragonfly Tinkerbell stack deployed but some pods may not be ready. Check with 'kubectl --kubeconfig={} get pods -n tink'", 
                   kubeconfig_path.display());
         }
     }
 
-    info!("Tinkerbell stack {} successfully", if release_exists { "upgraded" } else { "installed" });
+    // Clean up - remove the cloned repository
+    debug!("Cleaning up temporary chart repository...");
+    let _ = fs::remove_dir_all(&repo_dir).await; // Best effort cleanup, don't fail if it doesn't work
+
+    info!("Dragonfly Tinkerbell stack {} successfully", if release_exists { "upgraded" } else { "installed" });
     Ok(())
 }
 
