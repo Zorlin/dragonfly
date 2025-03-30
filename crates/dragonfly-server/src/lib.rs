@@ -6,7 +6,7 @@ use std::sync::{Arc};
 use tokio::sync::Mutex;
 use tower_http::trace;
 use tower_http::trace::TraceLayer;
-use tracing::{info, Level, error};
+use tracing::{info, Level, error, warn};
 use std::net::SocketAddr;
 use tower_cookies::CookieManagerLayer;
 use tower_http::services::ServeDir;
@@ -46,6 +46,20 @@ pub async fn run() -> anyhow::Result<()> {
     
     // Load historical timing data
     tinkerbell::load_historical_timings().await?;
+    
+    // --- Check and Download HookOS Artifacts ---
+    info!("Checking if HookOS artifacts exist...");
+    if !api::check_hookos_artifacts().await {
+        info!("HookOS artifacts not found. Downloading HookOS artifacts...");
+        if let Err(e) = api::download_hookos_artifacts("v0.10.0").await {
+            warn!("Failed to download HookOS artifacts: {}", e);
+            // Continue startup even if download fails
+        } else {
+            info!("HookOS artifacts downloaded successfully");
+        }
+    } else {
+        info!("HookOS artifacts already exist");
+    }
     
     // --- Graceful Shutdown Setup ---
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());

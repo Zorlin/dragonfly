@@ -10,7 +10,7 @@ use axum::{
 use uuid::Uuid;
 use dragonfly_common::*;
 use dragonfly_common::models::{HostnameUpdateRequest, HostnameUpdateResponse, OsInstalledUpdateRequest, OsInstalledUpdateResponse, BmcCredentialsUpdateRequest, BmcCredentials, BmcType};
-use tracing::{error, info, warn};
+use tracing::{error, info, warn, debug};
 use serde_json::json;
 use serde::Deserialize;
 use futures::stream::{self, Stream};
@@ -1445,7 +1445,7 @@ pub async fn serve_ipxe_artifact(Path(requested_path): Path<String>) -> Response
     // Get the base directory from env var or use default
     let base_dir = env::var(ARTIFACT_DIR_ENV_VAR)
         .unwrap_or_else(|_| {
-            warn!("{} not set, using default: {}", ARTIFACT_DIR_ENV_VAR, DEFAULT_ARTIFACT_DIR);
+            debug!("{} not set, using default: {}", ARTIFACT_DIR_ENV_VAR, DEFAULT_ARTIFACT_DIR);
             DEFAULT_ARTIFACT_DIR.to_string()
         });
     let base_path = PathBuf::from(base_dir);
@@ -1495,11 +1495,44 @@ pub async fn serve_ipxe_artifact(Path(requested_path): Path<String>) -> Response
             }
         }
     } else {
-        // File doesn't exist - fetch from remote or generate
-        info!("Artifact {} not found locally, attempting to fetch", requested_path);
+        // --- File Not Found: Generate or Download --- 
+        info!("Artifact {} not found locally, attempting to fetch or generate", requested_path);
         
-        // If it's an IPXE script, try to generate it
-        if requested_path.ends_with(".ipxe") {
+        // FIRST check if it is the specific apkovl path that needs generation
+        if requested_path == AGENT_APKOVL_PATH {
+            // --- Special Case: Generate apkovl on demand ---
+            info!("Generating {} on demand...", AGENT_APKOVL_PATH);
+            
+            let base_url = match env::var("DRAGONFLY_BASE_URL") {
+                Ok(url) => url,
+                Err(_) => {
+                    error!("Cannot generate apkovl: DRAGONFLY_BASE_URL environment variable is not set.");
+                    return (StatusCode::INTERNAL_SERVER_ERROR, "Server configuration error for apkovl generation").into_response();
+                }
+            };
+
+            match generate_agent_apkovl(&artifact_path, &base_url, AGENT_BINARY_URL).await {
+                Ok(()) => {
+                    info!("Successfully generated {}, now serving...", AGENT_APKOVL_PATH);
+                    match read_file_as_stream(&artifact_path).await {
+                        Ok(stream) => {
+                            return create_streaming_response(stream, "application/gzip");
+                        },
+                        Err(e) => {
+                            error!("Failed to stream newly generated apkovl {}: {}", AGENT_APKOVL_PATH, e);
+                            return (StatusCode::INTERNAL_SERVER_ERROR, "Error reading newly generated apkovl").into_response();
+                        }
+                    }
+                },
+                Err(e) => {
+                    error!("Failed to generate {}: {}", AGENT_APKOVL_PATH, e);
+                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to generate {}: {}", AGENT_APKOVL_PATH, e)).into_response();
+                }
+            }
+        } 
+        // NEXT check if it's a generic .ipxe script that needs generation
+        else if requested_path.ends_with(".ipxe") {
+            // --- Generate iPXE scripts on the fly ---
             match generate_ipxe_script(&requested_path).await {
                 Ok(script) => {
                     info!("Generated {} script dynamically.", requested_path);
@@ -1509,22 +1542,20 @@ pub async fn serve_ipxe_artifact(Path(requested_path): Path<String>) -> Response
                     tokio::spawn(async move {
                         // Ensure parent directory exists before writing
                         if let Some(parent) = path_clone.parent() {
-                            if let Err(e) = fs::create_dir_all(parent).await {
-                                warn!("Failed to create directory for caching dragonfly-agent.ipxe: {}", e);
-                                return; // Don't attempt write if dir creation failed
-                            }
-                        }
+                             if let Err(e) = fs::create_dir_all(parent).await {
+                                 warn!("Failed to create directory for caching {}: {}", requested_path, e);
+                                 return; 
+                             }
+                         }
                         if let Err(e) = fs::write(&path_clone, &script_clone).await {
                              warn!("Failed to cache generated {} script: {}", requested_path, e);
                         }
                     });
-                    // Return the generated script
                     return (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/plain")], script).into_response();
                 },
                 Err(Error::NotFound { .. }) => {
-                    // generate_ipxe_script returned NotFound, so it's not a known generatable script.
-                    // Log this specific case and fall through to the 404 for unknown artifacts below.
-                    warn!("IPXE script {} is not configured for dynamic generation.", requested_path);
+                    warn!("IPXE script {} not found or could not be generated.", requested_path);
+                    // Fall through to final 404
                 },
                 Err(e) => {
                     // Other error during generation (e.g., missing env var)
@@ -1534,9 +1565,9 @@ pub async fn serve_ipxe_artifact(Path(requested_path): Path<String>) -> Response
             }
             // If we fall through here, it means generate_ipxe_script returned NotFound
         } 
-        // --- Removed the previous `else if` blocks ---
+        // FINALLY, assume it's a binary artifact to download/stream
         else {
-            // It's not an IPXE script, treat as a binary artifact to download/stream
+            // --- Download/Stream Other Binary Artifacts ---
             let remote_url = match requested_path.as_str() {
                 // Alpine Linux netboot artifacts for Dragonfly Agent
                 "dragonfly-agent/vmlinuz" => "https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64/netboot/vmlinuz-lts",
@@ -1593,14 +1624,14 @@ async fn download_and_verify_artifact(
     artifact_name: &str,
     base_url: &str,
     dest_dir: &StdPath,
-    checksums_content: &str,
+    checksum_content: &str,
     max_retries: usize,
 ) -> Result<()> {
     let dest_file = dest_dir.join(artifact_name);
     let url = format!("{}/{}", base_url, artifact_name);
     
-    // Extract expected checksum from checksums file
-    let expected_checksum = match checksums_content.lines()
+    // Extract expected checksum from checksum file
+    let expected_checksum = match checksum_content.lines()
         .find_map(|line| {
             if line.ends_with(artifact_name) {
                 line.split_whitespace().next()
@@ -1659,42 +1690,42 @@ pub async fn download_hookos_artifacts(version: &str) -> Result<()> {
     })?;
     
     // Define base URL
-    let base_url = format!("https://github.com/tinkerbell/hookos/releases/download/{}", version);
+    let base_url = format!("https://github.com/tinkerbell/hook/releases/download/{}", version);
     
-    // First download checksums file
-    let checksums_file = hookos_dir.join("checksums.txt");
-    let checksums_url = format!("{}/checksums.txt", base_url);
+    // First download checksum file
+    let checksum_file = hookos_dir.join("checksum.txt");
+    let checksum_url = format!("{}/checksum.txt", base_url);
     
-    // Try to download checksums with retries
+    // Try to download checksum with retries
     let mut retry_count = 0;
     let mut backoff_ms = 100;
     let max_retries = 10;
     
-    let checksums_content = loop {
+    let checksum_content = loop {
         if retry_count > 0 {
-            info!("Retry #{} for downloading checksums.txt", retry_count);
+            info!("Retry #{} for downloading checksum.txt", retry_count);
             tokio::time::sleep(tokio::time::Duration::from_millis(backoff_ms)).await;
             backoff_ms = std::cmp::min(backoff_ms * 2, 30000);
         }
         
-        match download_file(&checksums_url, &checksums_file).await {
+        match download_file(&checksum_url, &checksum_file).await {
             Ok(()) => {
-                match fs::read_to_string(&checksums_file).await.map_err(|e| {
-                    Error::Internal(format!("Failed to read checksums file: {}", e))
+                match fs::read_to_string(&checksum_file).await.map_err(|e| {
+                    Error::Internal(format!("Failed to read checksum file: {}", e))
                 }) {
                     Ok(content) => break content,
                     Err(e) => {
-                        warn!("Failed to read checksums file: {}", e);
+                        warn!("Failed to read checksum file: {}", e);
                         if retry_count >= max_retries {
-                            return Err(Error::Internal(format!("Failed to read checksums file after {} retries", max_retries)));
+                            return Err(Error::Internal(format!("Failed to read checksum file after {} retries", max_retries)));
                         }
                     }
                 }
             },
             Err(e) => {
-                warn!("Failed to download checksums file: {}", e);
+                warn!("Failed to download checksum file: {}", e);
                 if retry_count >= max_retries {
-                    return Err(Error::Internal(format!("Failed to download checksums file after {} retries", max_retries)));
+                    return Err(Error::Internal(format!("Failed to download checksum file after {} retries", max_retries)));
                 }
             }
         }
@@ -1712,7 +1743,7 @@ pub async fn download_hookos_artifacts(version: &str) -> Result<()> {
     
     // Download and verify each artifact
     for artifact in &artifacts {
-        download_and_verify_artifact(artifact, &base_url, &hookos_dir, &checksums_content, 10).await?;
+        download_and_verify_artifact(artifact, &base_url, &hookos_dir, &checksum_content, 10).await?;
     }
     
     info!("Successfully downloaded all HookOS artifacts to {:?}", hookos_dir);
@@ -1726,7 +1757,8 @@ fn get_artifacts_dir() -> PathBuf {
 
     let dir = env::var(ARTIFACT_DIR_ENV_VAR)
         .unwrap_or_else(|_| {
-            warn!("{} not set, using default: {}", ARTIFACT_DIR_ENV_VAR, DEFAULT_ARTIFACT_DIR);
+            // Log at DEBUG level instead of WARN
+            debug!("{} not set, using default: {}", ARTIFACT_DIR_ENV_VAR, DEFAULT_ARTIFACT_DIR);
             DEFAULT_ARTIFACT_DIR.to_string()
         });
     PathBuf::from(dir)
@@ -1930,10 +1962,20 @@ async fn generate_agent_apkovl(
 
     // 4. Write dynamic dragonfly-agent.start script
     let start_script_path = temp_path.join("etc/local.d/dragonfly-agent.start");
-    let start_script_content = format!(r#"#!/bin/sh\n\n# Start dragonfly-agent\n/usr/local/bin/dragonfly-agent --server {} --setup\n\nexit 0\n"#, base_url);
-    fs::write(&start_script_path, start_script_content).await.map_err(|e| Error::Internal(format!("Failed to write start script: {}", e)))?;
+    
+    // Create script content with explicit newline bytes
+    let script_content = format!("#!/bin/sh
+# Start dragonfly-agent
+/usr/local/bin/dragonfly-agent --server {} --setup
+
+exit 0
+", base_url);
+    
+    // Write the file
+    fs::write(&start_script_path, script_content).await.map_err(|e| Error::Internal(format!("Failed to write start script: {}", e)))?;
+    
     // Make it executable
-    set_executable_permission(&start_script_path).await?; // Keep this as is, already fixed
+    set_executable_permission(&start_script_path).await?;
 
     // 5. Create the symlink (Unchanged, uses std::os::unix)
     let link_target = "/etc/init.d/local";
@@ -2008,3 +2050,39 @@ kexec-tools
 libgcc
 wget
 "#;
+
+// check if HookOS artifacts exist
+pub async fn check_hookos_artifacts() -> bool {
+    // Get artifact directory
+    let hookos_dir = get_artifacts_dir().join("hookos");
+    
+    // Define the artifacts we expect to find
+    let expected_artifacts = [
+        "hook_x86_64.tar.gz",
+        "hook_aarch64.tar.gz",
+        "hook_latest-lts-x86_64.tar.gz",
+        "hook_latest-lts-aarch64.tar.gz"
+    ];
+    
+    // Check if the directory exists
+    match fs::metadata(&hookos_dir).await {
+        Ok(meta) if meta.is_dir() => {
+            // Directory exists, check for artifacts
+        },
+        _ => {
+            return false; // Directory doesn't exist
+        }
+    }
+    
+    // Check if all artifacts exist
+    for artifact in &expected_artifacts {
+        let artifact_path = hookos_dir.join(artifact);
+        if fs::metadata(&artifact_path).await.is_err() {
+            debug!("HookOS artifact {} not found", artifact);
+            return false;
+        }
+    }
+    
+    // All artifacts exist
+    true
+}
