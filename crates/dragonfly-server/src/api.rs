@@ -1353,99 +1353,22 @@ async fn serve_ipxe_artifact(Path(requested_path): Path<String>) -> Response {
             }
         };
         
-        // Create a streaming response using Axum's streaming capabilities
-        let mapped_stream = streaming_download(remote_url, &artifact_path).map(|result| {
-            result.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
-        });
-        (
-            StatusCode::OK, 
-            [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
-            Body::new(http_body_util::StreamBody::new(mapped_stream))
-        ).into_response()
+        // Use the efficient streaming download with caching for known artifacts
+        match stream_download_with_caching(remote_url, &artifact_path).await {
+            Ok(stream) => {
+                info!("Streaming artifact {} from remote source", requested_path);
+                create_streaming_response(stream, "application/octet-stream")
+            },
+            Err(e) => {
+                // If streaming download fails, log the error and return 500
+                error!("Failed to stream artifact {}: {}", requested_path, e);
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("Error streaming artifact: {}", e)).into_response()
+            }
+        }
     }
 }
 
-// Function to download and stream simultaneously
-fn streaming_download(url: &str, dest_path: &PathBuf) -> impl Stream<Item = Result<Bytes>> {
-    let url = url.to_string();
-    let dest_path = dest_path.clone();
-    
-    // Create a stream that processes the download
-    stream::try_unfold(
-        (None, None, false),
-        move |(mut client_opt, mut file_opt, mut complete)| {
-            let url = url.clone();
-            let dest_path = dest_path.clone();
-            
-            async move {
-                // If complete, end the stream
-                if complete {
-                    return Ok(None);
-                }
-                
-                // Initialize on first call
-                if client_opt.is_none() {
-                    match reqwest::Client::new().get(&url).send().await {
-                        Ok(resp) => {
-                            if !resp.status().is_success() {
-                                return Err(Error::Internal(format!("HTTP error: {}", resp.status())));
-                            }
-                            client_opt = Some(resp);
-                        },
-                        Err(e) => {
-                            return Err(Error::Internal(format!("Failed to start download: {}", e)));
-                        }
-                    }
-                    
-                    // Open file for writing
-                    match fs::File::create(&dest_path).await {
-                        Ok(file) => file_opt = Some(file),
-                        Err(e) => {
-                            return Err(Error::Internal(format!("Failed to create cache file: {}", e)));
-                        }
-                    }
-                }
-                
-                // Get next chunk from the HTTP stream
-                if let Some(client) = &mut client_opt {
-                    match client.chunk().await {
-                        Ok(Some(chunk)) => {
-                            // Write chunk to cache file
-                            let file_clone = Arc::clone(&file_opt);
-                            let mut file_guard = file_clone.lock().await;
-                            if let Err(e) = file_guard.write_all(&chunk).await {
-                                warn!("Failed to write to cache, continuing stream: {}", e);
-                                // Note: we continue serving even if caching fails
-                            }
-                            
-                            // Return chunk to client and continue
-                            Ok(Some((chunk, (client_opt, file_opt, false))))
-                        },
-                        Ok(None) => {
-                            // End of stream reached
-                            info!("Download complete, cached to {:?}", dest_path);
-                            Ok(Some((Bytes::new(), (None, None, true))))
-                        },
-                        Err(e) => {
-                            Err(Error::Internal(format!("Download error: {}", e)))
-                        }
-                    }
-                } else {
-                    Err(Error::Internal("Client not initialized"))
-                }
-            }
-        }
-    )
-    .filter_map(|result| async move {
-        match result {
-            Ok(bytes) if !bytes.is_empty() => Some(Ok(bytes)),
-            Ok(_) => None,  // Skip empty chunks at stream end
-            Err(e) => Some(Err(e)),
-        }
-    })
-}
-
-/// Verify a file against its SHA512 checksum
+// Keep the verify_sha512 function
 async fn verify_sha512(file_path: &StdPath, expected_checksum: &str) -> Result<bool> {
     let mut file = fs::File::open(file_path).await.map_err(|e| {
         Error::Internal(format!("Failed to open file for verification: {}", e))
@@ -1464,7 +1387,7 @@ async fn verify_sha512(file_path: &StdPath, expected_checksum: &str) -> Result<b
     Ok(actual_checksum == expected_checksum)
 }
 
-/// Download and verify an artifact with retries
+// Keep the download_and_verify_artifact function
 async fn download_and_verify_artifact(
     artifact_name: &str,
     base_url: &str,
@@ -1526,7 +1449,7 @@ async fn download_and_verify_artifact(
     Err(Error::Internal(format!("Failed to download {} after {} retries", artifact_name, max_retries)))
 }
 
-/// Download HookOS artifacts
+// Keep the download_hookos_artifacts function
 pub async fn download_hookos_artifacts(version: &str) -> Result<()> {
     // Get artifact directory
     let hookos_dir = get_artifacts_dir().join("hookos");
@@ -1595,7 +1518,7 @@ pub async fn download_hookos_artifacts(version: &str) -> Result<()> {
     Ok(())
 }
 
-/// Get the configured artifacts directory or use default
+// Keep the get_artifacts_dir function
 fn get_artifacts_dir() -> PathBuf {
     const DEFAULT_ARTIFACT_DIR: &str = "/var/lib/dragonfly/ipxe-artifacts";
     const ARTIFACT_DIR_ENV_VAR: &str = "DRAGONFLY_IPXE_ARTIFACT_DIR";
@@ -1608,7 +1531,7 @@ fn get_artifacts_dir() -> PathBuf {
     PathBuf::from(dir)
 }
 
-/// Download a file with error handling
+// Keep the download_file function
 async fn download_file(url: &str, dest_path: &StdPath) -> Result<()> {
     let response = reqwest::get(url).await.map_err(|e| {
         Error::Internal(format!("Request failed: {}", e))
@@ -1629,10 +1552,11 @@ async fn download_file(url: &str, dest_path: &StdPath) -> Result<()> {
     Ok(())
 }
 
+// Keep the NEW stream_download_with_caching function
 async fn stream_download_with_caching(
     url: &str,
     cache_path: &StdPath
-) -> Result<ReceiverStream<Result<Bytes, Error>>> {
+) -> Result<ReceiverStream<Result<Bytes>>> {
     // Create parent directory if needed
     if let Some(parent) = cache_path.parent() {
         fs::create_dir_all(parent).await.map_err(|e| Error::Internal(format!("Failed to create directory: {}", e)))?;
@@ -1661,14 +1585,16 @@ async fn stream_download_with_caching(
     let url_clone = url.to_string();
     let cache_path_clone = cache_path.to_path_buf();
     tokio::spawn(async move {
-        let mut stream = response.bytes_stream();
+        // Use futures::StreamExt to handle the response body stream
+        let mut stream = response.bytes_stream(); 
         let mut error_occurred = false;
 
-        while let Some(chunk_result) = stream.next().await {
-            match chunk_result {
+        while let Some(chunk_result) = stream.next().await { // Use stream.next().await
+            match chunk_result { // chunk_result is Result<Bytes, reqwest::Error>
                 Ok(chunk) => {
                     let chunk_clone = chunk.clone();
                     let file_clone = Arc::clone(&file);
+                    
                     let write_handle = tokio::spawn(async move {
                         let mut file = file_clone.lock().await;
                         file.write_all(&chunk_clone).await
@@ -1682,17 +1608,16 @@ async fn stream_download_with_caching(
                     }
 
                     // Handle potential write error without blocking the stream send
-                    // Use tokio::try_join! macro
-                    match tokio::try_join!(write_handle) { // Correct path: tokio::try_join!
-                        Ok(Ok(_)) => {},
-                        Ok(Err(e)) => warn!("Failed to write chunk to cache file {}: {}", cache_path_clone.display(), e),
+                    match tokio::try_join!(write_handle) { 
+                        Ok((Ok(()),)) => {}, 
+                        Ok((Err(e),)) => warn!("Failed to write chunk to cache file {}: {}", cache_path_clone.display(), e), 
                         Err(e) => warn!("Cache write task failed (join error) for {}: {}", cache_path_clone.display(), e),
                     }
                 },
-                Err(e) => {
+                Err(e) => { // e is reqwest::Error here
                     error!("Download stream error for {}: {}", url_clone, e);
                     // Send the error wrapped in our Error type
-                    let err = Error::Internal(format!("Download error: {}", e));
+                    let err = Error::Internal(format!("Download stream error: {}", e));
                     if tx.send(Err(err)).await.is_err() {
                          warn!("Client stream receiver dropped while sending error for {}", url_clone);
                     }
@@ -1706,10 +1631,10 @@ async fn stream_download_with_caching(
     Ok(tokio_stream::wrappers::ReceiverStream::new(rx))
 }
 
-/// Corrected read file as stream function
+// Keep read_file_as_stream
 async fn read_file_as_stream(
     path: &StdPath
-) -> Result<ReceiverStream<Result<Bytes, Error>>> {
+) -> Result<ReceiverStream<Result<Bytes>>> {
     let file = fs::File::open(path).await.map_err(|e| Error::Internal(format!("Failed to open file {}: {}", path.display(), e)))?;
     let (tx, rx) = mpsc::channel::<Result<Bytes>>(32);
     let path_buf = path.to_path_buf();
@@ -1742,15 +1667,15 @@ async fn read_file_as_stream(
     Ok(tokio_stream::wrappers::ReceiverStream::new(rx))
 }
 
-/// Corrected create streaming response function
+// Keep create_streaming_response
 fn create_streaming_response(
-    stream: ReceiverStream<Result<Bytes, Error>>,
+    stream: ReceiverStream<Result<Bytes>>,
     content_type: &str
 ) -> Response {
-    // Map the stream from Result<Bytes, Error> to Result<Frame<Bytes>, Box<dyn std::error::Error + Send + Sync>>
+    // Map the stream from Result<Bytes> to Result<Frame<Bytes>, BoxError>
     let mapped_stream = stream.map(|result| {
         match result {
-            Ok(bytes) => Ok(Frame::data(bytes)), // Wrap Bytes in Frame::data()
+            Ok(bytes) => Ok(Frame::data(bytes)), // Wrap Ok bytes in Frame::data
             Err(e) => Err(Box::new(e) as Box<dyn std::error::Error + Send + Sync>),
         }
     });
@@ -1760,11 +1685,11 @@ fn create_streaming_response(
     Response::builder()
         .status(StatusCode::OK)
         .header(axum::http::header::CONTENT_TYPE, content_type)
-        .body(Body::new(body)) // Correct usage
+        .body(Body::new(body))
         .unwrap_or_else(|_| {
             Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::new(Empty::new())) // Correct usage
+                .body(Body::new(Empty::new()))
                 .unwrap()
         })
 } 

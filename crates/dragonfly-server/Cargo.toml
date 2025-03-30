@@ -58,7 +58,7 @@ kube = { version = "0.87.1", features = ["client", "derive", "runtime"] }
 k8s-openapi = { version = "0.20.0", features = ["v1_28"] }
 
 # Artifact download dependencies
-reqwest = { version = "0.12.15", features = ["json"] }
+reqwest = { version = "0.12.15", features = ["json", "stream"] }
 bytes = "1.10.1"
 sha2 = "0.10.8"
 http-body-util = "0.1.3"
