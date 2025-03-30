@@ -59,7 +59,7 @@ pub async fn run_install(args: InstallArgs) -> Result<()> {
     debug!("Set KUBECONFIG environment variable to: {:?}", kubeconfig_path);
 
     // --- 5. Wait for Node Ready ---
-    wait_for_node_ready().await.wrap_err("Timed out waiting for Kubernetes node")?;
+    wait_for_node_ready(&kubeconfig_path).await.wrap_err("Timed out waiting for Kubernetes node")?;
 
     // --- 6. Install Helm ---
     info!("Setting up Helm...");
@@ -67,7 +67,7 @@ pub async fn run_install(args: InstallArgs) -> Result<()> {
 
     // --- 7. Install Tinkerbell Stack ---
     info!("Installing Tinkerbell stack...");
-    install_tinkerbell_stack(bootstrap_ip, network).await.wrap_err("Failed to install Tinkerbell stack")?;
+    install_tinkerbell_stack(bootstrap_ip, network, &kubeconfig_path).await.wrap_err("Failed to install Tinkerbell stack")?;
 
     let elapsed = start_time.elapsed();
     info!("✅ Dragonfly installation completed in {:.1?}!", elapsed);
@@ -428,7 +428,7 @@ async fn configure_kubectl() -> Result<PathBuf> {
     Ok(dest_path)
 }
 
-async fn wait_for_node_ready() -> Result<()> {
+async fn wait_for_node_ready(kubeconfig_path: &PathBuf) -> Result<()> {
     info!("Waiting for Kubernetes node to become ready...");
     let max_wait = std::time::Duration::from_secs(300); // 5 minutes timeout
     let check_interval = std::time::Duration::from_secs(5);
@@ -445,6 +445,7 @@ async fn wait_for_node_ready() -> Result<()> {
         // Run kubectl with the simplest possible check for a Ready node
         let output_result = Command::new("kubectl")
             .args(["get", "nodes", "--no-headers"])
+            .env("KUBECONFIG", kubeconfig_path)
             .output();
 
         match output_result {
@@ -510,7 +511,7 @@ async fn install_helm() -> Result<()> {
     Ok(())
 }
 
-async fn install_tinkerbell_stack(bootstrap_ip: Ipv4Addr, network: Ipv4Network) -> Result<()> {
+async fn install_tinkerbell_stack(bootstrap_ip: Ipv4Addr, network: Ipv4Network, kubeconfig_path: &PathBuf) -> Result<()> {
     // Check if the Tinkerbell stack is already installed
     let release_exists = {
         let release_check = Command::new("helm")
@@ -530,26 +531,28 @@ async fn install_tinkerbell_stack(bootstrap_ip: Ipv4Addr, network: Ipv4Network) 
 
     // --- Ensure k3s is ready and Pod CIDR is available ---
     // First, wait for node to be fully initialized
-    let node_info = run_command(
-        "kubectl", 
-        &["get", "node", "-o", "wide"], 
-        "get node information"
-    )?;
+    let node_info = Command::new("kubectl")
+        .args(["get", "node", "-o", "wide"])
+        .env("KUBECONFIG", kubeconfig_path)
+        .output()
+        .wrap_err("Failed to get node information")?;
     
     debug!("Node status: {}", String::from_utf8_lossy(&node_info.stdout));
     
     // Get Pod CIDR - this is critical, so we don't use fallbacks
     info!("Getting Pod CIDR from Kubernetes nodes...");
-    let pod_cidr_output = run_command(
-        "kubectl",
-        &["get", "nodes", "-o", "jsonpath='{.items[*].spec.podCIDR}'"],
-        "get pod CIDRs",
-    )?;
+    let pod_cidr_output = Command::new("kubectl")
+        .args(["get", "nodes", "-o", "jsonpath='{.items[*].spec.podCIDR}'"])
+        .env("KUBECONFIG", kubeconfig_path)
+        .output()
+        .wrap_err("Failed to get pod CIDRs")?;
     
     let pod_cidr_str = String::from_utf8_lossy(&pod_cidr_output.stdout)
         .trim()
         .trim_matches('\'')
         .to_string();
+    
+    debug!("Raw Pod CIDR output: '{}'", pod_cidr_str);
     
     let pod_cidrs: Vec<String> = pod_cidr_str
         .split(|c| c == ' ' || c == ',')
@@ -558,7 +561,8 @@ async fn install_tinkerbell_stack(bootstrap_ip: Ipv4Addr, network: Ipv4Network) 
         .collect();
     
     if pod_cidrs.is_empty() {
-        bail!("Failed to detect Pod CIDR. This is required for Tinkerbell installation.\nTry waiting a few minutes for the Kubernetes node to fully initialize before running again.");
+        bail!("Failed to detect Pod CIDR. This is required for Tinkerbell installation.\nVerify the Kubernetes node is fully initialized with 'kubectl --kubeconfig={} get nodes -o wide'", 
+              kubeconfig_path.display());
     }
     
     info!("Successfully detected Pod CIDR(s): {:?}", pod_cidrs);
@@ -627,7 +631,9 @@ stack:
     // Verify the deployment
     let deployment_check = Command::new("kubectl")
         .args(["get", "pods", "-n", "tink", "--no-headers"])
-        .output()?;
+        .env("KUBECONFIG", kubeconfig_path)
+        .output()
+        .wrap_err("Failed to check deployment status")?;
     
     if deployment_check.status.success() {
         let pods_output = String::from_utf8_lossy(&deployment_check.stdout).trim().to_string();
@@ -637,7 +643,8 @@ stack:
            !pods_output.contains("CrashLoopBackOff") {
             info!("Tinkerbell stack is running properly");
         } else {
-            warn!("Tinkerbell stack deployed but some pods may not be ready. Check with 'kubectl get pods -n tink'");
+            warn!("Tinkerbell stack deployed but some pods may not be ready. Check with 'kubectl --kubeconfig={} get pods -n tink'", 
+                  kubeconfig_path.display());
         }
     }
 
