@@ -17,9 +17,6 @@ COPY . .
 # Build the application.
 RUN cargo build --release
 
-# Run the application.
-CMD ["cargo", "build", "--release"]
-
 # New container
 FROM rust:slim-bookworm AS runner
 

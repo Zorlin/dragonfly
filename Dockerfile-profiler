@@ -15,10 +15,7 @@ RUN apt-get update && apt-get install -y \
 COPY . .
 
 # Build the application.
-RUN cargo build --release
-
-# Run the application.
-CMD ["cargo", "build", "--release", "--features", "dhat-heap"]
+RUN cargo build --release --features dhat-heap
 
 # New container
 FROM rust:slim-bookworm AS runner
