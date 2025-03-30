@@ -1,4 +1,4 @@
-use axum::{routing::{get, post}, extract::Extension, Router, response::{IntoResponse, Response}};
+use axum::{routing::{get}, extract::Extension, Router, response::{IntoResponse}, http::StatusCode};
 use axum_login::{AuthManagerLayerBuilder};
 use tower_sessions::{SessionManagerLayer};
 use tower_sessions_sqlx_store::SqliteStore;
