@@ -512,20 +512,14 @@ async fn install_helm() -> Result<()> {
 
 async fn install_tinkerbell_stack(bootstrap_ip: Ipv4Addr, network: Ipv4Network) -> Result<()> {
     // Check if the Tinkerbell stack is already installed
-    let namespace_check = Command::new("kubectl")
-        .args(["get", "namespace", "tink", "--no-headers", "--ignore-not-found"])
-        .output()?;
-        
-    let namespace_exists = namespace_check.status.success() && 
-                           !String::from_utf8_lossy(&namespace_check.stdout).trim().is_empty();
-                           
-    // Check if the tink-stack release exists
-    let release_check = Command::new("helm")
-        .args(["list", "-n", "tink", "--filter", "tink-stack", "--short"])
-        .output()?;
-        
-    let release_exists = release_check.status.success() && 
-                         !String::from_utf8_lossy(&release_check.stdout).trim().is_empty();
+    let release_exists = {
+        let release_check = Command::new("helm")
+            .args(["list", "-n", "tink", "--filter", "tink-stack", "--short"])
+            .output()?;
+            
+        release_check.status.success() && 
+        !String::from_utf8_lossy(&release_check.stdout).trim().is_empty()
+    };
     
     // Log whether we're installing or upgrading
     if release_exists {
@@ -534,40 +528,52 @@ async fn install_tinkerbell_stack(bootstrap_ip: Ipv4Addr, network: Ipv4Network) 
         info!("Tinkerbell stack not found, will install");
     }
 
-    // --- Get Pod CIDRs ---
+    // --- Ensure k3s is ready and Pod CIDR is available ---
+    // First, wait for node to be fully initialized
+    let node_info = run_command(
+        "kubectl", 
+        &["get", "node", "-o", "wide"], 
+        "get node information"
+    )?;
+    
+    debug!("Node status: {}", String::from_utf8_lossy(&node_info.stdout));
+    
+    // Get Pod CIDR - this is critical, so we don't use fallbacks
+    info!("Getting Pod CIDR from Kubernetes nodes...");
     let pod_cidr_output = run_command(
         "kubectl",
         &["get", "nodes", "-o", "jsonpath='{.items[*].spec.podCIDR}'"],
         "get pod CIDRs",
     )?;
-    let trusted_proxies_str = String::from_utf8_lossy(&pod_cidr_output.stdout)
-                                  .trim()
-                                  .trim_matches('\'') // Remove potential quotes from jsonpath
-                                  .to_string();
-
-    let trusted_proxies: Vec<String> = trusted_proxies_str
+    
+    let pod_cidr_str = String::from_utf8_lossy(&pod_cidr_output.stdout)
+        .trim()
+        .trim_matches('\'')
+        .to_string();
+    
+    let pod_cidrs: Vec<String> = pod_cidr_str
         .split(|c| c == ' ' || c == ',')
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
         .collect();
-
-    if trusted_proxies.is_empty() {
-        warn!("Could not determine pod CIDR. Proceeding without it in trustedProxies.");
-    } else {
-        debug!("Using Pod CIDRs for trusted proxies: {:?}", trusted_proxies);
+    
+    if pod_cidrs.is_empty() {
+        bail!("Failed to detect Pod CIDR. This is required for Tinkerbell installation.\nTry waiting a few minutes for the Kubernetes node to fully initialize before running again.");
     }
-
-    // Use the detected network CIDR for trusted proxies
+    
+    info!("Successfully detected Pod CIDR(s): {:?}", pod_cidrs);
+    
+    // Prepare the trustedProxies configuration
+    let mut trusted_proxies = pod_cidrs;
+    
+    // Add the host network to trusted proxies
     let network_cidr = network.to_string();
-    debug!("Using host network CIDR for trusted proxies: {}", network_cidr);
-
-    let mut final_trusted_proxies = trusted_proxies;
-    final_trusted_proxies.push(network_cidr);
-
+    debug!("Adding host network CIDR to trusted proxies: {}", network_cidr);
+    trusted_proxies.push(network_cidr);
+    
     // Use bootstrap_ip for smee host
     let smee_host_ip = bootstrap_ip;
-    debug!("Using {} as the host for Smee HTTP iPXE script URL", smee_host_ip);
-
+    
     // --- Generate values.yaml ---
     let values_content = format!(
         r#"global:
@@ -592,7 +598,7 @@ stack:
     persistence:
       hostPath: /opt/tinkerbell/hook
 "#,
-        final_trusted_proxies.iter().map(|p| format!("    - \"{}\"", p)).collect::<Vec<_>>().join("\n"),
+        trusted_proxies.iter().map(|p| format!("    - \"{}\"", p)).collect::<Vec<_>>().join("\n"),
         bootstrap_ip = bootstrap_ip,
         smee_host_ip = smee_host_ip,
     );
@@ -603,7 +609,7 @@ stack:
     debug!("Generated Helm values file: {:?}", values_path);
 
     // --- Run Helm Install/Upgrade ---
-    let stack_chart_version = "0.5.0"; // Consider making this configurable
+    let stack_chart_version = "0.5.0"; 
     let helm_args = [
         "upgrade", "--install", "tink-stack",
         "oci://ghcr.io/tinkerbell/charts/stack",
@@ -615,7 +621,7 @@ stack:
         "-f", values_path.to_str().ok_or_else(|| color_eyre::eyre::eyre!("values.yaml path is not valid UTF-8"))?,
     ];
 
-    debug!("Running helm upgrade --install command");
+    info!("Deploying Tinkerbell stack...");
     run_command("helm", &helm_args, "install/upgrade Tinkerbell Helm chart")?;
 
     // Verify the deployment
