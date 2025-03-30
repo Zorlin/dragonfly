@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Json, Path, Form, FromRequest, State, Extension},
+    extract::{Json, Path, Form, FromRequest, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response, Html, Sse},
     response::sse::{Event, KeepAlive},
@@ -15,14 +15,11 @@ use serde::Deserialize;
 use futures::stream::{self, Stream};
 use std::convert::Infallible;
 use std::time::Duration;
-use serde::Serialize;
 use crate::auth::AuthSession;
 use crate::AppState;
 use std::collections::HashMap;
 use crate::ui::{MachineListTemplate, WorkflowProgressTemplate};
 use askama::Template;
-use std::sync::Arc;
-
 use crate::db;
 
 pub fn api_router() -> Router<crate::AppState> {
@@ -1179,7 +1176,8 @@ async fn update_installation_progress(
     }
 }
 
-pub async fn get_machine_list(State(state): State<AppState>, headers: HeaderMap) -> Response {
+pub async fn get_machine_list(_state: State<AppState>, headers: HeaderMap) -> Response {
+    info!("Received request for machine list with headers: {:?}", headers);
     match db::get_all_machines().await {
         Ok(machines) => {
             // Get workflow info for machines that are installing OS

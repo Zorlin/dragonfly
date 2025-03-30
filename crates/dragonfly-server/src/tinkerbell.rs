@@ -889,7 +889,7 @@ pub async fn get_workflow_info(machine: &Machine) -> Result<Option<WorkflowInfo>
                                         }
                                         
                                         // Add tasks to the array
-                                        let current_date = chrono::Utc::now();
+                                        let _current_date = chrono::Utc::now();
                                         tasks.push(TaskInfo {
                                             name: name.clone(),
                                             status: status.clone(),

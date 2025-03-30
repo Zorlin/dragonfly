@@ -1,21 +1,13 @@
-use axum::{
-    Router,
-    extract::Extension,
-    response::Redirect,
-    routing::get
-};
-use std::sync::Arc;
-use tokio::sync::Mutex;
+use axum::{routing::{get, post}, extract::Extension, Router, response::{IntoResponse, Response}};
+use axum_login::{AuthManagerLayerBuilder};
 use tower_sessions::{SessionManagerLayer, MemoryStore};
+use std::sync::{Arc};
+use tokio::sync::Mutex;
 use tower_http::trace;
 use tower_http::trace::TraceLayer;
 use tracing::{info, Level, error};
 use std::net::SocketAddr;
 use tower_cookies::CookieManagerLayer;
-use axum_login::AuthManagerLayerBuilder;
-use axum::routing::get_service;
-use axum::http::Uri;
-use tower::ServiceBuilder;
 use tower_http::services::ServeDir;
 
 use crate::auth::{AdminBackend, auth_router, load_credentials, generate_default_credentials, load_settings, Settings};
@@ -105,7 +97,7 @@ pub async fn run() -> anyhow::Result<()> {
     // Set up a session store
     let session_store = MemoryStore::default();
     let session_layer = SessionManagerLayer::new(session_store)
-        .with_secure(false);
+        .with_secure(false); // Ensure session layer is configured (secure flag might depend on deployment)
     
     // Create session-based authentication
     let backend = AdminBackend::new(credentials);

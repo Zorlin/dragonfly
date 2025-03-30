@@ -16,7 +16,7 @@ use cookie::{Cookie, SameSite};
 use std::fs;
 
 use crate::db;
-use crate::auth::{self, AuthSession, Settings, save_settings, Credentials};
+use crate::auth::{self, AuthSession, Settings, Credentials};
 use crate::filters;
 use crate::tinkerbell::WorkflowInfo;
 

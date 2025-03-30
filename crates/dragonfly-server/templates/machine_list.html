@@ -3,7 +3,22 @@
 {% block title %}Dragonfly - Machines{% endblock %}
 
 {% block content %}
-<div class="px-4 sm:px-6 lg:px-8" x-data="{ updateDebounceTimer: null }">
+<div class="px-4 sm:px-6 lg:px-8" x-data="{
+    isAuthenticated: {{ is_authenticated }},
+    updateDebounceTimer: null,
+    statusModal: false,
+    osModal: false,
+    deleteModal: false,
+    tagModal: false,
+    reimageModal: false,
+    powerModal: false,
+    currentMachineId: null,
+    openTagModal(id) { this.tagModal = true; this.currentMachineId = id; },
+    openReimageModal(id) { this.reimageModal = true; this.currentMachineId = id; },
+    openPowerModal(id) { this.powerModal = true; this.currentMachineId = id; },
+    openDeleteModal(id) { this.deleteModal = true; this.currentMachineId = id; }
+}" x-init="window.isAuthenticated = isAuthenticated"
+   @close-tag-modal.window="tagModal = false">
     <div class="sm:flex sm:items-center">
         <div class="sm:flex-auto">
             <h1 class="text-xl font-semibold text-gray-900 dark:text-white">Machines</h1>
@@ -40,12 +55,13 @@
                         <tbody 
                             id="machine-list" 
                             class="divide-y divide-gray-200 dark:divide-gray-600 bg-white dark:bg-gray-800" 
-                            hx-get="/api/machines" 
+                            hx-get="/machines"
+                            hx-target="#machine-list"
                             hx-trigger="load, refreshMachines from:body"
                             hx-swap="innerHTML transition:true"
                         >
                             {% for machine in machines %}
-                            <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                            <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer" @click="window.location='/machines/{{ machine.id }}'">
                                 <td class="px-6 py-4 whitespace-nowrap">
                                     <div class="flex items-center">
                                         <div class="text-sm font-medium text-gray-900 dark:text-white">
@@ -68,32 +84,30 @@
                                     {{ machine.ip_address }}
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap">
-                                    {% match machine.status %}
-                                        {% when MachineStatus::AwaitingAssignment %}
-                                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200">
-                                                Awaiting Assignment
-                                            </span>
-                                        {% when MachineStatus::InstallingOS %}
-                                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-700/30 dark:text-yellow-200">
-                                                Installing OS
-                                            </span>
-                                        {% when MachineStatus::Ready %}
-                                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-700/30 dark:text-green-200">
-                                                Ready
-                                            </span>
-                                        {% when MachineStatus::Error with (msg) %}
-                                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800 dark:bg-red-700/30 dark:text-red-200" title="{{ msg }}">
-                                                Error
-                                            </span>
-                                        {% when MachineStatus::ExistingOS %}
-                                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-700/30 dark:text-blue-200">
-                                                Existing OS
-                                            </span>
-                                        {% when MachineStatus::Offline %}
-                                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200">
-                                                Offline
-                                            </span>
-                                    {% endmatch %}
+                                    <span class="px-3 py-1 inline-flex text-sm leading-5 font-semibold rounded-full 
+                                        {% if machine.status == MachineStatus::Ready %}
+                                            bg-green-100 text-green-800 dark:bg-green-400/10 dark:text-green-300 dark:border dark:border-green-500/20
+                                        {% else if machine.status == MachineStatus::InstallingOS %}
+                                            bg-yellow-100 text-yellow-800 dark:bg-yellow-400/10 dark:text-yellow-300 dark:border dark:border-yellow-500/20
+                                        {% else if machine.status == MachineStatus::AwaitingAssignment %}
+                                            bg-blue-100 text-blue-800 dark:bg-blue-400/10 dark:text-blue-300 dark:border dark:border-blue-500/20
+                                        {% else if machine.status == MachineStatus::ExistingOS %}
+                                            bg-sky-100 text-sky-800 dark:bg-sky-400/10 dark:text-sky-300 dark:border dark:border-sky-500/20
+                                        {% else %}
+                                            bg-red-100 text-red-800 dark:bg-red-400/10 dark:text-red-300 dark:border dark:border-red-500/20
+                                        {% endif %}">
+                                        {% if machine.status == MachineStatus::Ready %}
+                                            Provisioned
+                                        {% else if machine.status == MachineStatus::InstallingOS %}
+                                            Installing OS
+                                        {% else if machine.status == MachineStatus::AwaitingAssignment %}
+                                            Awaiting OS Selection
+                                        {% else if machine.status == MachineStatus::ExistingOS %}
+                                            Existing OS
+                                        {% else %}
+                                            Error {# Explicitly handle Error or other unexpected statuses #}
+                                        {% endif %}
+                                    </span>
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
                                     {% if machine.os_choice.is_some() %}
@@ -101,40 +115,56 @@
                                     {% endif %}
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-                                    {% if machine.status == MachineStatus::InstallingOS %}
-                                        {% if let Some(info) = workflow_infos.get(machine.id) %}
-                                            <div class="flex flex-col space-y-1">
-                                                <div class="flex justify-between text-xs">
-                                                    <span>{{ info.progress }}%</span>
-                                                    {% if info.current_action.is_some() %}
-                                                        <span class="ml-2 truncate max-w-[120px]">
-                                                            {{ info.current_action.as_ref().unwrap() }}
-                                                        </span>
-                                                    {% endif %}
+                                    {% match machine.status %}
+                                        {% when MachineStatus::InstallingOS %}
+                                            {% if let Some(info) = workflow_infos.get(machine.id) %}
+                                                <div class="flex flex-col space-y-1">
+                                                    <div class="flex justify-between text-xs">
+                                                        <span>{{ info.progress }}%</span>
+                                                        {% if info.current_action.is_some() %}
+                                                            <span class="ml-2 truncate max-w-[120px]">
+                                                                {{ info.current_action.as_ref().unwrap() }}
+                                                            </span>
+                                                        {% endif %}
+                                                    </div>
+                                                    <div class="w-full bg-gray-200 rounded-full h-2 dark:bg-gray-700">
+                                                        <div class="bg-yellow-500 h-2 rounded-full dark:bg-yellow-600 workflow-progress-bar" data-machine-id="{{ machine.id }}" data-progress="{{ info.progress }}" style="width: '{{ info.progress }}%';"></div>
+                                                    </div>
                                                 </div>
-                                                <div class="w-full bg-gray-200 rounded-full h-2 dark:bg-gray-700">
-                                                    <div class="bg-yellow-500 h-2 rounded-full dark:bg-yellow-600 workflow-progress-bar" data-machine-id="{{ machine.id }}" data-progress="{{ info.progress }}" style="width: {{ info.progress }}%"></div>
-                                                </div>
-                                            </div>
-                                        {% endif %}
-                                    {% else %}
-                                        <div class="flex space-x-1">
-                                            <a href="/machines/{{ machine.id }}" class="inline-flex items-center px-2.5 py-1 border border-transparent text-xs leading-4 font-medium rounded text-indigo-700 bg-indigo-100 hover:bg-indigo-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 dark:bg-indigo-900 dark:text-indigo-200 dark:hover:bg-indigo-800">
-                                                View
-                                            </a>
-                                            {% if is_admin %}
-                                                <button onclick="showOsModal('{{ machine.id }}')" class="inline-flex items-center px-2.5 py-1 border border-transparent text-xs leading-4 font-medium rounded text-emerald-700 bg-emerald-100 hover:bg-emerald-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 dark:bg-emerald-900 dark:text-emerald-200 dark:hover:bg-emerald-800">
-                                                    OS
-                                                </button>
-                                                <button onclick="showStatusModal('{{ machine.id }}')" class="inline-flex items-center px-2.5 py-1 border border-transparent text-xs leading-4 font-medium rounded text-yellow-700 bg-yellow-100 hover:bg-yellow-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500 dark:bg-yellow-900 dark:text-yellow-200 dark:hover:bg-yellow-800">
-                                                    Status
-                                                </button>
-                                                <button onclick="showDeleteModal('{{ machine.id }}')" class="inline-flex items-center px-2.5 py-1 border border-transparent text-xs leading-4 font-medium rounded text-red-700 bg-red-100 hover:bg-red-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 dark:bg-red-900 dark:text-red-200 dark:hover:bg-red-800">
-                                                    Delete
-                                                </button>
+                                            {% else %}
+                                                <span class="text-xs italic text-gray-400">Awaiting progress data...</span>
                                             {% endif %}
-                                        </div>
-                                    {% endif %}
+                                        {% else %}
+                                            {% if is_admin %} {# Wrap all actions in is_admin check #}
+                                            <div class="flex space-x-1 items-center" @click.stop>
+                                                {# Common Actions - Tags #}
+                                                <button @click="openTagModal('{{ machine.id }}')" class="inline-flex items-center px-3 py-1 border border-transparent text-sm leading-5 font-medium rounded text-purple-700 bg-purple-100 hover:bg-purple-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 dark:bg-purple-900 dark:text-purple-200 dark:hover:bg-purple-800">
+                                                    🏷️ Tags
+                                                </button>
+                                                
+                                                {# Reimage Action #}
+                                                {% if machine.status == MachineStatus::Ready || machine.status == MachineStatus::AwaitingAssignment || machine.status == MachineStatus::ExistingOS || machine.status == MachineStatus::Offline %}
+                                                <button @click="openReimageModal('{{ machine.id }}')" class="inline-flex items-center px-3 py-1 border border-transparent text-sm leading-5 font-medium rounded text-cyan-700 bg-cyan-100 hover:bg-cyan-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-cyan-500 dark:bg-cyan-900 dark:text-cyan-200 dark:hover:bg-cyan-800">
+                                                    ♻️ Reimage
+                                                </button>
+                                                {% endif %}
+
+                                                {# Power Action #}
+                                                {% if machine.bmc_credentials.is_some() %}
+                                                <button @click="openPowerModal('{{ machine.id }}')" class="inline-flex items-center px-3 py-1 border border-transparent text-sm leading-5 font-medium rounded text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500">
+                                                    ⏻ Power
+                                                </button>
+                                                {% endif %}
+                                                
+                                                {# Delete Action #}
+                                                <button @click="openDeleteModal('{{ machine.id }}')" class="ml-3 inline-flex items-center p-1 border border-transparent text-sm leading-5 font-medium rounded text-red-700 bg-red-100 hover:bg-red-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 dark:bg-red-900 dark:text-red-200 dark:hover:bg-red-800"> {# Added ml-3 for spacing #}
+                                                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4 h-4">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                                                    </svg>
+                                                </button>
+                                            </div>
+                                            {% endif %} {# End is_admin check for actions #}
+                                    {% endmatch %}
                                 </td>
                             </tr>
                             {% endfor %}
@@ -144,49 +174,188 @@
             </div>
         </div>
     </div>
-</div>
 
-<div id="status-modal" class="relative z-10" aria-labelledby="modal-title" role="dialog" aria-modal="true" x-show="statusModal" x-cloak>
-    <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"></div>
-    <div class="fixed inset-0 z-10 overflow-y-auto" @click="statusModal = false">
-        <div class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
-            <div class="relative transform overflow-hidden rounded-lg bg-white px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6" 
-                @click.stop>
-                <!-- Status modal content -->
+    {# === MODALS === (Moved inside the main x-data div) #}
+    <div id="status-modal" class="relative z-10" aria-labelledby="modal-title" role="dialog" aria-modal="true" x-show="statusModal" x-cloak>
+        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"></div>
+        <div class="fixed inset-0 z-10 overflow-y-auto" @click="statusModal = false">
+            <div class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
+                <div class="relative transform overflow-hidden rounded-lg bg-white px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6" 
+                    @click.stop>
+                    <!-- Status modal content (Placeholder/Not Used Currently) -->
+                    Status Modal Content
+                </div>
             </div>
         </div>
     </div>
-</div>
 
-<div id="os-modal" class="relative z-10" aria-labelledby="modal-title" role="dialog" aria-modal="true" x-show="osModal" x-cloak>
-    <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"></div>
-    <div class="fixed inset-0 z-10 overflow-y-auto" @click="osModal = false">
-        <div class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
-            <div class="relative transform overflow-hidden rounded-lg bg-white px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6" 
-                @click.stop>
-                <!-- OS modal content -->
+    <div id="os-modal" class="relative z-10" aria-labelledby="modal-title" role="dialog" aria-modal="true" x-show="osModal" x-cloak>
+        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"></div>
+        <div class="fixed inset-0 z-10 overflow-y-auto" @click="osModal = false">
+            <div class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
+                <div class="relative transform overflow-hidden rounded-lg bg-white px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6" 
+                    @click.stop>
+                    <!-- OS modal content (Placeholder/Not Used Currently) -->
+                    OS Modal Content
+                </div>
             </div>
         </div>
     </div>
-</div>
 
-<div id="delete-modal" class="relative z-10" aria-labelledby="modal-title" role="dialog" aria-modal="true" x-show="deleteModal" x-cloak>
-    <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"></div>
-    <div class="fixed inset-0 z-10 overflow-y-auto" @click="deleteModal = false">
-        <div class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
-            <div class="relative transform overflow-hidden rounded-lg bg-white px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6" 
-                @click.stop>
-                <!-- Delete modal content -->
+    <div id="delete-modal" class="relative z-10" aria-labelledby="modal-title" role="dialog" aria-modal="true" x-show="deleteModal" x-cloak>
+        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"></div>
+        <div class="fixed inset-0 z-10 overflow-y-auto" @click="deleteModal = false">
+            <div class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
+                <div class="relative transform overflow-hidden rounded-lg bg-white px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6" 
+                    @click.stop>
+                    <!-- Delete modal content (Generated by showDeleteModal in JS) -->
+                    <div class="sm:flex sm:items-start">
+                        <div class="mx-auto flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10">
+                            <svg class="h-6 w-6 text-red-600" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+                            </svg>
+                        </div>
+                        <div class="mt-3 text-center sm:ml-4 sm:mt-0 sm:text-left">
+                            <h3 class="text-base font-semibold leading-6 text-gray-900 dark:text-white" id="modal-title">Delete Machine</h3>
+                            <div class="mt-2">
+                                <p class="text-sm text-gray-500 dark:text-gray-300">
+                                    Are you sure you want to delete machine <code x-text="currentMachineId"></code>? This action cannot be undone.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="mt-5 sm:mt-4 sm:flex sm:flex-row-reverse">
+                        <button type="button" class="inline-flex w-full justify-center rounded-md bg-red-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-red-500 sm:ml-3 sm:w-auto" @click="deleteMachine(currentMachineId)">Delete</button>
+                        <button type="button" class="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 sm:mt-0 sm:w-auto dark:bg-gray-600 dark:text-white dark:ring-gray-500 dark:hover:bg-gray-500" @click="deleteModal = false">Cancel</button>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
-</div>
+
+    {# Tag Editor Modal #}
+    <div id="tag-modal" class="relative z-20" aria-labelledby="tag-modal-title" role="dialog" aria-modal="true" x-show="tagModal" x-cloak>
+        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"></div>
+        <div class="fixed inset-0 z-20 overflow-y-auto" @click="$dispatch('close-tag-modal')"> {# Use dispatch on overlay click too #}
+            <div class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
+                <div class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6" 
+                    @click.stop x-data="tagEditorData()" x-init="loadTags(currentMachineId)">
+                    <h3 class="text-lg font-medium leading-6 text-gray-900 dark:text-white mb-4" id="tag-modal-title">Edit Tags for <code x-text="currentMachineId"></code></h3>
+                    <div class="mt-2">
+                        {# Display existing tags #}
+                        <div class="mb-4">
+                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">Current Tags:</label>
+                            <div class="mt-1 flex flex-wrap gap-2">
+                                <template x-for="(tag, index) in tags" :key="index">
+                                    <span class="inline-flex items-center rounded-full bg-purple-100 dark:bg-purple-900 px-2.5 py-0.5 text-sm font-medium text-purple-800 dark:text-purple-200">
+                                        <span x-text="tag"></span>
+                                        <button @click="removeTag(index)" class="ml-1.5 flex-shrink-0 text-purple-500 dark:text-purple-400 hover:text-purple-700 dark:hover:text-purple-200">
+                                            <svg class="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
+                                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
+                                            </svg>
+                                        </button>
+                                    </span>
+                                </template>
+                            </div>
+                        </div>
+                        
+                        {# Input to add new tag #}
+                        <div class="mb-4">
+                            <label for="new-tag" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Add New Tag:</label>
+                            <div class="mt-1 flex rounded-md shadow-sm">
+                                <input type="text" id="new-tag" x-model="newTag" @keydown.enter.prevent="addTag()" placeholder="Enter tag name" class="block w-full flex-1 rounded-none rounded-l-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                                <button @click="addTag()" class="inline-flex items-center rounded-r-md border border-l-0 border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-600 px-3 text-sm text-gray-500 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-500">
+                                    Add
+                                </button>
+                            </div>
+                        </div>
+
+                        {# TODO: Add dropdown/search for existing tags #}
+
+                    </div>
+                    <div class="mt-5 sm:mt-6 sm:flex sm:flex-row-reverse">
+                        <button type="button" @click="saveTags()" class="inline-flex w-full justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 sm:ml-3 sm:w-auto">
+                            Save Tags
+                        </button>
+                        <button type="button" @click="$dispatch('close-tag-modal')" class="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 sm:mt-0 sm:w-auto dark:bg-gray-600 dark:text-white dark:ring-gray-500 dark:hover:bg-gray-500">
+                            Cancel
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {# Reimage Modal #}
+    <div id="reimage-modal" class="relative z-10" aria-labelledby="modal-title" role="dialog" aria-modal="true" x-show="reimageModal" x-cloak>
+        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"></div>
+        <div class="fixed inset-0 z-10 overflow-y-auto" @click="reimageModal = false">
+            <div class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
+                <div class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6" 
+                    @click.stop>
+                    <div class="sm:flex sm:items-start">
+                        <div class="mx-auto flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-cyan-100 sm:mx-0 sm:h-10 sm:w-10">
+                            <svg class="h-6 w-6 text-cyan-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 12c0-1.232-.046-2.453-.138-3.662a4.006 4.006 0 0 0-3.7-3.7 48.678 48.678 0 0 0-7.324 0 4.006 4.006 0 0 0-3.7 3.7c-.092 1.21-.138 2.43-.138 3.662v.012c0 1.232.046 2.453.138 3.662a4.006 4.006 0 0 0 3.7 3.7 48.656 48.656 0 0 0 7.324 0 4.006 4.006 0 0 0 3.7-3.7c.092-1.21.138-2.43.138-3.662v-.012Zm-7 0a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Z" />
+                            </svg>
+                        </div>
+                        <div class="mt-3 text-center sm:ml-4 sm:mt-0 sm:text-left">
+                            <h3 class="text-base font-semibold leading-6 text-gray-900 dark:text-white" id="modal-title">Reimage Machine</h3>
+                            <div class="mt-2">
+                                <p class="text-sm text-gray-500 dark:text-gray-300">Select an OS to reimage machine <code x-text="currentMachineId"></code> with. (Not Implemented)</p>
+                                {# TODO: Add OS selection dropdown/buttons and trigger reimage API call #}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="mt-5 sm:mt-4 sm:flex sm:flex-row-reverse">
+                        <button type="button" class="disabled:opacity-50 inline-flex w-full justify-center rounded-md bg-cyan-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-cyan-500 sm:ml-3 sm:w-auto" disabled>Reimage</button>
+                        <button type="button" @click="reimageModal = false" class="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 sm:mt-0 sm:w-auto dark:bg-gray-600 dark:text-white dark:ring-gray-500 dark:hover:bg-gray-500">Cancel</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {# Power Modal #}
+    <div id="power-modal" class="relative z-10" aria-labelledby="modal-title" role="dialog" aria-modal="true" x-show="powerModal" x-cloak>
+        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"></div>
+        <div class="fixed inset-0 z-10 overflow-y-auto" @click="powerModal = false">
+            <div class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
+                <div class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6" 
+                    @click.stop>
+                     <div class="sm:flex sm:items-start">
+                        <div class="mx-auto flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10">
+                            <svg class="h-6 w-6 text-red-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                               <path stroke-linecap="round" stroke-linejoin="round" d="M5.636 5.636a9 9 0 1 0 12.728 0M12 3v9" />
+                            </svg>
+                        </div>
+                        <div class="mt-3 text-center sm:ml-4 sm:mt-0 sm:text-left">
+                            <h3 class="text-base font-semibold leading-6 text-gray-900 dark:text-white" id="modal-title">Power Control</h3>
+                            <div class="mt-2">
+                                <p class="text-sm text-gray-500 dark:text-gray-300">Control power for machine <code x-text="currentMachineId"></code>. (Not Implemented)</p>
+                                {# TODO: Add buttons for Power On, Power Off, Reboot using BMC API #}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="mt-5 sm:mt-4 sm:flex sm:flex-row-reverse space-x-reverse space-x-2">
+                        <button type="button" @click="powerModal = false" class="inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 sm:mt-0 sm:w-auto dark:bg-gray-600 dark:text-white dark:ring-gray-500 dark:hover:bg-gray-500">Cancel</button>
+                        <button type="button" class="disabled:opacity-50 inline-flex w-full justify-center rounded-md bg-red-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-red-500 sm:w-auto" disabled>Power Off</button>
+                        <button type="button" class="disabled:opacity-50 inline-flex w-full justify-center rounded-md bg-green-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-green-500 sm:w-auto" disabled>Power On</button>
+                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {# === END MODALS === #}
+
+</div> {# End of main x-data div #}
 {% endblock %}
 
 {% block scripts %}
 <script>
     // Check if user is authenticated before allowing admin actions
     function requireAdmin(callback) {
+        // window.isAuthenticated is now set by Alpine's x-init
         if (!window.isAuthenticated) {
             alert("You need to be logged in as admin to perform this action.");
             return false;
@@ -194,84 +363,56 @@
         return callback();
     }
 
-    // Override the show modal functions to check for admin
-    function showStatusModal(id) {
-        requireAdmin(() => {
-            statusModal = true;
-            // Load status form
-            fetch(`/api/machines/${id}/status`)
-                .then(response => response.text())
-                .then(html => {
-                    document.querySelector('#status-modal > div:nth-child(2) > div > div').innerHTML = html;
-                });
-        });
-    }
-
-    function showOsModal(id) {
-        requireAdmin(() => {
-            osModal = true;
-            // Load OS selection form
-            fetch(`/api/machines/${id}/os`)
-                .then(response => response.text())
-                .then(html => {
-                    document.querySelector('#os-modal > div:nth-child(2) > div > div').innerHTML = html;
-                });
-        });
-    }
-
-    function showDeleteModal(id) {
-        requireAdmin(() => {
-            deleteModal = true;
-            // Prepare delete confirmation
-            const content = `
-                <div class="sm:flex sm:items-start">
-                    <div class="mx-auto flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10">
-                        <svg class="h-6 w-6 text-red-600" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
-                        </svg>
-                    </div>
-                    <div class="mt-3 text-center sm:ml-4 sm:mt-0 sm:text-left">
-                        <h3 class="text-base font-semibold leading-6 text-gray-900" id="modal-title">Delete Machine</h3>
-                        <div class="mt-2">
-                            <p class="text-sm text-gray-500">
-                                Are you sure you want to delete this machine? This action cannot be undone.
-                            </p>
-                        </div>
-                    </div>
-                </div>
-                <div class="mt-5 sm:mt-4 sm:flex sm:flex-row-reverse">
-                    <button 
-                        type="button" 
-                        class="inline-flex w-full justify-center rounded-md bg-red-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-red-500 sm:ml-3 sm:w-auto"
-                        onclick="deleteMachine('${id}')">
-                        Delete
-                    </button>
-                    <button 
-                        type="button" 
-                        class="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 sm:mt-0 sm:w-auto"
-                        onclick="deleteModal = false">
-                        Cancel
-                    </button>
-                </div>
-            `;
-            document.querySelector('#delete-modal > div:nth-child(2) > div > div').innerHTML = content;
-        });
-    }
-
-    function deleteMachine(id) {
-        requireAdmin(() => {
-            fetch(`/api/machines/${id}`, {
-                method: 'DELETE',
-            })
-            .then(response => {
-                if (response.ok) {
-                    deleteModal = false;
-                    htmx.trigger(document.querySelector('tbody'), 'refreshMachines');
+    // Alpine.js component for the Tag Editor Modal
+    function tagEditorData() {
+        return {
+            tags: [],
+            newTag: '',
+            currentMachineIdForTags: null,
+            loadTags(machineId) {
+                this.currentMachineIdForTags = machineId;
+                if (!machineId) return;
+                console.log(`Loading tags for machine: ${machineId}`);
+                // TODO: Replace with actual API call
+                // fetch(`/api/machines/${machineId}/tags`)
+                //     .then(response => response.json())
+                //     .then(data => {
+                //         this.tags = data.tags || [];
+                //     })
+                //     .catch(error => console.error('Error loading tags:', error));
+                // Placeholder:
+                if (machineId === 'mock-machine-with-tags') {
+                    this.tags = ['production', 'web-server'];
                 } else {
-                    alert('Error deleting machine');
+                    this.tags = [];
                 }
-            });
-        });
+            },
+            addTag() {
+                const tagToAdd = this.newTag.trim();
+                if (tagToAdd && !this.tags.includes(tagToAdd)) {
+                    this.tags.push(tagToAdd);
+                }
+                this.newTag = ''; // Clear input
+            },
+            removeTag(index) {
+                this.tags.splice(index, 1);
+            },
+            saveTags() {
+                if (!this.currentMachineIdForTags) return;
+                console.log(`Saving tags for machine ${this.currentMachineIdForTags}:`, this.tags);
+                // TODO: Replace with actual API call
+                // fetch(`/api/machines/${this.currentMachineIdForTags}/tags`, { ... })
+                // .then(response => { ... 
+                //     this.$dispatch('close-tag-modal'); // Dispatch event on success
+                // })
+                // .catch(error => { ... });
+                
+                // Placeholder:
+                alert(`Saving tags: ${this.tags.join(', ')}\n(API endpoint not implemented yet)`);
+                // Assuming success for now, dispatch event to close modal
+                this.$dispatch('close-tag-modal');
+            }
+        }
     }
 
     // Debounced refresh function
@@ -284,7 +425,7 @@
 
     // Handle successful HTMX requests
     document.body.addEventListener('htmx:afterRequest', function(event) {
-        if (event.detail.successful && event.detail.pathInfo.requestPath !== '/api/machines') {
+        if (event.detail.successful && event.detail.pathInfo.requestPath !== '/api/machine-list') { // Use the correct endpoint here
             debouncedRefresh();
         }
     });
@@ -356,27 +497,50 @@
     // Update progress targets when the machine list refreshes
     document.addEventListener('htmx:afterSwap', function(event) {
         if (event.detail.target.id === 'machine-list') {
-            // Save the current progress values
+            console.log('htmx:afterSwap detected for machine-list');
+            // Save the current displayed progress values
             const oldProgressBars = {...progressBars};
             
-            // Initialize with new elements
-            initializeProgressBars();
+            // Re-initialize map with new elements and target values from data-progress
+            progressBars = {}; // Clear the map first
+            let hasProgressBars = false;
+            document.querySelectorAll('.workflow-progress-bar').forEach(bar => {
+                hasProgressBars = true;
+                const machineId = bar.getAttribute('data-machine-id');
+                const newTargetProgress = parseInt(bar.getAttribute('data-progress'), 10);
+                
+                // Use old current value if exists, otherwise start from new target (or 0)
+                const currentProgress = oldProgressBars[machineId] ? oldProgressBars[machineId].current : newTargetProgress;
+
+                progressBars[machineId] = {
+                    current: currentProgress, 
+                    target: newTargetProgress
+                };
+                console.log(`Updated progressBars[${machineId}]: current=${currentProgress}, target=${newTargetProgress}`);
+            });
             
-            // Reuse old progress values for bars that existed before
-            for (const machineId in oldProgressBars) {
-                if (progressBars[machineId]) {
-                    progressBars[machineId].current = oldProgressBars[machineId].current;
-                }
+            // Start animation loop ONLY if there are progress bars and it's not already running
+            if (hasProgressBars && !animationFrameId) {
+                console.log('Starting progress animation loop.');
+                animationFrameId = requestAnimationFrame(updateProgressBarsAnimation);
             }
         }
     });
 
     function connectEventSource() {
-        if (evtSource) {
+        // Check if already connected
+        if (window.dragonflyEvtSource && window.dragonflyEvtSource.readyState !== EventSource.CLOSED) {
+            console.log('EventSource already open.');
+            return; 
+        }
+
+        if (evtSource) { // Reuse existing evtSource variable if page reloaded strangely
             evtSource.close();
         }
 
+        console.log("Connecting to EventSource...");
         evtSource = new EventSource('/api/events');
+        window.dragonflyEvtSource = evtSource; // Store globally to check existence
         
         evtSource.onmessage = function(event) {
             console.log('Event received:', event.data);
@@ -433,5 +597,37 @@
             cancelAnimationFrame(animationFrameId);
         }
     });
+
+    function deleteMachine(id) {
+        // Find the component controlling the delete modal *before* the fetch
+        let componentRoot = document.getElementById('delete-modal')?.closest('[x-data]');
+
+        requireAdmin(() => {
+            fetch(`/api/machines/${id}`, {
+                method: 'DELETE',
+            })
+            .then(response => {
+                if (response.ok) {
+                    // Close modal using the found component instance
+                    if (componentRoot && componentRoot.__x) {
+                        componentRoot.__x.data.deleteModal = false;
+                    }
+                    htmx.trigger(document.querySelector('tbody#machine-list'), 'refreshMachines'); // Target tbody more specifically
+                } else {
+                    // Handle error response from server potentially
+                    response.json().then(err => {
+                         console.error('Error deleting machine:', err);
+                         alert(`Error deleting machine: ${err.message || 'Unknown error'}`);
+                    }).catch(() => {
+                         alert('Error deleting machine and failed to parse error response.');
+                    });
+                }
+            })
+            .catch(error => {
+                 console.error('Network or other error deleting machine:', error);
+                 alert('Network error deleting machine. See console.');
+            });
+        });
+    }
 </script>
 {% endblock %}

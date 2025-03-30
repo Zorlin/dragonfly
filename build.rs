@@ -1,4 +1,3 @@
-use std::env;
 use walkdir::WalkDir;
 
 fn main() {
