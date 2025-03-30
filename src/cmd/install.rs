@@ -312,7 +312,7 @@ async fn install_k3s() -> Result<()> {
     
     // Full installation needed
     info!("Installing k3s (single-node)");
-    let script = r#"curl -sfL https://get.k3s.io | sh -"#;
+    let script = r#"curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC='--disable traefik' sh -"#;
     run_shell_command(script, "k3s installation script")?;
 
     // Verify installation
