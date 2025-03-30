@@ -677,14 +677,23 @@ stack:
     );
     run_shell_command(&clone_cmd, "clone Dragonfly Helm charts").wrap_err("Failed to clone Helm charts repository")?;
     
-    // Path to the chart - use the main parent chart directly
-    let chart_path = repo_dir.join("tinkerbell");
+    // Path to the chart
+    let chart_path = repo_dir.join("tinkerbell").join("stack");
     
     // Check if the chart path exists
     if !chart_path.exists() {
         bail!("Helm chart not found in expected location: {:?}", chart_path);
     }
-    
+
+    // --- Build the Helm chart dependencies ---
+    info!("Building Helm chart dependencies...");
+    let dependency_build_cmd = format!(
+        "cd {} && helm dependency build",
+        chart_path.display()
+    );
+    run_shell_command(&dependency_build_cmd, "build Helm chart dependencies")
+        .wrap_err("Failed to build Helm chart dependencies")?;
+
     // --- Run Helm Install/Upgrade with the local chart path ---
     let helm_args = [
         "upgrade", "--install", "tink-stack",
