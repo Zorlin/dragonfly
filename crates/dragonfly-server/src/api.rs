@@ -1424,7 +1424,10 @@ boot
             base_url  // for initrd path
             ))
         },
-        _ => Err(Error::NotFound(format!("Cannot generate unknown IPXE script: {}", script_name))),
+        _ => {
+            warn!("Cannot generate unknown IPXE script: {}", script_name); // Log the specific script name
+            Err(Error::NotFound) // Use the unit variant correctly
+        },
     }
 }
 
