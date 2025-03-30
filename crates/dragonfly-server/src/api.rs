@@ -57,7 +57,6 @@ pub fn api_router() -> Router<crate::AppState> {
         .route("/machines/{id}/tags", put(update_machine_tags))
         .route("/events", get(machine_events))
         .route("/machines/{id}/workflow-progress", get(get_workflow_progress))
-        .route("/ipxe/{*path}", get(serve_ipxe_artifact))
 }
 
 async fn register_machine(
@@ -1407,15 +1406,15 @@ exit
                 
             // Format the Dragonfly Agent iPXE script
             Ok(format!(r#"#!ipxe
-kernel {}/ipxe/agent/vmlinuz \
+kernel {}/ipxe/dragonfly-agent/vmlinuz \
   ip=dhcp \
   alpine_repo=http://dl-cdn.alpinelinux.org/alpine/v3.21/main \
   modules=loop,squashfs,sd-mod,usb-storage \
   initrd=initramfs-lts \
-  modloop={}/ipxe/agent/modloop \
-  apkovl={}/ipxe/agent/localhost.apkovl.tar.gz \
+  modloop={}/ipxe/dragonfly-agent/modloop \
+  apkovl={}/ipxe/dragonfly-agent/localhost.apkovl.tar.gz \
   rw
-initrd {}/ipxe/agent/initramfs-lts
+initrd {}/ipxe/dragonfly-agent/initramfs-lts
 boot
 "#, 
             base_url, // for kernel path
@@ -1432,7 +1431,7 @@ boot
 }
 
 // Function to serve an iPXE artifact file from a configured directory
-async fn serve_ipxe_artifact(Path(requested_path): Path<String>) -> Response {
+pub async fn serve_ipxe_artifact(Path(requested_path): Path<String>) -> Response {
     // Define constants for directories and URLs
     const DEFAULT_ARTIFACT_DIR: &str = "/var/lib/dragonfly/ipxe-artifacts";
     const ARTIFACT_DIR_ENV_VAR: &str = "DRAGONFLY_IPXE_ARTIFACT_DIR";
@@ -1445,9 +1444,9 @@ async fn serve_ipxe_artifact(Path(requested_path): Path<String>) -> Response {
         });
     let base_path = PathBuf::from(base_dir);
     
-    // Path sanitization
-    if requested_path.contains("..") || requested_path.contains('/') || requested_path.contains('\\') {
-        warn!("Attempted iPXE artifact path traversal: {}", requested_path);
+    // Path sanitization - Allow '/' but prevent '..'
+    if requested_path.contains("..") || requested_path.contains('\\') {
+        warn!("Attempted iPXE artifact path traversal using '..' or '\': {}", requested_path);
         return (StatusCode::BAD_REQUEST, "Invalid artifact path").into_response();
     }
     
@@ -1480,39 +1479,77 @@ async fn serve_ipxe_artifact(Path(requested_path): Path<String>) -> Response {
             }
         }
     } else {
-        // File doesn't exist - need to pull from remote and stream
-        info!("Artifact {} not found locally, streaming from remote", requested_path);
+        // File doesn't exist - fetch from remote or generate
+        info!("Artifact {} not found locally, attempting to fetch", requested_path);
         
-        // Handle iPXE script generation differently - these are generated not downloaded
+        // If it's an IPXE script, try to generate it
         if requested_path.ends_with(".ipxe") {
-            generate_ipxe_script(&requested_path).await;
+            match generate_ipxe_script(&requested_path).await {
+                Ok(script) => {
+                    info!("Generated {} script dynamically.", requested_path);
+                    // Cache in background
+                    let path_clone = artifact_path.clone();
+                    let script_clone = script.clone();
+                    tokio::spawn(async move {
+                        // Ensure parent directory exists before writing
+                        if let Some(parent) = path_clone.parent() {
+                            if let Err(e) = fs::create_dir_all(parent).await {
+                                warn!("Failed to create directory for caching dragonfly-agent.ipxe: {}", e);
+                                return; // Don't attempt write if dir creation failed
+                            }
+                        }
+                        if let Err(e) = fs::write(&path_clone, &script_clone).await {
+                             warn!("Failed to cache generated {} script: {}", requested_path, e);
+                        }
+                    });
+                    // Return the generated script
+                    return (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/plain")], script).into_response();
+                },
+                Err(Error::NotFound { .. }) => {
+                    // generate_ipxe_script returned NotFound, so it's not a known generatable script.
+                    // Log this specific case and fall through to the 404 for unknown artifacts below.
+                    warn!("IPXE script {} is not configured for dynamic generation.", requested_path);
+                },
+                Err(e) => {
+                    // Other error during generation (e.g., missing env var)
+                    error!("Failed to generate {} script: {}", requested_path, e);
+                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to generate script: {}", e)).into_response();
+                }
+            }
+            // If we fall through here, it means generate_ipxe_script returned NotFound
+        } 
+        // --- Removed the previous `else if` blocks ---
+        else {
+            // It's not an IPXE script, treat as a binary artifact to download/stream
+            let remote_url = match requested_path.as_str() {
+                // Alpine Linux netboot artifacts for Dragonfly Agent
+                "dragonfly-agent/vmlinuz" => "https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64/netboot/vmlinuz-lts",
+                "dragonfly-agent/initramfs-lts" => "https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64/netboot/initramfs-lts",
+                "dragonfly-agent/modloop" => "https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64/netboot/modloop-lts",
+                // Add other mappings as needed
+                _ => {
+                    // If it wasn't an .ipxe script and not a known binary, it's unknown.
+                    warn!("Unknown artifact requested: {}", requested_path);
+                    return (StatusCode::NOT_FOUND, "Unknown iPXE artifact").into_response();
+                }
+            };
+            
+            // Use the efficient streaming download with caching for known artifacts
+            match stream_download_with_caching(remote_url, &artifact_path).await {
+                Ok(stream) => {
+                    info!("Streaming artifact {} from remote source", requested_path);
+                    return create_streaming_response(stream, "application/octet-stream");
+                },
+                Err(e) => {
+                    error!("Failed to stream artifact {}: {}", requested_path, e);
+                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("Error streaming artifact: {}", e)).into_response();
+                }
+            }
         }
 
-        // For binary artifacts that need to be downloaded and streamed
-        let remote_url = match requested_path.as_str() {
-            // Dragonfly Agent iPXE artifacts
-            "dragonfly-agent/modloop" => "https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64/netboot-3.21.3/modloop-lts",
-            "dragonfly-agent/vmlinuz-lts" => "https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64/netboot-3.21.3/vmlinuz-lts",
-            "dragonfly-agent/initramfs-lts" => "https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64/netboot-3.21.3/initramfs-lts",
-            // Add other mappings as needed
-            _ => {
-                warn!("Unknown artifact requested: {}", requested_path);
-                return (StatusCode::NOT_FOUND, "Unknown iPXE artifact").into_response();
-            }
-        };
-        
-        // Use the efficient streaming download with caching for known artifacts
-        match stream_download_with_caching(remote_url, &artifact_path).await {
-            Ok(stream) => {
-                info!("Streaming artifact {} from remote source", requested_path);
-                create_streaming_response(stream, "application/octet-stream")
-            },
-            Err(e) => {
-                // If streaming download fails, log the error and return 500
-                error!("Failed to stream artifact {}: {}", requested_path, e);
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("Error streaming artifact: {}", e)).into_response()
-            }
-        }
+        // If code reaches here, it means an IPXE script was requested but generate_ipxe_script 
+        // returned NotFound, so return 404.
+        (StatusCode::NOT_FOUND, "Unknown or Ungeneratable IPXE Script").into_response()
     }
 }
 

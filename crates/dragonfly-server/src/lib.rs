@@ -116,6 +116,7 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(ui::ui_router())
         .route("/favicon.ico", get(handle_favicon))
         .route("/{mac}", get(api::ipxe_script))
+        .route("/ipxe/{*path}", get(api::serve_ipxe_artifact))
         .nest("/api", api::api_router())
         .nest_service("/static", {
             let preferred_path = "/opt/dragonfly/static";
