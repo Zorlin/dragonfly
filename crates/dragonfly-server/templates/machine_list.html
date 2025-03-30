@@ -528,31 +528,91 @@
     let progressBars = {};
     let animationFrameId = null;
     
+    // --- Helper functions for color ---
+    function getProgressColorName(progress) {
+        if (progress <= 40) {
+            return 'orange';
+        } else if (progress <= 80) {
+            return 'cyan';
+        } else {
+            return 'green';
+        }
+    }
+
+    // Map color names to Tailwind classes
+    const colorClasses = {
+        orange: ['bg-orange-500', 'dark:bg-orange-600'],
+        cyan: ['bg-cyan-500', 'dark:bg-cyan-600'],
+        green: ['bg-green-500', 'dark:bg-green-600']
+    };
+    // --- End Helper functions ---
+
     // Function to update progress bars with smooth animation
     function updateProgressBarsAnimation() {
         let needsUpdate = false;
         
         // Update each progress bar
         for (const machineId in progressBars) {
-            const {current, target} = progressBars[machineId];
-            if (Math.abs(current - target) > 0.1) {
+            const barData = progressBars[machineId];
+            const {current, target} = barData;
+
+            if (Math.abs(current - target) > 0.1 || target === 0 && current !== 0 /* Ensure it animates back to 0 if needed */ ) {
                 // Smoothly animate towards target
-                const delta = (target - current) * 0.1;
-                progressBars[machineId].current += delta;
+                const delta = (target - current) * 0.1; // Adjust multiplier for faster/slower animation
+                barData.current += delta;
+                // Ensure current doesn't overshoot target significantly in one step
+                if ((delta > 0 && barData.current > target) || (delta < 0 && barData.current < target)) {
+                     barData.current = target;
+                }
                 needsUpdate = true;
                 
                 // Update the DOM
                 const progressBar = document.querySelector(`.workflow-progress-bar[data-machine-id="${machineId}"]`);
                 if (progressBar) {
+                    const currentProgressRounded = Math.round(barData.current);
                     // Update width
-                    progressBar.style.width = `${Math.round(progressBars[machineId].current)}%`;
+                    progressBar.style.width = `${currentProgressRounded}%`;
                     
                     // Update text
-                    const textDisplay = progressBar.closest('div').previousElementSibling.querySelector('span:first-child');
+                    const textDisplay = progressBar.closest('div.w-full').previousElementSibling?.querySelector('span:first-child');
                     if (textDisplay) {
-                        textDisplay.textContent = `${Math.round(progressBars[machineId].current)}%`;
+                        textDisplay.textContent = `${currentProgressRounded}%`;
                     }
+
+                    // --- Update Color ---
+                    const newColorName = getProgressColorName(currentProgressRounded);
+                    if (newColorName !== barData.currentColorName) {
+                        // Remove old classes
+                        if (barData.currentColorName && colorClasses[barData.currentColorName]) {
+                            progressBar.classList.remove(...colorClasses[barData.currentColorName]);
+                        }
+                        // Add new classes
+                        if (colorClasses[newColorName]) {
+                            progressBar.classList.add(...colorClasses[newColorName]);
+                        }
+                        barData.currentColorName = newColorName; // Update stored color name
+                    }
+                    // --- End Update Color ---
                 }
+            } else if (Math.abs(current - target) <= 0.1 && current !== target) {
+                 // Snap to final target value if very close
+                 barData.current = target;
+                 // Update DOM one last time for pixel perfection
+                 const progressBar = document.querySelector(`.workflow-progress-bar[data-machine-id="${machineId}"]`);
+                 if (progressBar) {
+                     const finalProgress = Math.round(barData.current);
+                     progressBar.style.width = `${finalProgress}%`;
+                     const textDisplay = progressBar.closest('div.w-full').previousElementSibling?.querySelector('span:first-child');
+                     if (textDisplay) { textDisplay.textContent = `${finalProgress}%`; }
+                     
+                     // Ensure final color is set
+                     const finalColorName = getProgressColorName(finalProgress);
+                     if (finalColorName !== barData.currentColorName) {
+                         if (barData.currentColorName && colorClasses[barData.currentColorName]) { progressBar.classList.remove(...colorClasses[barData.currentColorName]); }
+                         if (colorClasses[finalColorName]) { progressBar.classList.add(...colorClasses[finalColorName]); }
+                         barData.currentColorName = finalColorName;
+                     }
+                 }
             }
         }
         
@@ -560,26 +620,18 @@
         if (needsUpdate) {
             animationFrameId = requestAnimationFrame(updateProgressBarsAnimation);
         } else {
+            console.log('Progress animation loop stopped.');
             animationFrameId = null;
         }
     }
     
     // Initialize progress tracking
     function initializeProgressBars() {
-        progressBars = {};
-        document.querySelectorAll('.workflow-progress-bar').forEach(bar => {
-            const machineId = bar.getAttribute('data-machine-id');
-            const progress = parseInt(bar.getAttribute('data-progress'), 10);
-            
-            progressBars[machineId] = {
-                current: progress,
-                target: progress
-            };
-        });
-        
-        // Start animation if not already running
-        if (Object.keys(progressBars).length > 0 && !animationFrameId) {
-            animationFrameId = requestAnimationFrame(updateProgressBarsAnimation);
+        // Intentionally simple: just find existing bars. 
+        // Let htmx:afterSwap handle the main initialization/update logic.
+        if (document.querySelector('.workflow-progress-bar') && !animationFrameId) {
+             console.log('Initial progress bars found, starting animation loop.');
+             animationFrameId = requestAnimationFrame(updateProgressBarsAnimation);
         }
     }
     
@@ -587,31 +639,80 @@
     document.addEventListener('htmx:afterSwap', function(event) {
         if (event.detail.target.id === 'machine-list') {
             console.log('htmx:afterSwap detected for machine-list');
-            // Save the current displayed progress values
-            const oldProgressBars = {...progressBars};
+            
+            const oldProgressBars = {...progressBars}; // Keep track of previous state
+            const currentMachineIds = new Set(); // Track IDs present in the new HTML
             
             // Re-initialize map with new elements and target values from data-progress
-            progressBars = {}; // Clear the map first
             let hasProgressBars = false;
             document.querySelectorAll('.workflow-progress-bar').forEach(bar => {
                 hasProgressBars = true;
                 const machineId = bar.getAttribute('data-machine-id');
+                currentMachineIds.add(machineId); // Mark this ID as present
                 const newTargetProgress = parseInt(bar.getAttribute('data-progress'), 10);
                 
-                // Use old current value if exists, otherwise start from new target (or 0)
-                const currentProgress = oldProgressBars[machineId] ? oldProgressBars[machineId].current : newTargetProgress;
+                let currentProgress;
+                let currentColorName;
+
+                if (oldProgressBars[machineId]) {
+                    // Existing bar: Use old current value, update target
+                    currentProgress = oldProgressBars[machineId].current;
+                    currentColorName = oldProgressBars[machineId].currentColorName; 
+                    // Ensure the initial color class matches the stored name
+                     const expectedColorName = getProgressColorName(Math.round(currentProgress));
+                     if (expectedColorName !== currentColorName) {
+                          console.warn(`Correcting stored color for ${machineId}. Was ${currentColorName}, should be ${expectedColorName}`);
+                          currentColorName = expectedColorName;
+                     }
+
+                } else {
+                    // New bar: Start animation from 0, set target
+                    currentProgress = 0; 
+                    currentColorName = getProgressColorName(0); // Should be 'orange'
+                }
 
                 progressBars[machineId] = {
                     current: currentProgress, 
-                    target: newTargetProgress
+                    target: newTargetProgress,
+                    currentColorName: currentColorName 
                 };
-                console.log(`Updated progressBars[${machineId}]: current=${currentProgress}, target=${newTargetProgress}`);
+
+                // --- Ensure Initial Color Classes are Set ---
+                // Remove potentially incorrect classes from previous renders/states
+                Object.values(colorClasses).flat().forEach(cls => bar.classList.remove(cls));
+                // Add the correct initial classes based on *current* state
+                const initialColorName = getProgressColorName(Math.round(currentProgress)); // Use current for initial display
+                if(initialColorName !== currentColorName) {
+                    console.warn(`Mismatch initial color name for ${machineId}, using ${initialColorName}`);
+                    progressBars[machineId].currentColorName = initialColorName; // Correct the state too
+                }
+                if (colorClasses[initialColorName]) {
+                    bar.classList.add(...colorClasses[initialColorName]);
+                }
+                 // Set initial width
+                 bar.style.width = `${Math.round(currentProgress)}%`;
+                // --- End Initial Color ---
+
+                console.log(`Updated progressBars[${machineId}]: current=${currentProgress.toFixed(1)}, target=${newTargetProgress}, color=${progressBars[machineId].currentColorName}`);
             });
+
+            // Remove data for machines no longer in the list
+            for (const machineId in progressBars) {
+                if (!currentMachineIds.has(machineId)) {
+                    console.log(`Removing progress data for disappeared machine: ${machineId}`);
+                    delete progressBars[machineId];
+                }
+            }
             
             // Start animation loop ONLY if there are progress bars and it's not already running
             if (hasProgressBars && !animationFrameId) {
                 console.log('Starting progress animation loop.');
                 animationFrameId = requestAnimationFrame(updateProgressBarsAnimation);
+            } else if (!hasProgressBars && animationFrameId) {
+                // Stop animation if no bars are left
+                console.log('No progress bars found, stopping animation loop.');
+                cancelAnimationFrame(animationFrameId);
+                animationFrameId = null;
             }
         }
     });
@@ -672,9 +773,28 @@
     // Initial connection
     connectEventSource();
     
-    // Initialize progress bars on page load
+    // Initialize progress bars on page load (will start animation if bars exist)
     document.addEventListener('DOMContentLoaded', function() {
-        initializeProgressBars();
+        // Populate the progressBars map initially based on DOM state
+        progressBars = {}; // Clear just in case
+         document.querySelectorAll('.workflow-progress-bar').forEach(bar => {
+            const machineId = bar.getAttribute('data-machine-id');
+            const initialProgress = parseInt(bar.getAttribute('data-progress'), 10);
+            const initialColorName = getProgressColorName(initialProgress);
+            
+            progressBars[machineId] = {
+                current: initialProgress, // Start current at the initial target for first load
+                target: initialProgress,
+                currentColorName: initialColorName
+            };
+             // Set initial color and width explicitly
+             Object.values(colorClasses).flat().forEach(cls => bar.classList.remove(cls)); // Clear first
+             if (colorClasses[initialColorName]) {
+                bar.classList.add(...colorClasses[initialColorName]);
+             }
+             bar.style.width = `${initialProgress}%`;
+        });
+        initializeProgressBars(); // This will check if bars exist and start the animation loop if needed
     });
 
     // Clean up when leaving the page
