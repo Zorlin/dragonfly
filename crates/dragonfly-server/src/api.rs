@@ -1594,7 +1594,8 @@ pub async fn serve_ipxe_artifact(Path(requested_path): Path<String>) -> Response
                 "dragonfly-agent/vmlinuz" => "https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64/netboot/vmlinuz-lts",
                 "dragonfly-agent/initramfs-lts" => "https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64/netboot/initramfs-lts",
                 "dragonfly-agent/modloop" => "https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64/netboot/modloop-lts",
-                // Add other mappings as needed
+                // Ubuntu 22.04
+                "ubuntu/jammy-server-cloudimg-amd64.img" => "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img",
                 _ => {
                     // If it wasn't an .ipxe script and not a known binary, it's unknown.
                     warn!("Unknown artifact requested: {}", requested_path);
