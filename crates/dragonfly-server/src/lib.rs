@@ -114,7 +114,8 @@ pub async fn run() -> anyhow::Result<()> {
     let app = Router::new()
         .merge(auth_router())
         .merge(ui::ui_router())
-        .route("/{mac}", get(api::ipxe_script))  // MAC route at root level for iPXE
+        .route("/favicon.ico", get(handle_favicon))
+        .route("/{mac}", get(api::ipxe_script))
         .nest("/api", api::api_router())
         .nest_service("/static", {
             let preferred_path = "/opt/dragonfly/static";
@@ -163,3 +164,7 @@ pub async fn run() -> anyhow::Result<()> {
 
     Ok(())
 } 
+
+async fn handle_favicon() -> impl IntoResponse {
+    (StatusCode::NOT_FOUND, "Favicon not found")
+}

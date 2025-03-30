@@ -45,7 +45,7 @@ pub fn api_router() -> Router<crate::AppState> {
         .route("/machines/{id}/tags", put(update_machine_tags))
         .route("/events", get(machine_events))
         .route("/machines/{id}/workflow-progress", get(get_workflow_progress))
-        .route("/ipxe/*path", get(serve_ipxe_artifact))
+        .route("/ipxe/{*path}", get(serve_ipxe_artifact))
 }
 
 async fn register_machine(
