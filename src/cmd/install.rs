@@ -67,7 +67,7 @@ pub async fn run_install(args: InstallArgs) -> Result<()> {
 
     // --- 7. Install Tinkerbell Stack ---
     info!("Installing Tinkerbell stack...");
-    install_tinkerbell_stack(bootstrap_ip).await.wrap_err("Failed to install Tinkerbell stack")?;
+    install_tinkerbell_stack(bootstrap_ip, network).await.wrap_err("Failed to install Tinkerbell stack")?;
 
     let elapsed = start_time.elapsed();
     info!("✅ Dragonfly installation completed in {:.1?}!", elapsed);
@@ -510,10 +510,8 @@ async fn install_helm() -> Result<()> {
     Ok(())
 }
 
-async fn install_tinkerbell_stack(bootstrap_ip: Ipv4Addr) -> Result<()> {
-    debug!("Checking if Tinkerbell stack is already installed");
-    
-    // Check if the tink namespace exists
+async fn install_tinkerbell_stack(bootstrap_ip: Ipv4Addr, network: Ipv4Network) -> Result<()> {
+    // Check if the Tinkerbell stack is already installed
     let namespace_check = Command::new("kubectl")
         .args(["get", "namespace", "tink", "--no-headers", "--ignore-not-found"])
         .output()?;
@@ -528,29 +526,13 @@ async fn install_tinkerbell_stack(bootstrap_ip: Ipv4Addr) -> Result<()> {
         
     let release_exists = release_check.status.success() && 
                          !String::from_utf8_lossy(&release_check.stdout).trim().is_empty();
-                         
-    if namespace_exists && release_exists {
-        // Check if it's running properly
-        let pods_check = Command::new("kubectl")
-            .args(["get", "pods", "-n", "tink", "--no-headers"])
-            .output()?;
-            
-        let pods_output = String::from_utf8_lossy(&pods_check.stdout).trim().to_string();
-        let all_pods_running = pods_check.status.success() && 
-                               !pods_output.is_empty() && 
-                               !pods_output.contains("Pending") &&
-                               !pods_output.contains("Error") &&
-                               !pods_output.contains("CrashLoopBackOff");
-                               
-        if all_pods_running {
-            info!("Tinkerbell stack is already installed and running");
-            return Ok(());
-        } else {
-            info!("Tinkerbell stack is installed but not all pods are running, will reinstall");
-        }
+    
+    // Log whether we're installing or upgrading
+    if release_exists {
+        info!("Tinkerbell stack already exists, will upgrade");
+    } else {
+        info!("Tinkerbell stack not found, will install");
     }
-
-    debug!("Installing Tinkerbell stack via Helm");
 
     // --- Get Pod CIDRs ---
     let pod_cidr_output = run_command(
@@ -575,16 +557,15 @@ async fn install_tinkerbell_stack(bootstrap_ip: Ipv4Addr) -> Result<()> {
         debug!("Using Pod CIDRs for trusted proxies: {:?}", trusted_proxies);
     }
 
-    // TODO: Dynamically determine the host's subnet for the hardcoded proxy
-    let host_subnet_proxy = "10.7.1.200/24"; // Placeholder - should be derived
-    debug!("Using host subnet proxy: {}", host_subnet_proxy);
+    // Use the detected network CIDR for trusted proxies
+    let network_cidr = network.to_string();
+    debug!("Using host network CIDR for trusted proxies: {}", network_cidr);
 
     let mut final_trusted_proxies = trusted_proxies;
-    final_trusted_proxies.push(host_subnet_proxy.to_string());
+    final_trusted_proxies.push(network_cidr);
 
-    // TODO: Verify the correct IP for smee.dhcp.httpIPXE.scriptUrl.host
-    // The bash script used a hardcoded IP, but using the bootstrap_ip might be more correct/flexible.
-    let smee_host_ip = bootstrap_ip; // Using bootstrap_ip
+    // Use bootstrap_ip for smee host
+    let smee_host_ip = bootstrap_ip;
     debug!("Using {} as the host for Smee HTTP iPXE script URL", smee_host_ip);
 
     // --- Generate values.yaml ---
@@ -600,8 +581,8 @@ smee:
     httpIPXE:
       scriptUrl:
         scheme: "http"
-        host: "{smee_host_ip}" # Use the determined IP
-        port: 3000 # Default Tinkerbell port for iPXE scripts via HTTP
+        host: "{smee_host_ip}"
+        port: 3000
         path: ""
   additionalArgs:
     - "--dhcp-http-ipxe-script-prepend-mac=true"
@@ -621,18 +602,7 @@ stack:
         .wrap_err_with(|| format!("Failed to write Helm values to {:?}", values_path))?;
     debug!("Generated Helm values file: {:?}", values_path);
 
-    // If the release exists but isn't working, try uninstalling it first
-    if release_exists {
-        debug!("Uninstalling existing Tinkerbell stack before reinstalling");
-        let _ = Command::new("helm")
-            .args(["uninstall", "tink-stack", "-n", "tink"])
-            .output();
-            
-        // Give it a moment to clean up
-        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-    }
-
-    // --- Run Helm Install ---
+    // --- Run Helm Install/Upgrade ---
     let stack_chart_version = "0.5.0"; // Consider making this configurable
     let helm_args = [
         "upgrade", "--install", "tink-stack",
@@ -640,16 +610,55 @@ stack:
         "--version", stack_chart_version,
         "--create-namespace",
         "--namespace", "tink",
-        "--wait", // Add timeout? e.g. --timeout 10m
-        "--timeout", "10m", // Added timeout
+        "--wait",
+        "--timeout", "10m",
         "-f", values_path.to_str().ok_or_else(|| color_eyre::eyre::eyre!("values.yaml path is not valid UTF-8"))?,
     ];
 
     debug!("Running helm upgrade --install command");
-    run_command("helm", &helm_args, "install Tinkerbell Helm chart")?;
+    run_command("helm", &helm_args, "install/upgrade Tinkerbell Helm chart")?;
 
-    info!("Tinkerbell stack installed successfully");
+    // Verify the deployment
+    let deployment_check = Command::new("kubectl")
+        .args(["get", "pods", "-n", "tink", "--no-headers"])
+        .output()?;
+    
+    if deployment_check.status.success() {
+        let pods_output = String::from_utf8_lossy(&deployment_check.stdout).trim().to_string();
+        if !pods_output.is_empty() && 
+           !pods_output.contains("Pending") && 
+           !pods_output.contains("Error") && 
+           !pods_output.contains("CrashLoopBackOff") {
+            info!("Tinkerbell stack is running properly");
+        } else {
+            warn!("Tinkerbell stack deployed but some pods may not be ready. Check with 'kubectl get pods -n tink'");
+        }
+    }
+
+    info!("Tinkerbell stack {} successfully", if release_exists { "upgraded" } else { "installed" });
     Ok(())
+}
+
+/// Convert an IP and prefix length to CIDR notation
+fn network_to_cidr(ip: Ipv4Addr, prefix_len: u8) -> Result<String> {
+    // Ensure prefix length is valid (0-32)
+    if prefix_len > 32 {
+        bail!("Invalid prefix length: {}", prefix_len);
+    }
+    
+    // Apply the netmask to the IP address to get the network address
+    let ip_u32 = u32::from(ip);
+    let mask = if prefix_len == 0 { 0 } else { !0u32 << (32 - prefix_len) };
+    let network_addr = Ipv4Addr::from(ip_u32 & mask);
+    
+    // Return in CIDR notation
+    Ok(format!("{}/{}", network_addr, prefix_len))
+}
+
+/// Convert a netmask (like 255.255.255.0) to a prefix length (like 24)
+fn netmask_to_prefix(netmask: Ipv4Addr) -> u8 {
+    let bits = u32::from(netmask).count_ones();
+    bits as u8
 }
 
 // Helper function to check if a file exists and is readable
