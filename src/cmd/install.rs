@@ -193,46 +193,53 @@ async fn configure_kubectl() -> Result<PathBuf> {
 
 
 async fn wait_for_node_ready() -> Result<()> {
-    debug!("Checking for Kubernetes node readiness");
+    info!("Waiting for Kubernetes node to become ready...");
     let max_wait = std::time::Duration::from_secs(300); // 5 minutes timeout
     let check_interval = std::time::Duration::from_secs(5);
     let start_time = std::time::Instant::now();
+    
+    // Print a dot every few seconds to show progress
+    let mut dots_printed = 0;
 
     loop {
         if start_time.elapsed() > max_wait {
             color_eyre::eyre::bail!("Timed out waiting for Kubernetes node to become ready after {} seconds.", max_wait.as_secs());
         }
 
+        // Run kubectl with the simplest possible check for a Ready node
         let output_result = Command::new("kubectl")
-            .args(["get", "nodes", "-o", "jsonpath={.items[0].status.conditions[?(@.type==\"Ready\")].status}"])
-            .output(); // Check specifically for the Ready condition status
+            .args(["get", "nodes", "--no-headers"])
+            .output();
 
         match output_result {
             Ok(output) => {
                 let stdout = String::from_utf8_lossy(&output.stdout);
-                if output.status.success() && stdout.trim() == "\"True\"" { // Kube returns True/False/Unknown quoted
-                     info!("Kubernetes node is ready");
+                
+                // Node is ready if "Ready" appears in the output and "NotReady" doesn't
+                if output.status.success() && 
+                   stdout.contains(" Ready") && 
+                   !stdout.contains("NotReady") {
+                    // Add a newline after dots if we printed any
+                    if dots_printed > 0 {
+                        println!();
+                    }
+                    info!("Kubernetes node is ready");
                     return Ok(());
-                } else if output.status.success() {
-                    // Node exists but not ready, print a single dot to show progress
-                    debug!("Node status: {}", stdout.trim());
-                    print!(".");
-                    std::io::stdout().flush().wrap_err("Failed to flush stdout")?;
                 }
-                else {
-                    // Kubectl command failed, maybe API server not up yet
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    debug!("kubectl command failed (will retry): {}", stderr.trim());
-                    print!(".");
-                    std::io::stdout().flush().wrap_err("Failed to flush stdout")?;
-                }
-            }
+                
+                // Node exists but is not ready yet
+                debug!("Waiting for node to become ready: {}", stdout.trim());
+            },
             Err(e) => {
-                 debug!("kubectl command error (will retry): {}", e);
-                 print!(".");
-                 std::io::stdout().flush().wrap_err("Failed to flush stdout")?;
+                // Most likely the API server is still starting
+                debug!("kubectl command error (will retry): {}", e);
             }
         }
+
+        // Print a dot to show progress
+        print!(".");
+        std::io::stdout().flush().wrap_err("Failed to flush stdout")?;
+        dots_printed += 1;
 
         tokio::time::sleep(check_interval).await;
     }
