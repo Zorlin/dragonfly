@@ -1913,45 +1913,65 @@ async fn stream_download_with_caching(
     tokio::spawn(async move {
         // Use futures::StreamExt to handle the response body stream
         let mut stream = response.bytes_stream(); 
-        let mut error_occurred = false;
+        let mut client_disconnected = false; // Track if client has disconnected
+        let mut download_error = false; // Track actual download/write errors
 
         while let Some(chunk_result) = stream.next().await { // Use stream.next().await
             match chunk_result { // chunk_result is Result<Bytes, reqwest::Error>
                 Ok(chunk) => {
                     let chunk_clone = chunk.clone();
                     
+                    // Write chunk to cache file concurrently
                     let file_clone = Arc::clone(&file);
-                    
                     let write_handle = tokio::spawn(async move {
                         let mut file = file_clone.lock().await;
                         file.write_all(&chunk_clone).await
                     });
 
-                    // Send Ok(chunk) to the stream
-                    if tx.send(Ok(chunk)).await.is_err() {
-                        warn!("Client stream receiver dropped for {}. Aborting download.", url_clone);
-                        error_occurred = true;
-                        break;
+                    // Attempt to send to client only if not already disconnected
+                    if !client_disconnected {
+                        if tx.send(Ok(chunk)).await.is_err() {
+                            warn!("Client stream receiver dropped for {}. Continuing download in background.", url_clone);
+                            client_disconnected = true;
+                            // DO NOT break here - let download continue for caching
+                        }
                     }
 
-                    // Handle potential write error without blocking the stream send
-                    match tokio::try_join!(write_handle) { 
-                        Ok((Ok(()),)) => {}, 
-                        Ok((Err(e),)) => warn!("Failed to write chunk to cache file {}: {}", cache_path_clone.display(), e), 
-                        Err(e) => warn!("Cache write task failed (join error) for {}: {}", cache_path_clone.display(), e),
+                    // Await the write operation regardless of client connection status
+                    match write_handle.await { // Await the JoinHandle itself
+                        Ok(Ok(())) => {
+                            // Write successful, continue loop
+                        },
+                        Ok(Err(e)) => {
+                            // Write operation failed
+                            warn!("Failed to write chunk to cache file {}: {}", cache_path_clone.display(), e);
+                            download_error = true;
+                            break; // Abort download if we can't write to cache
+                        },
+                        Err(e) => {
+                            // Task failed (e.g., panicked)
+                            warn!("Cache write task failed (join error) for {}: {}", cache_path_clone.display(), e);
+                            download_error = true;
+                            break; // Abort download if write task fails
+                        }
                     }
                 },
                 Err(e) => { // e is reqwest::Error here
                     error!("Download stream error for {}: {}", url_clone, e);
-                    // Send the error wrapped in our Error type
-                    let err = Error::Internal(format!("Download stream error: {}", e));
-                    if tx.send(Err(err)).await.is_err() {
-                         warn!("Client stream receiver dropped while sending error for {}", url_clone);
+                    // Send error to client if still connected
+                    if !client_disconnected {
+                        let err = Error::Internal(format!("Download stream error: {}", e));
+                        if tx.send(Err(err)).await.is_err() {
+                             warn!("Client stream receiver dropped while sending download error for {}", url_clone);
+                             // Client disconnected while we were trying to send an error
+                             client_disconnected = true;
+                        }
                     }
-                    error_occurred = true;
-                    break;
+                    download_error = true;
+                    break; // Stop processing on download error
                 }
             }
+            // If download_error is true, the inner match already broke, so we'll exit.
         }
         
         // Ensure file is flushed and closed first
@@ -1959,14 +1979,24 @@ async fn stream_download_with_caching(
             if let Err(e) = file.flush().await {
                 warn!("Failed to flush cache file {}: {}", cache_path_clone.display(), e);
             }
-            // File is closed when it goes out of scope
+            // File is closed when it goes out of scope here
         }
         
-        // Send an empty chunk as EOF signal (our create_streaming_response function will handle this properly)
-        if !error_occurred {
-            info!("Download complete and cached for {}", url_clone);
-            debug!("Sending EOF signal for {}", url_clone);
-            let _ = tx.send(Ok(Bytes::new())).await;
+        // Only send EOF signal if the download completed without error AND the client is still connected
+        if !download_error && !client_disconnected {
+            info!("Download complete for {}, client still connected.", url_clone);
+            // Removed explicit EOF signal
+            // debug!("Sending EOF signal for {}", url_clone);
+            // let _ = tx.send(Ok(Bytes::new())).await;
+        } else if !download_error && client_disconnected {
+            info!("Download complete and cached for {} after client disconnected.", url_clone);
+        } else {
+            // An error occurred during download or caching
+            warn!("Download for {} did not complete successfully due to errors.", url_clone);
+            // Optionally remove the potentially incomplete cache file
+            // if let Err(e) = fs::remove_file(&cache_path_clone).await {
+            //     warn!("Failed to remove incomplete cache file {}: {}", cache_path_clone.display(), e);
+            // }
         }
     });
     
@@ -2022,51 +2052,76 @@ async fn read_file_as_stream(
         };
 
     let response_content_length = Some(response_length);
+    let content_range_header_clone = content_range_header.clone(); // Clone for the task
 
     tokio::spawn(async move {
-        if start > 0 {
-            if let Err(e) = file.seek(std::io::SeekFrom::Start(start)).await {
-                error!("Failed to seek file {}: {}", path_buf.display(), e);
-                let _ = tx.send(Err(Error::Internal(format!("File seek error: {}", e)))).await;
-                return;
+        // Handle Range requests differently: read the whole range at once
+        if content_range_header_clone.is_some() { // Use the clone
+            if start > 0 {
+                if let Err(e) = file.seek(std::io::SeekFrom::Start(start)).await {
+                    error!("Failed to seek file {}: {}", path_buf.display(), e);
+                    let _ = tx.send(Err(Error::Internal(format!("File seek error: {}", e)))).await;
+                    return;
+                }
             }
-        }
-        
-        let mut buffer = vec![0; 65536]; // 64KB buffer
-        let mut remaining = response_length;
-        
-        while remaining > 0 {
-            let read_size = std::cmp::min(remaining as usize, buffer.len());
-            match file.read(&mut buffer[..read_size]).await {
-                Ok(0) => {
-                    info!("Reached EOF while serving file {} (remaining: {} bytes)", path_buf.display(), remaining);
-                    break; // EOF reached
-                },
-                Ok(n) => { // Handles n > 0
-                    let chunk = Bytes::copy_from_slice(&buffer[0..n]);
-                    remaining -= n as u64;
-                    
-                    if tx.send(Ok(chunk)).await.is_err() {
-                        warn!("Client stream receiver dropped for file {}", path_buf.display());
-                        break; // Exit loop if receiver is gone
+            
+            // Allocate buffer for the exact range size
+            let mut buffer = Vec::with_capacity(response_length as usize); // Use with_capacity
+            
+            // Create a reader limited to the exact range size
+            let mut limited_reader = file.take(response_length);
+            
+            // Read the exact range using the limited reader
+            match limited_reader.read_to_end(&mut buffer).await {
+                Ok(_) => {
+                    // Send the complete range as a single chunk
+                    if tx.send(Ok(Bytes::from(buffer))).await.is_err() {
+                        warn!("Client stream receiver dropped for file {} while sending range", path_buf.display());
                     }
+                    // Task finishes, tx is dropped, stream closes.
                 },
                 Err(e) => {
-                    let err = Error::Internal(format!("File read error for {}: {}", path_buf.display(), e));
-                    if tx.send(Err(err)).await.is_err() {
-                        warn!("Client stream receiver dropped while sending error for {}", path_buf.display());
+                    error!("Failed to read exact range for file {}: {}", path_buf.display(), e);
+                    let _ = tx.send(Err(Error::Internal(format!("File read_exact error: {}", e)))).await;
+                }
+            }
+        } else {
+            // Original streaming logic for full file requests
+            let mut buffer = vec![0; 65536]; // 64KB buffer
+            let mut remaining = response_length; // For full file, response_length == total_size
+            
+            while remaining > 0 {
+                let read_size = std::cmp::min(remaining as usize, buffer.len());
+                match file.read(&mut buffer[..read_size]).await {
+                    Ok(0) => {
+                        info!("Reached EOF while serving file {} (remaining: {} bytes)", path_buf.display(), remaining);
+                        break; // EOF reached
+                    },
+                    Ok(n) => { // Handles n > 0
+                        let chunk = Bytes::copy_from_slice(&buffer[0..n]);
+                        remaining -= n as u64;
+                        
+                        if tx.send(Ok(chunk)).await.is_err() {
+                            warn!("Client stream receiver dropped for file {}", path_buf.display());
+                            break; // Exit loop if receiver is gone
+                        }
+                    },
+                    Err(e) => {
+                        let err = Error::Internal(format!("File read error for {}: {}", path_buf.display(), e));
+                        if tx.send(Err(err)).await.is_err() {
+                            warn!("Client stream receiver dropped while sending error for {}", path_buf.display());
+                        }
+                        break; // Exit loop on read error
                     }
-                    break; // Exit loop on read error
                 }
             }
         }
         
-        // Send EOF signal after successfully sending all requested bytes or encountering an issue
-        debug!("Finished streaming range/file: {}", path_buf.display());
-        let _ = tx.send(Ok(Bytes::new())).await; 
+        // Task finishes, tx is dropped, stream closes.
+        debug!("Finished streaming task for: {}", path_buf.display());
     });
     
-    // Return the stream, the length of the *content being sent*, and the Content-Range header string
+    // Return the stream, the length of the *content being sent*, and the *original* Content-Range header string
     Ok((tokio_stream::wrappers::ReceiverStream::new(rx), response_content_length, content_range_header))
 }
 
@@ -2115,15 +2170,9 @@ fn create_streaming_response(
     let mapped_stream = stream.map(|result| {
         match result {
             Ok(bytes) => {
-                // Check if this is the empty EOF marker
-                if bytes.is_empty() {
-                    debug!("Received EOF marker, transforming to proper stream end");
-                    // Don't send empty bytes - just end the stream naturally
-                    // iPXE can get stuck if we send an empty frame
-                    return Ok(Frame::trailers(HeaderMap::new()));
-                } else {
-                    Ok(Frame::data(bytes))
-                }
+                // Removed check for empty EOF marker
+                // Simply map non-empty bytes to a data frame
+                Ok(Frame::data(bytes))
             },
             Err(e) => Err(Box::new(e) as Box<dyn std::error::Error + Send + Sync>),
         }
@@ -2144,20 +2193,25 @@ fn create_streaming_response(
         .status(status_code)
         .header(axum::http::header::CONTENT_TYPE, content_type)
         // Always accept ranges
-        .header(axum::http::header::ACCEPT_RANGES, "bytes");
-        
-    // Set Content-Encoding to identity (no compression)
-    builder = builder.header(axum::http::header::CONTENT_ENCODING, "identity");
+        .header(axum::http::header::ACCEPT_RANGES, "bytes")
+        // Always set no compression
+        .header(axum::http::header::CONTENT_ENCODING, "identity");
 
-    // Include Content-Length (length of the part being sent) if known
     if let Some(length) = content_length {
+        // If Content-Length is known, set it and DO NOT use chunked encoding.
+        // This applies to both 200 OK and 206 Partial Content.
         builder = builder.header(axum::http::header::CONTENT_LENGTH, length.to_string());
-    } else if status_code == StatusCode::OK {
-        // Only use chunked encoding for OK responses if length is truly unknown
-        builder = builder.header(axum::http::header::TRANSFER_ENCODING, "chunked");
+    } else {
+        // Only use chunked encoding if length is truly unknown (should typically only be for 200 OK).
+        // It's an error to have a 206 response without Content-Length.
+        if status_code == StatusCode::OK { 
+            builder = builder.header(axum::http::header::TRANSFER_ENCODING, "chunked");
+        } else {
+            // This case (206 without Content-Length) ideally shouldn't happen with our logic.
+            // Log a warning if it does.
+            warn!("Attempting to create 206 response without Content-Length!");
+        }
     }
-    // For 206 Partial Content, Content-Length is mandatory and should be set above.
-    // Avoid setting Transfer-Encoding: chunked for 206 responses.
     
     // Include Content-Range if it's a partial response
     if let Some(range_header_value) = content_range {
