@@ -1299,7 +1299,7 @@ async fn generate_ipxe_script(script_name: &str) -> Result<String> {
             let base_url_str = env::var("DRAGONFLY_BASE_URL")
                 .map_err(|_| {
                     error!("CRITICAL: DRAGONFLY_BASE_URL environment variable is not set. HookOS iPXE script requires this.");
-                    Error::Configuration("Server is missing required DRAGONFLY_BASE_URL configuration.".to_string())
+                    Error::Internal("Server is missing required DRAGONFLY_BASE_URL configuration.".to_string())
                 })?;
 
             // --- Derive Tinkerbell defaults from DRAGONFLY_BASE_URL ---
@@ -1402,7 +1402,7 @@ exit
             let base_url = env::var("DRAGONFLY_BASE_URL")
                 .map_err(|_| {
                     error!("CRITICAL: DRAGONFLY_BASE_URL environment variable is not set. Agent iPXE script requires this.");
-                    Error::Configuration("Server is missing required DRAGONFLY_BASE_URL configuration.".to_string())
+                    Error::Internal("Server is missing required DRAGONFLY_BASE_URL configuration.".to_string())
                 })?;
                 
             // Format the Dragonfly Agent iPXE script
