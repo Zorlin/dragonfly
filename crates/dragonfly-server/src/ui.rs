@@ -245,38 +245,34 @@ pub async fn machine_list(
     headers: HeaderMap,
     auth_session: AuthSession,
 ) -> Response {
-    // Get theme preference from cookie
     let theme = get_theme_from_cookie(&headers);
     let is_authenticated = auth_session.user.is_some();
     let is_admin = is_authenticated;
-    
-    // Check if login is required site-wide
+
     let require_login = app_state.settings.lock().await.require_login;
-    
-    // If require_login is enabled and user is not authenticated,
-    // redirect to login page
     if require_login && !is_authenticated {
         return Redirect::to("/login").into_response();
     }
-    
+
     match db::get_all_machines().await {
         Ok(machines) => {
-            // Only log if we actually have machines to report
-            if !machines.is_empty() {
-                info!("Found {} machines", machines.len());
-            }
-            
-            // Get workflow info for machines that are installing OS
             let mut workflow_infos = HashMap::new();
             for machine in &machines {
                 if machine.status == MachineStatus::InstallingOS {
-                    if let Ok(Some(info)) = crate::tinkerbell::get_workflow_info(machine).await {
-                        workflow_infos.insert(machine.id, info);
+                    match crate::tinkerbell::get_workflow_info(machine).await {
+                        Ok(Some(info)) => {
+                            workflow_infos.insert(machine.id, info);
+                        }
+                        Ok(None) => { /* No active workflow found */ }
+                        Err(e) => {
+                            error!("Error fetching workflow info for machine {}: {}", machine.id, e);
+                            // Optionally insert a default/error state info
+                        }
                     }
                 }
             }
-            
-            UiTemplate::MachineList(MachineListTemplate { 
+
+            UiTemplate::MachineList(MachineListTemplate {
                 machines,
                 theme,
                 is_authenticated,
@@ -286,9 +282,9 @@ pub async fn machine_list(
         },
         Err(e) => {
             error!("Error fetching machines for machine list page: {}", e);
-            UiTemplate::MachineList(MachineListTemplate { 
+            UiTemplate::MachineList(MachineListTemplate {
                 machines: vec![],
-                theme: "system".to_string(),
+                theme,
                 is_authenticated,
                 is_admin,
                 workflow_infos: HashMap::new(),

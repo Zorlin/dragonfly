@@ -1176,41 +1176,6 @@ async fn update_installation_progress(
     }
 }
 
-pub async fn get_machine_list(_state: State<AppState>, headers: HeaderMap) -> Response {
-    info!("Received request for machine list with headers: {:?}", headers);
-    match db::get_all_machines().await {
-        Ok(machines) => {
-            // Get workflow info for machines that are installing OS
-            let mut workflow_infos = HashMap::new();
-            for machine in &machines {
-                if machine.status == MachineStatus::InstallingOS {
-                    if let Ok(Some(info)) = crate::tinkerbell::get_workflow_info(machine).await {
-                        workflow_infos.insert(machine.id, info);
-                    }
-                }
-            }
-
-            let html = MachineListTemplate {
-                machines,
-                workflow_infos,
-                theme: crate::ui::get_theme_from_cookie(&headers),
-                is_authenticated: true, // Since this is an API endpoint, we assume auth is handled by middleware
-                is_admin: true, // Similar to is_authenticated, we assume admin auth is handled by middleware
-            }.render().unwrap_or_else(|e| {
-                error!("Failed to render machine list template: {}", e);
-                "Template error".to_string()
-            });
-
-            Html(html).into_response()
-        }
-        Err(e) => {
-            error!("Failed to get machines: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response()
-        }
-    }
-}
-
-// Add a new API route for HTMX workflow progress updates
 pub async fn get_workflow_progress(
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {

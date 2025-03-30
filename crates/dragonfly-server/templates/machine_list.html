@@ -13,12 +13,14 @@
     reimageModal: false,
     powerModal: false,
     currentMachineId: null,
-    openTagModal(id) { this.tagModal = true; this.currentMachineId = id; },
+    currentMachineName: null,
+    openTagModal(id, name) { this.tagModal = true; this.currentMachineId = id; this.currentMachineName = name; },
     openReimageModal(id) { this.reimageModal = true; this.currentMachineId = id; },
     openPowerModal(id) { this.powerModal = true; this.currentMachineId = id; },
     openDeleteModal(id) { this.deleteModal = true; this.currentMachineId = id; }
 }" x-init="window.isAuthenticated = isAuthenticated"
-   @close-tag-modal.window="tagModal = false">
+   @close-tag-modal.window="tagModal = false"
+   @close-delete-modal.window="deleteModal = false">
     <div class="sm:flex sm:items-center">
         <div class="sm:flex-auto">
             <h1 class="text-xl font-semibold text-gray-900 dark:text-white">Machines</h1>
@@ -56,6 +58,7 @@
                             id="machine-list" 
                             class="divide-y divide-gray-200 dark:divide-gray-600 bg-white dark:bg-gray-800" 
                             hx-get="/machines"
+                            hx-select="#machine-list > tr"
                             hx-target="#machine-list"
                             hx-trigger="load, refreshMachines from:body"
                             hx-swap="innerHTML transition:true"
@@ -128,7 +131,7 @@
                                                         {% endif %}
                                                     </div>
                                                     <div class="w-full bg-gray-200 rounded-full h-2 dark:bg-gray-700">
-                                                        <div class="bg-yellow-500 h-2 rounded-full dark:bg-yellow-600 workflow-progress-bar" data-machine-id="{{ machine.id }}" data-progress="{{ info.progress }}" style="width: '{{ info.progress }}%';"></div>
+                                                        <div class="bg-yellow-500 h-2 rounded-full dark:bg-yellow-600 workflow-progress-bar" data-machine-id="{{ machine.id }}" data-progress="{{ info.progress }}"></div>
                                                     </div>
                                                 </div>
                                             {% else %}
@@ -138,7 +141,19 @@
                                             {% if is_admin %} {# Wrap all actions in is_admin check #}
                                             <div class="flex space-x-1 items-center" @click.stop>
                                                 {# Common Actions - Tags #}
-                                                <button @click="openTagModal('{{ machine.id }}')" class="inline-flex items-center px-3 py-1 border border-transparent text-sm leading-5 font-medium rounded text-purple-700 bg-purple-100 hover:bg-purple-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 dark:bg-purple-900 dark:text-purple-200 dark:hover:bg-purple-800">
+                                                <button 
+                                                    @click="openTagModal(
+                                                        '{{ machine.id }}', 
+                                                        '{% if machine.hostname.is_some() %}
+                                                             {{ machine.hostname.as_ref().unwrap() }}
+                                                         {% else if machine.memorable_name.is_some() %}
+                                                             {{ machine.memorable_name.as_ref().unwrap() }}
+                                                         {% else %}
+                                                             {{ machine.id }}
+                                                         {% endif %}'
+                                                    )"
+                                                    class="inline-flex items-center px-3 py-1 border border-transparent text-sm leading-5 font-medium rounded text-purple-700 bg-purple-100 hover:bg-purple-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 dark:bg-purple-900 dark:text-purple-200 dark:hover:bg-purple-800"
+                                                >
                                                     🏷️ Tags
                                                 </button>
                                                 
@@ -240,7 +255,7 @@
             <div class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
                 <div class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6" 
                     @click.stop x-data="tagEditorData()" x-init="loadTags(currentMachineId)">
-                    <h3 class="text-lg font-medium leading-6 text-gray-900 dark:text-white mb-4" id="tag-modal-title">Edit Tags for <code x-text="currentMachineId"></code></h3>
+                    <h3 class="text-lg font-medium leading-6 text-gray-900 dark:text-white mb-4" id="tag-modal-title">Edit Tags for <code x-text="currentMachineName"></code></h3>
                     <div class="mt-2">
                         {# Display existing tags #}
                         <div class="mb-4">
@@ -423,12 +438,15 @@
         }, 250); // 250ms debounce
     }
 
-    // Handle successful HTMX requests
+    // Handle successful HTMX requests (COMMENTED OUT)
+    /*
     document.body.addEventListener('htmx:afterRequest', function(event) {
-        if (event.detail.successful && event.detail.pathInfo.requestPath !== '/api/machine-list') { // Use the correct endpoint here
+        // Path check is incorrect, and SSE handles refreshes, so disabling for now.
+        if (event.detail.successful) { // && event.detail.pathInfo.requestPath !== '/machines') { 
             debouncedRefresh();
         }
     });
+    */
 
     // Server-sent events handling
     let evtSource = null;
@@ -600,7 +618,7 @@
 
     function deleteMachine(id) {
         // Find the component controlling the delete modal *before* the fetch
-        let componentRoot = document.getElementById('delete-modal')?.closest('[x-data]');
+        // let componentRoot = document.getElementById('delete-modal')?.closest('[x-data]'); // No longer needed
 
         requireAdmin(() => {
             fetch(`/api/machines/${id}`, {
@@ -608,11 +626,11 @@
             })
             .then(response => {
                 if (response.ok) {
-                    // Close modal using the found component instance
-                    if (componentRoot && componentRoot.__x) {
-                        componentRoot.__x.data.deleteModal = false;
-                    }
-                    htmx.trigger(document.querySelector('tbody#machine-list'), 'refreshMachines'); // Target tbody more specifically
+                    // Dispatch an event to close the modal
+                    window.dispatchEvent(new CustomEvent('close-delete-modal'));
+                    
+                    // Trigger table refresh via SSE (already handled by backend event)
+                    // htmx.trigger(document.querySelector('tbody#machine-list'), 'refreshMachines'); // Redundant if SSE works
                 } else {
                     // Handle error response from server potentially
                     response.json().then(err => {
