@@ -1076,6 +1076,7 @@ dependencies = [
  "tower-sessions-sqlx-store",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
 ]
 
