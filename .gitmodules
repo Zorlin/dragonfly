@@ -1,0 +1,3 @@
+[submodule "charts"]
+	path = charts
+	url = git@github.com:Zorlin/dragonfly-charts.git
