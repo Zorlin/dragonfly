@@ -1,6 +1,6 @@
 use axum::{
     extract::{Json, Path, Form, FromRequest, State},
-    http::{StatusCode},
+    http::{StatusCode, HeaderMap, HeaderValue},
     response::{IntoResponse, Response, Html, Sse},
     response::sse::{Event, KeepAlive},
     routing::{post, get, delete, put},
@@ -28,7 +28,7 @@ use tokio::fs;
 use reqwest;
 use bytes::Bytes;
 use sha2::{Sha512, Digest};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, AsyncSeekExt};
 use http_body::Frame;
 use http_body_util::{StreamBody, Empty};
 use futures::StreamExt;
@@ -39,6 +39,7 @@ use url::Url; // Add Url import
 use tempfile::tempdir;
 use std::os::unix::fs::symlink as unix_symlink; // For creating the symlink
 use tokio::process::Command;
+use axum::http::header;
 
 pub fn api_router() -> Router<crate::AppState> {
     Router::new()
@@ -1455,7 +1456,7 @@ boot
 }
 
 // Function to serve an iPXE artifact file from a configured directory
-pub async fn serve_ipxe_artifact(Path(requested_path): Path<String>) -> Response {
+pub async fn serve_ipxe_artifact(headers: HeaderMap, Path(requested_path): Path<String>) -> Response {
     // Define constants for directories and URLs
     const DEFAULT_ARTIFACT_DIR: &str = "/var/lib/dragonfly/ipxe-artifacts";
     const ARTIFACT_DIR_ENV_VAR: &str = "DRAGONFLY_IPXE_ARTIFACT_DIR";
@@ -1505,10 +1506,10 @@ pub async fn serve_ipxe_artifact(Path(requested_path): Path<String>) -> Response
         }
         
         // Serve allowed script or binary artifact from cache using streaming
-        match read_file_as_stream(&artifact_path).await {
-            Ok(stream) => {
+        match read_file_as_stream(&artifact_path, headers.get(axum::http::header::RANGE)).await { // Pass Range header
+            Ok((stream, file_size, content_range)) => {
                 info!("Streaming cached artifact from disk: {}", requested_path);
-                return create_streaming_response(stream, content_type);
+                return create_streaming_response(stream, content_type, file_size, content_range); // Pass content_range
             },
             Err(e) => {
                 error!("Failed to stream cached iPXE artifact: {}", e);
@@ -1535,9 +1536,9 @@ pub async fn serve_ipxe_artifact(Path(requested_path): Path<String>) -> Response
             match generate_agent_apkovl(&artifact_path, &base_url, AGENT_BINARY_URL).await {
                 Ok(()) => {
                     info!("Successfully generated {}, now serving...", AGENT_APKOVL_PATH);
-                    match read_file_as_stream(&artifact_path).await {
-                        Ok(stream) => {
-                            return create_streaming_response(stream, "application/gzip");
+                    match read_file_as_stream(&artifact_path, None).await { // Pass None for range
+                        Ok((stream, file_size, _)) => { // Adjust pattern match
+                            return create_streaming_response(stream, "application/gzip", file_size, None); // Pass None for content_range
                         },
                         Err(e) => {
                             error!("Failed to stream newly generated apkovl {}: {}", AGENT_APKOVL_PATH, e);
@@ -1572,7 +1573,20 @@ pub async fn serve_ipxe_artifact(Path(requested_path): Path<String>) -> Response
                              warn!("Failed to cache generated {} script: {}", requested_path, e);
                         }
                     });
-                    return (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/plain")], script).into_response();
+                    
+                    // For iPXE scripts, let's build our own response
+                    let content_length = script.len() as u64;
+                    
+                    // Create a response that's optimized for iPXE
+                    return Response::builder()
+                        .status(StatusCode::OK)
+                        .header(axum::http::header::CONTENT_TYPE, "text/plain")
+                        .header(axum::http::header::CONTENT_LENGTH, content_length.to_string())
+                        .header(axum::http::header::CONTENT_ENCODING, "identity") // No compression
+                        .body(Body::from(script))
+                        .unwrap_or_else(|_| {
+                            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build response").into_response()
+                        });
                 },
                 Err(Error::NotFound { .. }) => {
                     warn!("IPXE script {} not found or could not be generated.", requested_path);
@@ -1585,7 +1599,7 @@ pub async fn serve_ipxe_artifact(Path(requested_path): Path<String>) -> Response
                 }
             }
             // If we fall through here, it means generate_ipxe_script returned NotFound
-        } 
+        }
         // FINALLY, assume it's a binary artifact to download/stream
         else {
             // --- Download/Stream Other Binary Artifacts ---
@@ -1604,10 +1618,10 @@ pub async fn serve_ipxe_artifact(Path(requested_path): Path<String>) -> Response
             };
             
             // Use the efficient streaming download with caching for known artifacts
-            match stream_download_with_caching(remote_url, &artifact_path).await {
-                Ok(stream) => {
+            match stream_download_with_caching(remote_url, &artifact_path, headers.get(axum::http::header::RANGE)).await { // Pass Range header
+                Ok((stream, content_length, content_range)) => {
                     info!("Streaming artifact {} from remote source", requested_path);
-                    return create_streaming_response(stream, "application/octet-stream");
+                    return create_streaming_response(stream, "application/octet-stream", content_length, content_range); // Pass content_range
                 },
                 Err(e) => {
                     error!("Failed to stream artifact {}: {}", requested_path, e);
@@ -1857,11 +1871,12 @@ async fn download_file(url: &str, dest_path: &StdPath) -> Result<()> {
     Ok(())
 }
 
-// Update stream_download_with_caching to ensure proper EOF handling
+// Update stream_download_with_caching to ensure proper EOF handling for iPXE clients
 async fn stream_download_with_caching(
     url: &str,
-    cache_path: &StdPath
-) -> Result<ReceiverStream<Result<Bytes>>> {
+    cache_path: &StdPath,
+    range_header: Option<&HeaderValue> // Add parameter for Range header
+) -> Result<(ReceiverStream<Result<Bytes>>, Option<u64>, Option<String>)> { // Return Content-Range
     // Create parent directory if needed
     if let Some(parent) = cache_path.parent() {
         fs::create_dir_all(parent).await.map_err(|e| Error::Internal(format!("Failed to create directory: {}", e)))?;
@@ -1870,7 +1885,7 @@ async fn stream_download_with_caching(
     // Check if file is already cached
     if cache_path.exists() {
         info!("Serving cached artifact from: {:?}", cache_path);
-        return read_file_as_stream(cache_path).await;
+        return read_file_as_stream(cache_path, range_header).await; // Pass Range header
     }
     
     info!("Downloading and caching artifact from: {}", url);
@@ -1899,19 +1914,11 @@ async fn stream_download_with_caching(
         // Use futures::StreamExt to handle the response body stream
         let mut stream = response.bytes_stream(); 
         let mut error_occurred = false;
-        let mut bytes_transferred: u64 = 0;
 
         while let Some(chunk_result) = stream.next().await { // Use stream.next().await
             match chunk_result { // chunk_result is Result<Bytes, reqwest::Error>
                 Ok(chunk) => {
                     let chunk_clone = chunk.clone();
-                    let chunk_size = chunk.len() as u64;
-                    bytes_transferred += chunk_size;
-                    
-                    if let Some(total) = content_length {
-                        let percent = (bytes_transferred * 100) / total;
-                        debug!("Download progress: {}% ({}/{})", percent, bytes_transferred, total);
-                    }
                     
                     let file_clone = Arc::clone(&file);
                     
@@ -1947,103 +1954,226 @@ async fn stream_download_with_caching(
             }
         }
         
-        // Send an empty chunk as EOF signal
-        if !error_occurred {
-            debug!("Download complete, sending EOF marker for {}", url_clone);
-            let _ = tx.send(Ok(Bytes::new())).await;
-            info!("Download complete and cached for {}", url_clone);
-        }
-        
-        // Ensure file is flushed and closed
+        // Ensure file is flushed and closed first
         if let Ok(mut file) = Arc::try_unwrap(file).map_err(|_| "Failed to unwrap Arc").and_then(|mutex| Ok(mutex.into_inner())) {
             if let Err(e) = file.flush().await {
                 warn!("Failed to flush cache file {}: {}", cache_path_clone.display(), e);
             }
             // File is closed when it goes out of scope
         }
+        
+        // Send an empty chunk as EOF signal (our create_streaming_response function will handle this properly)
+        if !error_occurred {
+            info!("Download complete and cached for {}", url_clone);
+            debug!("Sending EOF signal for {}", url_clone);
+            let _ = tx.send(Ok(Bytes::new())).await;
+        }
     });
     
-    Ok(tokio_stream::wrappers::ReceiverStream::new(rx))
+    // After download completes or if error, handle the stream
+    let (stream, content_length) = (tokio_stream::wrappers::ReceiverStream::new(rx), content_length);
+
+    // We cached the full file, but the *initial* request might have been a range request.
+    // If so, we need to read the *cached* file with range support now.
+    if range_header.is_some() {
+        info!("Download complete, now serving range request from cached file: {:?}", cache_path);
+        // Re-call read_file_as_stream with the range header on the now-cached file
+        read_file_as_stream(cache_path, range_header).await
+    } else {
+        // No range requested initially, return the full stream we prepared during download
+        Ok((stream, content_length, None)) // No Content-Range for full file
+    }
 }
 
 // Keep read_file_as_stream
 async fn read_file_as_stream(
-    path: &StdPath
-) -> Result<ReceiverStream<Result<Bytes>>> {
-    let file = fs::File::open(path).await.map_err(|e| Error::Internal(format!("Failed to open file {}: {}", path.display(), e)))?;
+    path: &StdPath,
+    range_header: Option<&HeaderValue> // Add parameter for Range header
+) -> Result<(ReceiverStream<Result<Bytes>>, Option<u64>, Option<String>)> { // Return size and Content-Range
+    let mut file = fs::File::open(path).await.map_err(|e| Error::Internal(format!("Failed to open file {}: {}", path.display(), e)))?; // Added mut back
     let (tx, rx) = mpsc::channel::<Result<Bytes>>(32);
     let path_buf = path.to_path_buf();
     
+    // Get total file size
+    let metadata = fs::metadata(path).await.map_err(|e| Error::Internal(format!("Failed to get metadata {}: {}", path.display(), e)))?;
+    let total_size = metadata.len();
+    
+    let (start, _end, response_length, content_range_header) = // Marked end as unused
+        if let Some(range_val) = range_header {
+            if let Ok(range_str) = range_val.to_str() {
+                if let Some((start, end)) = parse_range_header(range_str, total_size) {
+                    let length = end - start + 1;
+                    let content_range = format!("bytes {}-{}/{}", start, end, total_size);
+                    info!("Serving range request: {} for file {}", content_range, path.display());
+                    (start, end, length, Some(content_range))
+                } else {
+                    warn!("Invalid Range header format: {}", range_str);
+                    // Invalid range, serve the whole file
+                    (0, total_size.saturating_sub(1), total_size, None)
+                }
+            } else {
+                warn!("Invalid Range header value (not UTF-8)");
+                // Invalid range, serve the whole file
+                (0, total_size.saturating_sub(1), total_size, None)
+            }
+        } else {
+            // No range header, serve the whole file
+            (0, total_size.saturating_sub(1), total_size, None)
+        };
+
+    let response_content_length = Some(response_length);
+
     tokio::spawn(async move {
-        let mut file = file;
-        let mut buffer = vec![0; 65536];
+        if start > 0 {
+            if let Err(e) = file.seek(std::io::SeekFrom::Start(start)).await {
+                error!("Failed to seek file {}: {}", path_buf.display(), e);
+                let _ = tx.send(Err(Error::Internal(format!("File seek error: {}", e)))).await;
+                return;
+            }
+        }
         
-        loop {
-            match file.read(&mut buffer).await {
-                Ok(n) if n > 0 => {
-                    // Create a new chunk with exactly n bytes read
+        let mut buffer = vec![0; 65536]; // 64KB buffer
+        let mut remaining = response_length;
+        
+        while remaining > 0 {
+            let read_size = std::cmp::min(remaining as usize, buffer.len());
+            match file.read(&mut buffer[..read_size]).await {
+                Ok(0) => {
+                    info!("Reached EOF while serving file {} (remaining: {} bytes)", path_buf.display(), remaining);
+                    break; // EOF reached
+                },
+                Ok(n) => { // Handles n > 0
                     let chunk = Bytes::copy_from_slice(&buffer[0..n]);
+                    remaining -= n as u64;
                     
-                    // Send Ok(chunk) to the stream
                     if tx.send(Ok(chunk)).await.is_err() {
                         warn!("Client stream receiver dropped for file {}", path_buf.display());
-                        break;
+                        break; // Exit loop if receiver is gone
                     }
                 },
-                Ok(0) => {
-                    // Reached EOF - explicitly send an empty chunk as a final marker
-                    debug!("Reached EOF for file {}, sending final marker", path_buf.display());
-                    let _ = tx.send(Ok(Bytes::new())).await;
-                    break;
-                },
-                Ok(_) => {
-                    // This case shouldn't happen in practice, but we need to handle it for exhaustiveness
-                    debug!("Unexpected zero-byte read without EOF for file {}", path_buf.display());
-                    // Just continue the loop to try reading again
-                },
                 Err(e) => {
-                    // Send the error wrapped in our Error type
                     let err = Error::Internal(format!("File read error for {}: {}", path_buf.display(), e));
                     if tx.send(Err(err)).await.is_err() {
                         warn!("Client stream receiver dropped while sending error for {}", path_buf.display());
                     }
-                    break;
+                    break; // Exit loop on read error
                 }
             }
         }
         
-        debug!("Finished streaming file: {}", path_buf.display());
+        // Send EOF signal after successfully sending all requested bytes or encountering an issue
+        debug!("Finished streaming range/file: {}", path_buf.display());
+        let _ = tx.send(Ok(Bytes::new())).await; 
     });
     
-    Ok(tokio_stream::wrappers::ReceiverStream::new(rx))
+    // Return the stream, the length of the *content being sent*, and the Content-Range header string
+    Ok((tokio_stream::wrappers::ReceiverStream::new(rx), response_content_length, content_range_header))
 }
 
-// Keep create_streaming_response
+// Helper to parse Range header (e.g., "bytes=0-1023")
+fn parse_range_header(range_str: &str, total_size: u64) -> Option<(u64, u64)> {
+    if !range_str.starts_with("bytes=") { return None; }
+    let ranges = &range_str[6..];
+    // For now, only support single range like "0-1023" or "1024-"
+    let parts: Vec<&str> = ranges.split('-').collect();
+    if parts.len() != 2 { return None; }
+
+    let start_str = parts[0].trim();
+    let end_str = parts[1].trim();
+
+    let start = if start_str.is_empty() {
+        // Handle "bytes=-500" (last 500 bytes)
+        let len = end_str.parse::<u64>().ok()?;
+        total_size.saturating_sub(len)
+    } else {
+        start_str.parse::<u64>().ok()?
+    };
+
+    let end = if end_str.is_empty() {
+        // Handle "bytes=1024-" (from 1024 to end)
+        total_size.saturating_sub(1)
+    } else {
+        end_str.parse::<u64>().ok()?
+    };
+
+    // Validate range
+    if start > end || end >= total_size {
+        None // Invalid range
+    } else {
+        Some((start, end))
+    }
+}
+
+// Fix create_streaming_response to properly handle stream completion for iPXE clients
 fn create_streaming_response(
     stream: ReceiverStream<Result<Bytes>>,
-    content_type: &str
+    content_type: &str,
+    content_length: Option<u64>, // This is now the length of the content *being sent*
+    content_range: Option<String> // The Content-Range header value, if applicable
 ) -> Response {
     // Map the stream from Result<Bytes> to Result<Frame<Bytes>, BoxError>
     let mapped_stream = stream.map(|result| {
         match result {
-            Ok(bytes) => Ok(Frame::data(bytes)), // Wrap Ok bytes in Frame::data
+            Ok(bytes) => {
+                // Check if this is the empty EOF marker
+                if bytes.is_empty() {
+                    debug!("Received EOF marker, transforming to proper stream end");
+                    // Don't send empty bytes - just end the stream naturally
+                    // iPXE can get stuck if we send an empty frame
+                    return Ok(Frame::trailers(HeaderMap::new()));
+                } else {
+                    Ok(Frame::data(bytes))
+                }
+            },
             Err(e) => Err(Box::new(e) as Box<dyn std::error::Error + Send + Sync>),
         }
     });
+    
+    // Create a stream body with explicit end signal
     let body = StreamBody::new(mapped_stream);
     
-    // Build the response using Axum's Body::new()
-    Response::builder()
-        .status(StatusCode::OK)
+    // Determine status code based on whether it's a partial response
+    let status_code = if content_range.is_some() {
+        StatusCode::PARTIAL_CONTENT
+    } else {
+        StatusCode::OK
+    };
+    
+    // Start building the response
+    let mut builder = Response::builder()
+        .status(status_code)
         .header(axum::http::header::CONTENT_TYPE, content_type)
-        .body(Body::new(body))
+        // Always accept ranges
+        .header(axum::http::header::ACCEPT_RANGES, "bytes");
+        
+    // Remove chunked encoding if Content-Length is known (better for ranges)
+    if content_length.is_some() && content_range.is_some() {
+         builder = builder.header(axum::http::header::CONTENT_ENCODING, "identity"); // Keep no compression
+    } else {
+         // Use chunked for full file streams where length might be unknown (downloads)
+         builder = builder.header(axum::http::header::TRANSFER_ENCODING, "chunked");
+         builder = builder.header(axum::http::header::CONTENT_ENCODING, "identity"); // Keep no compression
+    }
+    
+    // Include Content-Length (length of the part being sent)
+    if let Some(length) = content_length {
+        builder = builder.header(axum::http::header::CONTENT_LENGTH, length.to_string());
+    }
+    
+    // Include Content-Range if it's a partial response
+    if let Some(range_header_value) = content_range {
+        builder = builder.header(axum::http::header::CONTENT_RANGE, range_header_value);
+    }
+    
+    // Build the final response
+    builder.body(Body::new(body))
         .unwrap_or_else(|_| {
             Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body(Body::new(Empty::new()))
                 .unwrap()
         })
-} 
+}
 
 /// Generates the localhost.apkovl.tar.gz file needed by the Dragonfly Agent iPXE script.
 async fn generate_agent_apkovl(

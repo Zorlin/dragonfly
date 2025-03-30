@@ -48,28 +48,29 @@ pub async fn run() -> anyhow::Result<()> {
     // Load historical timing data
     tinkerbell::load_historical_timings().await?;
     
-    // --- Check and Download HookOS Artifacts ---
-    info!("Checking if HookOS artifacts exist...");
-    if !api::check_hookos_artifacts().await {
-        info!("HookOS artifacts not found. Downloading HookOS artifacts...");
-        if let Err(e) = api::download_hookos_artifacts("v0.10.0").await {
-            warn!("Failed to download HookOS artifacts: {}", e);
-            // Continue startup even if download fails
+    // --- Start HookOS Artifacts Download in Background ---
+    info!("Starting HookOS artifacts check and download in background...");
+    tokio::spawn(async move {
+        // First check if artifacts exist
+        if !api::check_hookos_artifacts().await {
+            info!("HookOS artifacts not found. Downloading HookOS artifacts...");
+            match api::download_hookos_artifacts("v0.10.0").await {
+                Ok(_) => info!("HookOS artifacts downloaded successfully"),
+                Err(e) => warn!("Failed to download HookOS artifacts: {}", e),
+            }
         } else {
-            info!("HookOS artifacts downloaded successfully");
+            info!("HookOS artifacts already exist");
         }
-    } else {
-        info!("HookOS artifacts already exist");
-    }
+    });
     
-    // --- Initialize OS Templates ---
-    info!("Initializing OS templates...");
-    if let Err(e) = os_templates::init_os_templates().await {
-        warn!("Failed to initialize OS templates: {}", e);
-        // Continue startup even if template initialization fails
-    } else {
-        info!("OS templates initialized successfully");
-    }
+    // --- Start OS Templates Initialization in Background ---
+    info!("Starting OS templates initialization in background...");
+    tokio::spawn(async move {
+        match os_templates::init_os_templates().await {
+            Ok(_) => info!("OS templates initialized successfully"),
+            Err(e) => warn!("Failed to initialize OS templates: {}", e),
+        }
+    });
     
     // --- Graceful Shutdown Setup ---
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());

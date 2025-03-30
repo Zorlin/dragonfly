@@ -10,6 +10,7 @@ use tokio::fs;
 use std::env;
 use url::Url;
 use std::collections::HashMap;
+use reqwest;
 
 /// Initialize the OS templates in Kubernetes
 pub async fn init_os_templates() -> Result<()> {
@@ -43,9 +44,15 @@ fn get_base_url_without_port() -> Result<String> {
     let base_url = match env::var("DRAGONFLY_BASE_URL") {
         Ok(url) => url,
         Err(_) => {
-            // If not set, default to localhost for development
-            warn!("DRAGONFLY_BASE_URL not set, using localhost as base URL for templates");
-            "localhost".to_string()
+            // If DRAGONFLY_BASE_URL is not set, try DRAGONFLY_BASE_URL_BARE
+            match env::var("DRAGONFLY_BASE_URL_BARE") {
+                Ok(url) => url,
+                Err(_) => {
+                    // If not set, default to localhost for development
+                    warn!("Neither DRAGONFLY_BASE_URL nor DRAGONFLY_BASE_URL_BARE set, using localhost as base URL for templates");
+                    "localhost".to_string()
+                }
+            }
         }
     };
     
@@ -106,7 +113,7 @@ async fn install_template(client: &Client, template_name: &str, base_url_bare: &
 /// Install a template from a YAML file
 async fn install_template_from_file(client: &Client, template_name: &str, base_url_bare: &str) -> Result<()> {
     // Determine file paths
-    let os_templates_dir = Path::new("/opt/dragonfly/os-templates");
+    let os_templates_dir = Path::new("/var/lib/dragonfly/os-templates");
     let fallback_dir = Path::new("os-templates");
     
     let template_path = if os_templates_dir.exists() {
@@ -117,12 +124,30 @@ async fn install_template_from_file(client: &Client, template_name: &str, base_u
     
     info!("Loading template from: {:?}", template_path);
     
-    // Read the template file
+    // Try to read the template file locally first
     let template_yaml = match fs::read_to_string(&template_path).await {
         Ok(content) => content,
         Err(e) => {
-            error!("Failed to read template file {:?}: {}", template_path, e);
-            return Err(anyhow!("Failed to read template file: {}", e));
+            // If file doesn't exist locally, try downloading from GitHub
+            info!("Tried to load template from {:?}: {}", template_path, e);
+            info!("Attempting to download template from GitHub...");
+            
+            // Construct GitHub URL for the template
+            let github_url = format!(
+                "https://raw.githubusercontent.com/Zorlin/dragonfly/refs/heads/main/os-templates/{}.yml",
+                template_name
+            );
+            
+            match download_template_from_github(&github_url).await {
+                Ok(content) => {
+                    info!("Successfully downloaded template from GitHub");
+                    content
+                },
+                Err(e) => {
+                    error!("Failed to download template from GitHub: {}", e);
+                    return Err(anyhow!("Failed to read template file: {}", e));
+                }
+            }
         }
     };
     
@@ -162,19 +187,73 @@ async fn install_template_from_file(client: &Client, template_name: &str, base_u
     }
 }
 
+/// Download a template from GitHub
+async fn download_template_from_github(url: &str) -> Result<String> {
+    info!("Downloading template from: {}", url);
+    
+    let response = reqwest::get(url).await
+        .map_err(|e| anyhow!("Failed to send request to GitHub: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(anyhow!("Failed to download template, status: {}", response.status()));
+    }
+    
+    let content = response.text().await
+        .map_err(|e| anyhow!("Failed to read response body: {}", e))?;
+    
+    // Extract template name from the URL to use for saving
+    let template_name = url.split('/').last().unwrap_or("unknown.yml");
+    
+    // Try to save the template to the filesystem for future use
+    save_template_to_filesystem(template_name, &content).await?;
+    
+    Ok(content)
+}
+
+/// Save a downloaded template to the filesystem
+async fn save_template_to_filesystem(template_name: &str, content: &str) -> Result<()> {
+    // Create directory structure if it doesn't exist
+    let fallback_dir = Path::new("os-templates");
+    if !fallback_dir.exists() {
+        match fs::create_dir_all(fallback_dir).await {
+            Ok(_) => info!("Created directory: {:?}", fallback_dir),
+            Err(e) => {
+                warn!("Failed to create directory {:?}: {}", fallback_dir, e);
+                return Ok(());  // Continue even if we can't save the template
+            }
+        }
+    }
+    
+    // Save the template file
+    let template_path = fallback_dir.join(template_name);
+    match fs::write(&template_path, content).await {
+        Ok(_) => {
+            info!("Saved template to: {:?}", template_path);
+            Ok(())
+        },
+        Err(e) => {
+            warn!("Failed to save template to {:?}: {}", template_path, e);
+            Ok(())  // Continue even if we can't save the template
+        }
+    }
+}
+
 /// Fix the metadata_urls in the template YAML to work with the correct port
 fn fix_metadata_urls(yaml: &str, base_url_bare: &str) -> String {
-    // Replace {{ base_url }} with {{ base_url_bare }} in the metadata_urls line
+    // Replace both {{ base_url }} and {{ base_url_bare }} with the actual base_url_bare value
     // to ensure the port will be correctly appended
     let replacement_vars = HashMap::from([
+        // Use the same base_url_bare for both placeholders
         ("base_url".to_string(), base_url_bare.to_string()),
+        ("base_url_bare".to_string(), base_url_bare.to_string()),
     ]);
     
-    // In a more complex case, we might need to parse and modify the YAML structure,
-    // but for now a simple replacement should work since we just have a bare URL.
     let mut result = yaml.to_string();
     for (key, value) in replacement_vars {
-        result = result.replace(&format!("{{ {} }}", key), &value);
+        // Ensure the value used for replacement doesn't have surrounding braces
+        let clean_value = value.trim_start_matches('{').trim_end_matches('}');
+        // Replace the template placeholder (e.g., "{{ base_url_bare }}") with the cleaned value
+        result = result.replace(&format!("{{{{ {} }}}}", key), clean_value);
     }
     
     result
