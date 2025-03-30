@@ -43,12 +43,11 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     
-    // Initialize tracing with a cleaner format (no timestamps)
+    // Initialize tracing with a cleaner format
     let log_level = if cli.verbose { Level::DEBUG } else { Level::INFO };
     
     fmt()
         .with_max_level(log_level)
-        .without_time() // Remove timestamps
         .with_target(false) // Hide target module path
         .with_writer(std::io::stdout) // Write to stdout
         .init();
