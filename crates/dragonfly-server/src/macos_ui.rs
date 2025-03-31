@@ -108,50 +108,8 @@ class StatusBarController {{
     }}
     
     @objc func quitApp() {{
-        // Create a more robust approach to quit all Dragonfly processes
         print("Quitting Dragonfly...")
-        
-        let cleanupTask = {{
-            // Run all termination logic here
-            
-            // First attempt to signal dragonfly processes to exit gracefully
-            let mainTask = Process()
-            mainTask.launchPath = "/usr/bin/pkill"
-            mainTask.arguments = ["-f", "dragonfly"]
-            try? mainTask.run()
-            
-            // Wait a moment for graceful shutdown
-            Thread.sleep(forTimeInterval: 0.5)
-            
-            // Try to forcefully kill any remaining processes
-            let forceTask = Process()
-            forceTask.launchPath = "/usr/bin/pkill"
-            forceTask.arguments = ["-9", "-f", "dragonfly"]
-            try? forceTask.run()
-            
-            // Also kill any Swift UI processes we created
-            let uiTask = Process()
-            uiTask.launchPath = "/usr/bin/pkill"
-            uiTask.arguments = ["-f", "dragonfly_status_bar.swift"]
-            try? uiTask.run()
-            
-            // Finally try to kill any processes using port 3000
-            let portTask = Process()
-            portTask.launchPath = "/bin/sh"
-            portTask.arguments = ["-c", "lsof -i:3000 -t | xargs kill -9 >/dev/null 2>&1 || true"]
-            try? portTask.run()
-        }}
-        
-        // Run the cleanup in a background thread
-        DispatchQueue.global(qos: .userInitiated).async {{
-            // Run cleanup
-            cleanupTask()
-            
-            // Exit the app after a short delay
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {{
-                NSApplication.shared.terminate(nil)
-            }}
-        }}
+        exit(0) // Directly exit with success code
     }}
 }}
 
@@ -179,40 +137,8 @@ app.run()
     match spawn_result {
         Ok(output) => {
             info!("macOS status bar icon launched with PID: {:?}", output.id());
-
-            // Check if the Swift process is actually running after a short delay
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-            
-            let check_pid = Command::new("pgrep")
-                .args(["-f", "dragonfly_status_bar.swift"])
-                .output();
-            
-            match check_pid {
-                Ok(output) if output.status.success() && !output.stdout.is_empty() => {
-                    // Process is running, set up cleanup on shutdown
-                    let mut shutdown_rx = shutdown_tx.subscribe();
-                    tokio::spawn(async move {
-                        // Wait for shutdown signal
-                        let _ = shutdown_rx.changed().await;
-                        
-                        // Clean up by killing the Swift app
-                        let _ = Command::new("pkill")
-                            .args(["-f", "dragonfly_status_bar.swift"])
-                            .output();
-                            
-                        // Remove the Swift file
-                        let _ = tokio::fs::remove_file(swift_path).await;
-                    });
-                    
-                    Ok(())
-                },
-                _ => {
-                    // Reset the initialized flag so we can try again next time
-                    INITIALIZED.store(false, Ordering::SeqCst);
-                    warn!("macOS status bar icon process started but exited immediately");
-                    Err(anyhow::anyhow!("Status bar process exited immediately after launch"))
-                }
-            }
+            // Don't bother with complex PID tracking and cleanup on shutdown
+            Ok(())
         },
         Err(e) => {
             // Reset the initialized flag so we can try again next time

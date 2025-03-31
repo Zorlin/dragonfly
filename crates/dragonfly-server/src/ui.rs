@@ -560,80 +560,92 @@ pub async fn update_settings(
     mut auth_session: AuthSession,
     Form(form): Form<SettingsForm>,
 ) -> Response {
-    // Require admin authentication
-    if let Err(response) = auth::require_admin(&auth_session) {
-        return response;
+    let is_authenticated = auth_session.user.is_some();
+    let theme = form.theme.clone();
+    
+    // Only require admin authentication for admin settings
+    // If trying to change admin settings but not authenticated, redirect to login
+    if (form.require_login.is_some() || 
+        form.default_os.is_some() || 
+        form.username.is_some() || 
+        form.admin_password.is_some() || 
+        form.password_confirm.is_some() ||
+        form.setup_completed.is_some()) && !is_authenticated {
+        return Redirect::to("/login").into_response();
     }
 
-    // Load current settings to get existing setup_completed value
-    let current_settings = match get_app_settings().await {
-        Ok(settings) => settings,
-        Err(e) => {
-            error!("Failed to load current settings: {}", e);
-            // Return an error response or use defaults
-            Settings::default()
+    // Only update admin settings if user is authenticated
+    if is_authenticated {
+        // Load current settings to get existing setup_completed value
+        let current_settings = match get_app_settings().await {
+            Ok(settings) => settings,
+            Err(e) => {
+                error!("Failed to load current settings: {}", e);
+                // Return an error response or use defaults
+                Settings::default()
+            }
+        };
+
+        // Construct the new settings, preserving existing setup_completed
+        let new_settings = Settings {
+            require_login: form.require_login.is_some(),
+            // Handle optional default_os correctly by filtering out empty strings
+            default_os: form.default_os.filter(|os| !os.is_empty()),
+            // Use the setup_completed value from the form if present (checkbox is checked),
+            // otherwise keep the current value from the database.
+            setup_completed: form.setup_completed.is_some().then_some(true).unwrap_or(current_settings.setup_completed),
+        };
+
+        // Save the general settings
+        if let Err(e) = save_app_settings(&new_settings).await {
+            error!("Failed to save settings: {}", e);
+            // Handle error, maybe return an error message to the user
+            // For now, just log and continue
         }
-    };
 
-    // Construct the new settings, preserving existing setup_completed
-    let new_settings = Settings {
-        require_login: form.require_login.is_some(),
-        // Handle optional default_os correctly by filtering out empty strings
-        default_os: form.default_os.filter(|os| !os.is_empty()),
-        // Use the setup_completed value from the form if present (checkbox is checked),
-        // otherwise keep the current value from the database.
-        setup_completed: form.setup_completed.is_some().then_some(true).unwrap_or(current_settings.setup_completed),
-    };
-
-    // Save the general settings
-    if let Err(e) = save_app_settings(&new_settings).await {
-        error!("Failed to save settings: {}", e);
-        // Handle error, maybe return an error message to the user
-        // For now, just log and continue
-    }
-
-    // Update admin password if provided and confirmed
-    // Check form.admin_password instead of form.password
-    if let (Some(password), Some(confirm)) = (&form.admin_password, &form.password_confirm) {
-        if !password.is_empty() && password == confirm {
-            // Load current credentials to get username (or use default 'admin')
-            let username = match auth::load_credentials().await {
-                Ok(creds) => creds.username,
-                Err(_) => {
-                    warn!("Could not load current credentials, defaulting username to 'admin' for password change.");
-                    "admin".to_string()
-                }
-            };
-
-            // Hash the new password
-            match Credentials::create(username, password.clone()) {
-                Ok(new_creds) => {
-                    if let Err(e) = auth::save_credentials(&new_creds).await {
-                        error!("Failed to save new admin password: {}", e);
-                        // Handle credential saving error
-                    } else {
-                        // Password updated successfully, delete initial password file if it exists
-                        if std::path::Path::new("initial_password.txt").exists() {
-                            if let Err(e) = std::fs::remove_file("initial_password.txt") {
-                                warn!("Failed to remove initial_password.txt: {}", e);
-                            }
-                        }
-                        // Force logout after password change
-                        let _ = auth_session.logout().await;
-                        return Redirect::to("/login?message=password_updated").into_response();
+        // Update admin password if provided and confirmed
+        // Check form.admin_password instead of form.password
+        if let (Some(password), Some(confirm)) = (&form.admin_password, &form.password_confirm) {
+            if !password.is_empty() && password == confirm {
+                // Load current credentials to get username (or use default 'admin')
+                let username = match auth::load_credentials().await {
+                    Ok(creds) => creds.username,
+                    Err(_) => {
+                        warn!("Could not load current credentials, defaulting username to 'admin' for password change.");
+                        "admin".to_string()
                     }
-                }
-                Err(e) => {
-                    error!("Failed to hash new password: {}", e);
-                    // Handle hashing error (e.g., display message to user)
+                };
+
+                // Hash the new password
+                match Credentials::create(username, password.clone()) {
+                    Ok(new_creds) => {
+                        if let Err(e) = auth::save_credentials(&new_creds).await {
+                            error!("Failed to save new admin password: {}", e);
+                            // Handle credential saving error
+                        } else {
+                            // Password updated successfully, delete initial password file if it exists
+                            if std::path::Path::new("initial_password.txt").exists() {
+                                if let Err(e) = std::fs::remove_file("initial_password.txt") {
+                                    warn!("Failed to remove initial_password.txt: {}", e);
+                                }
+                            }
+                            // Force logout after password change
+                            let _ = auth_session.logout().await;
+                            return Redirect::to("/login?message=password_updated").into_response();
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to hash new password: {}", e);
+                        // Handle hashing error (e.g., display message to user)
+                    }
                 }
             }
         }
     }
 
-    // --- Add theme cookie setting logic back --- 
+    // Theme can be updated by all users (even non-authenticated)
     // Create cookie with proper builder pattern
-    let mut cookie = Cookie::new("dragonfly_theme", form.theme);
+    let mut cookie = Cookie::new("dragonfly_theme", theme);
     cookie.set_path("/");
     cookie.set_max_age(time::Duration::days(365));
     cookie.set_same_site(SameSite::Lax);

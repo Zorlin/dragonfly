@@ -28,10 +28,6 @@ struct Cli {
     /// Verbose output - shows more detailed logs
     #[arg(short, long, default_value_t = false)]
     verbose: bool,
-    
-    /// Run in foreground instead of daemonizing
-    #[arg(long, default_value_t = false)]
-    foreground: bool,
 }
 
 // Define the subcommands
@@ -50,11 +46,7 @@ enum Commands {
 // Placeholder arguments for Server (can be empty if no args needed yet)
 // This could eventually move to `src/cmd/server.rs` if server logic is extracted
 #[derive(Parser, Debug)]
-struct ServerArgs {
-    /// Run in foreground instead of daemonizing
-    #[arg(short, long)]
-    foreground: bool,
-}
+struct ServerArgs {}
 
 // Setup command arguments (empty for now)
 #[derive(Parser, Debug)]
@@ -152,45 +144,37 @@ async fn main() -> Result<()> {
             // Check if we're running in service mode from the environment variable
             let service_mode = std::env::var("DRAGONFLY_SERVICE").is_ok();
             
-            let foreground = if let Some(Commands::Server(server_args)) = &cli.command {
-                server_args.foreground || cli.foreground
-            } else {
-                cli.foreground
-            };
-            
             // If in service mode, we were started by systemd/launchd, no need to check for mode
             if service_mode {
                 info!("Starting Dragonfly server in service mode with PID {}...", std::process::id());
             } else {
-                info!("Starting Dragonfly server in foreground mode...");
+                info!("Starting Dragonfly server...");
                 
                 // Check if a mode is already set - if so, start the service instead
-                if !foreground {
-                    match dragonfly_server::mode::get_current_mode().await {
-                        Ok(Some(mode)) => {
-                            // A mode is already configured, we should start the service
-                            info!("Deployment mode {} detected, starting service...", mode.as_str());
-                            
-                            if cfg!(unix) {
-                                // Start the service through the service manager
-                                if let Err(e) = dragonfly_server::mode::start_service() {
-                                    error!("Failed to start service: {:#}", e);
-                                    eprintln!("Error starting service: {}", e);
-                                    std::process::exit(1);
-                                }
-                                // If the start_service function returns, that means it failed
-                                // and we should continue running in foreground as fallback
-                                warn!("Continuing in foreground mode as fallback");
-                            } else {
-                                info!("Service management is not supported on this platform. Running in foreground...");
+                match dragonfly_server::mode::get_current_mode().await {
+                    Ok(Some(mode)) => {
+                        // A mode is already configured, we should start the service
+                        info!("Deployment mode {} detected, starting service...", mode.as_str());
+                        
+                        if cfg!(unix) {
+                            // Start the service through the service manager
+                            if let Err(e) = dragonfly_server::mode::start_service() {
+                                error!("Failed to start service: {:#}", e);
+                                eprintln!("Error starting service: {}", e);
+                                std::process::exit(1);
                             }
-                        },
-                        Ok(None) => {
-                            info!("No deployment mode configured, running in foreground");
-                        },
-                        Err(e) => {
-                            warn!("Failed to check deployment mode: {}, running in foreground", e);
+                            // If the start_service function returns, that means it failed
+                            // and we should continue running as fallback
+                            warn!("Continuing as fallback");
+                        } else {
+                            info!("Service management is not supported on this platform");
                         }
+                    },
+                    Ok(None) => {
+                        info!("No deployment mode configured");
+                    },
+                    Err(e) => {
+                        warn!("Failed to check deployment mode: {}", e);
                     }
                 }
             }

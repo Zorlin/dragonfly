@@ -6,6 +6,7 @@
     <title>{% block title %}Dragonfly{% endblock %}</title>
     <!-- Add favicon -->
     <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <!-- Theme initialization script (improved) -->
     <script>
         (function() {
             // Get the server-provided theme first, then fallback to localStorage, then system
@@ -30,7 +31,7 @@
     <script>
         // Immediately set theme before any rendering occurs
         (function() {
-            const theme = '{{ theme }}' || localStorage.getItem('theme') || 'system';
+            const theme = ('{{ theme }}' !== '') ? '{{ theme }}' : (localStorage.getItem('theme') || 'system');
             const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
             
             // Remove dark class first to ensure clean state
@@ -41,7 +42,11 @@
                 document.documentElement.classList.add('dark');
             }
             
-            // Store the current theme style to prevent flashing
+            // Also set the data-theme attribute
+            document.documentElement.setAttribute('data-theme', theme);
+            
+            // Make the page visible now that theme is applied
+            document.documentElement.classList.remove('no-js');
             document.documentElement.style.display = 'block';
         })();
     </script>
@@ -53,8 +58,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-    <!-- Remove CDN version and use the local styles.css file with Tailwind classes -->
-    <link rel="stylesheet" href="/static/css/tailwind.min.css">
+    <!-- Tailwind CSS - Use the compiled version -->
+    <link rel="stylesheet" href="/static/css/tailwind.css">
     <link rel="stylesheet" href="/static/styles.css">
     {% block head %}{% endblock %}
     <style>
@@ -317,46 +322,65 @@
     statusModal: false,
     deleteModal: false,
     currentMachine: null,
-    theme: '{{ theme }}' || localStorage.getItem('theme') || 'system',
-    isDark: false,
+    theme: ('{{ theme }}' !== '') ? '{{ theme }}' : (localStorage.getItem('theme') || 'system'),
+    isDark: document.documentElement.classList.contains('dark'),
     setTheme(value) {
+        console.log('[setTheme] Called with value:', value);
         this.theme = value;
         localStorage.setItem('theme', value);
         this.applyTheme();
         
         // Save the theme preference on the server
+        console.log('[setTheme] Fetching /theme/toggle');
         fetch(`/theme/toggle?theme=${value}&return_to=${window.location.pathname}`);
+        console.log('[setTheme] Finished');
     },
     toggleTheme() {
-        // Toggle between light, dark, and system
+        console.log('[toggleTheme] Called. Current theme:', this.theme);
+        // Toggle between light and dark only
         if (this.theme === 'light') {
             this.setTheme('dark');
-        } else if (this.theme === 'dark') {
-            this.setTheme('system');
         } else {
             this.setTheme('light');
         }
+        console.log('[toggleTheme] Finished. New theme:', this.theme);
     },
     applyTheme() {
+        console.log('[applyTheme] Called. Current theme:', this.theme);
         const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-        this.isDark = this.theme === 'dark' || (this.theme === 'system' && prefersDark);
         
+        // Determine if dark mode should be applied
+        this.isDark = this.theme === 'dark' || (this.theme === 'system' && prefersDark);
+        console.log('[applyTheme] isDark set to:', this.isDark);
+        
+        // Add or remove the .dark class based on the final decision
         if (this.isDark) {
             document.documentElement.classList.add('dark');
+            console.log('[applyTheme] Added dark class');
         } else {
             document.documentElement.classList.remove('dark');
+            console.log('[applyTheme] Removed dark class');
         }
+        
+        // Also update the data-theme attribute for consistency
+        document.documentElement.setAttribute('data-theme', this.theme);
+        console.log('[applyTheme] Set data-theme to:', this.theme);
+        console.log('[applyTheme] Finished');
     },
     init() {
+        console.log('[init] Alpine component initializing...');
         // Apply theme on page load
         this.applyTheme();
         
         // Watch for system preference changes
         window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+            console.log('[init] System color scheme changed.');
             if (this.theme === 'system') {
+                console.log('[init] Theme is system, reapplying.');
                 this.applyTheme();
             }
         });
+        console.log('[init] Alpine component initialized.');
     }
 }">
     <div x-data="machineActions" class="flex-grow">
@@ -420,7 +444,7 @@
                         {% else %}
                         <a href="/login" class="ml-4 inline-flex items-center p-2 text-gray-500 dark:text-gray-300 hover:text-gray-700 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-900 rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
                             <svg class="h-5 w-5 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" />
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
                             </svg>
                             <span class="text-sm font-medium">Login</span>
                         </a>
@@ -601,32 +625,6 @@
     </footer>
 
     <script>
-        // Ensure dark mode is properly applied on page load
-        document.addEventListener("DOMContentLoaded", function() {
-            const theme = '{{ theme }}' || localStorage.getItem('theme') || 'system';
-            document.documentElement.setAttribute('data-theme', theme);
-            
-            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-            const shouldBeDark = theme === 'dark' || (theme === 'system' && prefersDark);
-            
-            if (shouldBeDark) {
-                document.documentElement.classList.add('dark');
-            } else {
-                document.documentElement.classList.remove('dark');
-            }
-            
-            // Watch for system preference changes
-            window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
-                if (theme === 'system') {
-                    if (e.matches) {
-                        document.documentElement.classList.add('dark');
-                    } else {
-                        document.documentElement.classList.remove('dark');
-                    }
-                }
-            });
-        });
-        
         // Handoff detection mechanism - Retries if server is temporarily unavailable during handoff
         function checkHeartbeat() {
             fetch("/api/heartbeat", { method: "HEAD" })
@@ -657,6 +655,23 @@
         
         // Don't immediately check when the page loads
         // document.addEventListener("DOMContentLoaded", checkHeartbeat);
+    </script>
+    
+    <script>
+        // Minimal listener for system theme changes when theme="system"
+        document.addEventListener("DOMContentLoaded", function() {
+            window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+                const currentTheme = document.documentElement.getAttribute('data-theme') || localStorage.getItem('theme') || 'system';
+                if (currentTheme === 'system') {
+                    console.log('[System Listener] System preference changed, applying.');
+                    if (e.matches) {
+                        document.documentElement.classList.add('dark');
+                    } else {
+                        document.documentElement.classList.remove('dark');
+                    }
+                }
+            });
+        });
     </script>
 </body>
 </html>

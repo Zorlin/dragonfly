@@ -68,58 +68,13 @@ pub struct AppState {
 
 // Clean up any existing processes
 async fn cleanup_existing_processes() {
-    info!("Checking for existing Dragonfly processes");
-    
-    // Check for processes using port 3000
-    let lsof_output = Command::new("lsof")
-        .args(["-i:3000", "-t"])
-        .output();
-    
-    if let Ok(output) = lsof_output {
-        if output.status.success() && !output.stdout.is_empty() {
-            info!("Found existing process on port 3000, attempting to terminate");
-            
-            // Get the PID as a string
-            let pid = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            
-            // Try to terminate gracefully first
-            let _ = Command::new("kill")
-                .arg(&pid)
-                .output();
-                
-            // Wait a moment for graceful shutdown
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-            
-            // Check if it's still running
-            let check_output = Command::new("lsof")
-                .args(["-i:3000", "-t"])
-                .output();
-                
-            if let Ok(check) = check_output {
-                if check.status.success() && !check.stdout.is_empty() {
-                    // Force kill if still running
-                    info!("Process still running, forcing termination");
-                    let _ = Command::new("kill")
-                        .args(["-9", &pid])
-                        .output();
-                }
-            }
-        }
-    }
-    
-    // Clean up any Swift UI processes
-    #[cfg(target_os = "macos")]
-    {
-        let _ = Command::new("pkill")
-            .args(["-f", "dragonfly_status_bar.swift"])
-            .output();
-    }
+    // No complex process handling - removed
 }
 
 pub async fn run() -> anyhow::Result<()> {
-    // Clean up any existing processes
-    cleanup_existing_processes().await;
-
+    // Remove the cleanup function call
+    // Setup rest of application normally
+    
     // Initialize the database 
     let db_pool = init_db().await?;
     
@@ -128,8 +83,6 @@ pub async fn run() -> anyhow::Result<()> {
     
     // Load historical timing data
     tinkerbell::load_historical_timings().await?;
-    
-    // Remove automatic HookOS download at startup - we'll do this when the user selects Flight mode
     
     // --- Start OS Templates Initialization in Background ---
     info!("Starting OS templates initialization in background...");
@@ -420,7 +373,7 @@ pub async fn run() -> anyhow::Result<()> {
     
     info!("Dragonfly server listening on http://{}", listener.local_addr().context("Failed to get local address")?);
 
-    // Define the shutdown signal future
+    // Define the shutdown signal future - simplified
     let shutdown_signal = async move {
         let ctrl_c = async {
             tokio::signal::ctrl_c().await
@@ -440,10 +393,12 @@ pub async fn run() -> anyhow::Result<()> {
 
         tokio::select! {
             _ = ctrl_c => {
-                 info!("Received SIGINT (Ctrl+C), initiating shutdown...");
+                 info!("Received SIGINT (Ctrl+C), exiting immediately");
+                 std::process::exit(0);
             },
             _ = terminate => {
-                 info!("Received SIGTERM, initiating shutdown...");
+                 info!("Received SIGTERM, exiting immediately");
+                 std::process::exit(0);
             },
             // Add a case for SIGUSR1 (handoff signal)
             _ = async {
@@ -458,15 +413,9 @@ pub async fn run() -> anyhow::Result<()> {
                 }
             } => {
                 info!("Initiating handoff based on SIGUSR1 signal");
+                std::process::exit(0);
             }
         }
-
-        // Signal all subsystems to shut down
-        let _ = shutdown_tx.send(());
-        info!("Shutdown signal sent to all subsystems");
-        
-        // Short delay to ensure cleanup tasks can run
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     };
 
     // Start the server with graceful shutdown
@@ -475,8 +424,7 @@ pub async fn run() -> anyhow::Result<()> {
         .await
         .context("Server error")?;
 
-    // Clean up at exit
-    cleanup_existing_processes().await;
+    // Remove cleanup at exit
     
     // Final cleanup message
     info!("Shutdown complete");
