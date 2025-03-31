@@ -18,7 +18,7 @@ static DB_POOL: OnceCell<Pool<Sqlite>> = OnceCell::const_new();
 // Initialize the database connection pool
 pub async fn init_db() -> Result<SqlitePool> {
     // Create or open the SQLite database file
-    let db_path = "sqlite.db";
+    let db_path = "/var/lib/dragonfly/sqlite.db";
     
     // Check if the database file exists and create it if not
     if !Path::new(db_path).exists() {
@@ -928,6 +928,42 @@ async fn migrate_db(pool: &Pool<Sqlite>) -> Result<()> {
         }
     }
     
+    // Check if setup_completed column exists in app_settings table
+    let result = sqlx::query(
+        r#"
+        SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='app_settings'
+        "#,
+    )
+    .fetch_one(pool)
+    .await?;
+    
+    let table_exists: i64 = result.get(0);
+    
+    if table_exists > 0 {
+        // Check if setup_completed column exists
+        let result = sqlx::query(
+            r#"
+            SELECT COUNT(*) AS count FROM pragma_table_info('app_settings') WHERE name = 'setup_completed'
+            "#,
+        )
+        .fetch_one(pool)
+        .await?;
+        
+        let column_exists: i64 = result.get(0);
+        
+        // Add setup_completed column if it doesn't exist
+        if column_exists == 0 {
+            info!("Adding setup_completed column to app_settings table");
+            sqlx::query(
+                r#"
+                ALTER TABLE app_settings ADD COLUMN setup_completed BOOLEAN NOT NULL DEFAULT 0
+                "#,
+            )
+            .execute(pool)
+            .await?;
+        }
+    }
+    
     Ok(())
 }
 
@@ -1059,6 +1095,7 @@ pub async fn get_app_settings() -> Result<Settings> {
             id INTEGER PRIMARY KEY CHECK (id = 1), -- Only one settings record allowed
             require_login BOOLEAN NOT NULL,
             default_os TEXT,
+            setup_completed BOOLEAN NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
@@ -1070,7 +1107,7 @@ pub async fn get_app_settings() -> Result<Settings> {
     // Try to get settings
     let row = sqlx::query(
         r#"
-        SELECT require_login, default_os FROM app_settings WHERE id = 1
+        SELECT require_login, default_os, setup_completed FROM app_settings WHERE id = 1
         "#,
     )
     .fetch_optional(pool)
@@ -1079,10 +1116,12 @@ pub async fn get_app_settings() -> Result<Settings> {
     if let Some(row) = row {
         let require_login: bool = row.get(0);
         let default_os: Option<String> = row.get(1);
+        let setup_completed: bool = row.try_get(2).unwrap_or(false);
         
         Ok(Settings {
             require_login,
             default_os,
+            setup_completed,
         })
     } else {
         // No settings found, insert default settings
@@ -1092,12 +1131,13 @@ pub async fn get_app_settings() -> Result<Settings> {
         
         sqlx::query(
             r#"
-            INSERT INTO app_settings (id, require_login, default_os, created_at, updated_at)
-            VALUES (1, ?, ?, ?, ?)
+            INSERT INTO app_settings (id, require_login, default_os, setup_completed, created_at, updated_at)
+            VALUES (1, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(default_settings.require_login)
         .bind(&default_settings.default_os)
+        .bind(default_settings.setup_completed)
         .bind(&now_str)
         .bind(&now_str)
         .execute(pool)
@@ -1116,16 +1156,18 @@ pub async fn save_app_settings(settings: &Settings) -> Result<()> {
     // Update existing settings or insert if they don't exist (upsert pattern)
     sqlx::query(
         r#"
-        INSERT INTO app_settings (id, require_login, default_os, created_at, updated_at)
-        VALUES (1, ?, ?, ?, ?)
+        INSERT INTO app_settings (id, require_login, default_os, setup_completed, created_at, updated_at)
+        VALUES (1, ?, ?, ?, ?, ?)
         ON CONFLICT (id) DO UPDATE SET
         require_login = excluded.require_login,
         default_os = excluded.default_os,
+        setup_completed = excluded.setup_completed,
         updated_at = excluded.updated_at
         "#,
     )
     .bind(settings.require_login)
     .bind(&settings.default_os)
+    .bind(settings.setup_completed)
     .bind(&now_str)
     .bind(&now_str)
     .execute(pool)
@@ -1550,4 +1592,99 @@ pub async fn update_machine_tags(id: &Uuid, tags: &[String]) -> Result<bool> {
     Ok(true) // Assume success for now
 }
 
-// ---- END TAGS FUNCTIONS ---- 
+// ---- END TAGS FUNCTIONS ----
+
+// Update setup completion status
+pub async fn mark_setup_completed(completed: bool) -> Result<()> {
+    let pool = get_pool().await?;
+    let now = Utc::now();
+    let now_str = now.to_rfc3339();
+    
+    // First make sure the settings table exists
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS app_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            require_login BOOLEAN NOT NULL DEFAULT 0,
+            default_os TEXT,
+            setup_completed BOOLEAN NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+    
+    // Check if settings record exists
+    let result = sqlx::query("SELECT COUNT(*) FROM app_settings WHERE id = 1")
+        .fetch_one(pool)
+        .await?;
+    
+    let count: i64 = result.get(0);
+    
+    if count > 0 {
+        // Update existing record
+        sqlx::query(
+            r#"
+            UPDATE app_settings 
+            SET setup_completed = ?, updated_at = ?
+            WHERE id = 1
+            "#,
+        )
+        .bind(completed)
+        .bind(&now_str)
+        .execute(pool)
+        .await?;
+    } else {
+        // Create a new record with default values and the specified setup_completed
+        sqlx::query(
+            r#"
+            INSERT INTO app_settings (id, require_login, default_os, setup_completed, created_at, updated_at)
+            VALUES (1, 0, NULL, ?, ?, ?)
+            "#,
+        )
+        .bind(completed)
+        .bind(&now_str)
+        .bind(&now_str)
+        .execute(pool)
+        .await?;
+    }
+    
+    info!("Setup completion status set to: {}", completed);
+    Ok(())
+}
+
+// Check if setup has been completed
+pub async fn is_setup_completed() -> Result<bool> {
+    let pool = get_pool().await?;
+    
+    // First make sure the settings table exists
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS app_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            require_login BOOLEAN NOT NULL DEFAULT 0,
+            default_os TEXT,
+            setup_completed BOOLEAN NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+    
+    // Try to get the setup_completed value
+    let result = sqlx::query("SELECT setup_completed FROM app_settings WHERE id = 1")
+        .fetch_optional(pool)
+        .await?;
+    
+    if let Some(row) = result {
+        let completed: bool = row.get(0);
+        Ok(completed)
+    } else {
+        // No settings found, setup is not completed
+        Ok(false)
+    }
+} 

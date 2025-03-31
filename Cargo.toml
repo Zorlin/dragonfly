@@ -74,6 +74,8 @@ color-eyre = "0.6.3"
 ipnetwork = "0.20.0"
 libc = "0.2.155"
 network-interface = "1.1.0"
+systemfd = "0.4.6"
+listenfd = "1.0.1"
 
 [dev-dependencies]
 tokio-test = "0.4"

@@ -101,7 +101,7 @@
         }
     </style>
 </head>
-<body class="bg-gray-100 dark:bg-[#0d1117] flex flex-col min-h-screen" x-data="{
+<body class="bg-gray-100 dark:bg-[#0A0B10] flex flex-col min-h-screen" x-data="{
     settingsOpen: false,
     osModal: false,
     statusModal: false,
@@ -117,6 +117,16 @@
         // Save the theme preference on the server
         fetch(`/theme/toggle?theme=${value}&return_to=${window.location.pathname}`);
     },
+    toggleTheme() {
+        // Toggle between light, dark, and system
+        if (this.theme === 'light') {
+            this.setTheme('dark');
+        } else if (this.theme === 'dark') {
+            this.setTheme('system');
+        } else {
+            this.setTheme('light');
+        }
+    },
     applyTheme() {
         const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
         this.isDark = this.theme === 'dark' || (this.theme === 'system' && prefersDark);
@@ -131,9 +141,6 @@
         // Apply theme on page load
         this.applyTheme();
         
-        // Watch for theme changes
-        this.$watch('theme', () => this.setTheme(this.theme));
-        
         // Watch for system preference changes
         window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
             if (this.theme === 'system') {
@@ -143,7 +150,7 @@
     }
 }">
     <div x-data="machineActions" class="flex-grow">
-        <nav class="bg-white dark:bg-gray-800 shadow-lg border-b border-transparent dark:border-gray-700 transition-colors duration-200">
+        <nav class="bg-white dark:bg-[#0A0B10] shadow-lg dark:shadow-none border-b border-gray-200 dark:border-[#222]/10 relative z-10 after:absolute after:bottom-[-1px] after:left-0 after:right-0 after:h-[2px] after:bg-gradient-to-r dark:after:from-indigo-900/10 dark:after:via-purple-800/10 dark:after:to-cyan-900/10 transition-colors duration-200">
             <div class="max-w-7xl mx-auto px-4">
                 <div class="flex justify-between h-16">
                     <div class="flex">
@@ -163,9 +170,26 @@
                         </div>
                     </div>
                     <div class="flex items-center">
+                        <!-- Theme Toggle Button -->
+                        <button 
+                            @click="toggleTheme()"
+                            class="inline-flex items-center p-2 text-gray-500 dark:text-gray-300 hover:text-gray-700 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-900 rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 mr-2"
+                            aria-label="Toggle dark mode"
+                        >
+                            <!-- Sun icon (shows in dark mode) -->
+                            <svg x-show="isDark" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd" d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 6.464A1 1 0 106.465 5.05l-.708-.707a1 1 0 00-1.414 1.414l.707.707zm1.414 8.486l-.707.707a1 1 0 01-1.414-1.414l.707-.707a1 1 0 011.414 1.414zM4 11a1 1 0 100-2H3a1 1 0 000 2h1z" clip-rule="evenodd" />
+                            </svg>
+                            <!-- Moon icon (shows in light mode) -->
+                            <svg x-show="!isDark" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                <path d="M17.293 13.293A8 8 0 016.707 2.707a8.001 8.001 0 1010.586 10.586z" />
+                            </svg>
+                        </button>
+                        
+                        <!-- Settings Button (existing) -->
                         <a 
                             href="/settings"
-                            class="inline-flex items-center p-2 text-gray-500 dark:text-gray-300 hover:text-gray-700 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                            class="inline-flex items-center p-2 text-gray-500 dark:text-gray-300 hover:text-gray-700 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-900 rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
                         >
                             <svg class="h-5 w-5 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
@@ -176,7 +200,7 @@
                         
                         {% if is_authenticated %}
                         <form action="/logout" method="post" class="ml-4">
-                            <button type="submit" class="inline-flex items-center p-2 text-gray-500 dark:text-gray-300 hover:text-gray-700 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                            <button type="submit" class="inline-flex items-center p-2 text-gray-500 dark:text-gray-300 hover:text-gray-700 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-900 rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
                                 <svg class="h-5 w-5 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
                                 </svg>
@@ -184,7 +208,7 @@
                             </button>
                         </form>
                         {% else %}
-                        <a href="/login" class="ml-4 inline-flex items-center p-2 text-gray-500 dark:text-gray-300 hover:text-gray-700 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                        <a href="/login" class="ml-4 inline-flex items-center p-2 text-gray-500 dark:text-gray-300 hover:text-gray-700 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-900 rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
                             <svg class="h-5 w-5 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" />
                             </svg>
@@ -196,7 +220,7 @@
             </div>
         </nav>
 
-        <main class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8 transition-all duration-200">
+        <main class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8 transition-all duration-200 dark:bg-[#0A0B10]">
             {% block content %}{% endblock %}
         </main>
 
@@ -219,7 +243,7 @@
                         x-transition:leave-start="opacity-100 translate-y-0 sm:scale-100"
                         x-transition:leave-end="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95"
                         @click.away="osModal = false"
-                        class="relative transform overflow-hidden rounded-lg bg-white dark:bg-[#1e293b] px-4 pb-4 pt-5 text-left shadow-xl dark:shadow-[0_0_15px_rgba(0,0,0,0.4)] dark:border dark:border-white dark:border-opacity-10 transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6"
+                        class="relative transform overflow-hidden rounded-lg bg-white dark:bg-[#0A0B10] px-4 pb-4 pt-5 text-left shadow-xl dark:shadow-[0_0_15px_rgba(0,0,0,0.4)] dark:border dark:border-gray-900 dark:border-opacity-50 transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6"
                     >
                         <div id="os-modal-content">
                             <div class="flex items-center justify-center">
@@ -250,7 +274,7 @@
                         x-transition:leave-start="opacity-100 translate-y-0 sm:scale-100"
                         x-transition:leave-end="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95"
                         @click.away="statusModal = false"
-                        class="relative transform overflow-hidden rounded-lg bg-white dark:bg-[#1e293b] px-4 pb-4 pt-5 text-left shadow-xl dark:shadow-[0_0_15px_rgba(0,0,0,0.4)] dark:border dark:border-white dark:border-opacity-10 transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6"
+                        class="relative transform overflow-hidden rounded-lg bg-white dark:bg-[#0A0B10] px-4 pb-4 pt-5 text-left shadow-xl dark:shadow-[0_0_15px_rgba(0,0,0,0.4)] dark:border dark:border-gray-900 dark:border-opacity-50 transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6"
                     >
                         <div id="status-modal-content">
                             <div class="flex items-center justify-center">
@@ -281,7 +305,7 @@
                         x-transition:leave-start="opacity-100 translate-y-0 sm:scale-100"
                         x-transition:leave-end="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95"
                         @click.away="deleteModal = false"
-                        class="relative transform overflow-hidden rounded-lg bg-white dark:bg-[#1e293b] px-4 pb-4 pt-5 text-left shadow-xl dark:shadow-[0_0_15px_rgba(0,0,0,0.4)] dark:border dark:border-white dark:border-opacity-10 transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6"
+                        class="relative transform overflow-hidden rounded-lg bg-white dark:bg-[#0A0B10] px-4 pb-4 pt-5 text-left shadow-xl dark:shadow-[0_0_15px_rgba(0,0,0,0.4)] dark:border dark:border-gray-900 dark:border-opacity-50 transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6"
                     >
                         <div class="sm:flex sm:items-start">
                             <div class="mx-auto flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10">
@@ -358,12 +382,37 @@
         });
     </script>
     
-    <footer class="bg-white dark:bg-gray-800 shadow-lg border-t border-transparent dark:border-gray-700 mt-auto w-full">
+    <footer class="bg-white dark:bg-[#0A0B10] shadow-lg dark:shadow-none border-t border-gray-200 dark:border-[#222]/10 relative z-10 before:absolute before:top-[-1px] before:left-0 before:right-0 before:h-[2px] before:bg-gradient-to-r dark:before:from-indigo-900/10 dark:before:via-purple-800/10 dark:before:to-cyan-900/10 mt-auto w-full">
         <div class="max-w-7xl mx-auto py-4 px-4 sm:px-6 lg:px-8">
             <p class="text-center text-gray-500 dark:text-gray-400 text-sm">
                 Dragonfly - Bare Metal Infrastructure Management
             </p>
         </div>
     </footer>
+
+    <script>
+        // Handoff detection mechanism - Retries if server is temporarily unavailable during handoff
+        function checkHeartbeat() {
+            fetch("/api/heartbeat")
+                .catch(error => {
+                    console.log("Heartbeat check failed, server might be in handoff - retrying in 50ms", error);
+                    setTimeout(() => {
+                        // Try again after a short delay
+                        fetch("/api/heartbeat")
+                            .catch(() => {
+                                console.log("Heartbeat retry failed, reloading page");
+                                // If still failed, reload the page
+                                location.reload();
+                            });
+                    }, 50);
+                });
+        }
+        
+        // Check heartbeat every 5 seconds, primarily to detect handoff
+        setInterval(checkHeartbeat, 5000);
+        
+        // Immediately check when the page loads
+        document.addEventListener("DOMContentLoaded", checkHeartbeat);
+    </script>
 </body>
 </html>

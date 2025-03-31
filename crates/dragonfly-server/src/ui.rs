@@ -7,7 +7,7 @@ use axum::{
     Form, Router,
 };
 use dragonfly_common::models::{Machine, MachineStatus};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use std::collections::HashMap;
 use serde_json;
 use uuid;
@@ -19,6 +19,7 @@ use crate::db;
 use crate::auth::{self, AuthSession, Settings, Credentials};
 use crate::filters;
 use crate::tinkerbell::WorkflowInfo;
+use crate::mode;
 
 // Extract theme from cookies
 pub fn get_theme_from_cookie(headers: &HeaderMap) -> String {
@@ -96,11 +97,35 @@ pub struct WorkflowProgressTemplate {
     pub workflow_info: Option<WorkflowInfo>,
 }
 
+// Add new template for welcome page
+#[derive(Template)]
+#[template(path = "welcome.html")]
+pub struct WelcomeTemplate {
+    pub theme: String,
+    pub is_authenticated: bool,
+}
+
+#[derive(Template)]
+#[template(path = "error.html")]
+pub struct ErrorTemplate {
+    pub theme: String,
+    pub is_authenticated: bool,
+    pub title: String,
+    pub message: String,
+    pub error_details: String,
+    pub back_url: String,
+    pub back_text: String,
+    pub show_retry: bool,
+    pub retry_url: String,
+}
+
 enum UiTemplate {
     Index(IndexTemplate),
     MachineList(MachineListTemplate),
     MachineDetails(MachineDetailsTemplate),
     Settings(SettingsTemplate),
+    Welcome(WelcomeTemplate),
+    Error(ErrorTemplate),
 }
 
 impl IntoResponse for UiTemplate {
@@ -142,6 +167,24 @@ impl IntoResponse for UiTemplate {
                     }
                 }
             },
+            UiTemplate::Welcome(template) => {
+                match template.render() {
+                    Ok(html) => Html(html).into_response(),
+                    Err(err) => {
+                        eprintln!("Template error: {}", err);
+                        StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                    }
+                }
+            },
+            UiTemplate::Error(template) => {
+                match template.render() {
+                    Ok(html) => Html(html).into_response(),
+                    Err(err) => {
+                        eprintln!("Template error: {}", err);
+                        StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                    }
+                }
+            },
         }
     }
 }
@@ -155,6 +198,11 @@ pub fn ui_router() -> Router<crate::AppState> {
         .route("/theme/toggle", get(toggle_theme))
         .route("/settings", get(settings_page))
         .route("/settings", post(update_settings))
+        .route("/welcome", get(welcome_page))
+        .route("/setup", get(welcome_page)) // Alias for welcome
+        .route("/setup/simple", get(setup_simple))
+        .route("/setup/flight", get(setup_flight))
+        .route("/setup/swarm", get(setup_swarm))
 }
 
 // Count machines by status and return a HashMap
@@ -196,6 +244,11 @@ pub async fn index(
     headers: HeaderMap,
     auth_session: AuthSession,
 ) -> Response {
+    // Check if we're in setup mode from command line or this is the first run
+    if app_state.setup_mode || app_state.first_run {
+        return Redirect::to("/welcome").into_response();
+    }
+    
     // Get theme preference from cookie
     let theme = get_theme_from_cookie(&headers);
     let is_authenticated = auth_session.user.is_some();
@@ -593,4 +646,191 @@ pub async fn update_settings(
         [(header::SET_COOKIE, cookie.to_string())],
         Redirect::to("/settings")
     ).into_response()
+}
+
+// New handler for welcome page
+pub async fn welcome_page(
+    headers: HeaderMap,
+    auth_session: AuthSession,
+) -> Response {
+    // Get theme preference from cookie
+    let theme = get_theme_from_cookie(&headers);
+    let is_authenticated = auth_session.user.is_some();
+    
+    UiTemplate::Welcome(WelcomeTemplate {
+        theme,
+        is_authenticated,
+    }).into_response()
+}
+
+// Handlers for the different setup modes
+pub async fn setup_simple(
+    State(app_state): State<crate::AppState>,
+    headers: HeaderMap,
+    auth_session: AuthSession,
+) -> Response {
+    // Get theme preference from cookie
+    let theme = get_theme_from_cookie(&headers);
+    let is_authenticated = auth_session.user.is_some();
+    
+    // Configure the system for Simple mode
+    match mode::configure_simple_mode().await {
+        Ok(_) => {
+            info!("System configured for Simple mode");
+            
+            // Create macOS status bar icon on macOS 
+            #[cfg(target_os = "macos")]
+            {
+                info!("Initializing macOS status bar icon for Simple mode");
+                let result = crate::macos_ui::setup_status_bar("Simple", app_state.shutdown_tx.clone()).await;
+                if let Err(e) = result {
+                    error!("Failed to create macOS status bar icon: {}", e);
+                    // Non-critical error, can continue
+                } else {
+                    info!("macOS status bar icon created successfully");
+                }
+            }
+            
+            // Mark setup as completed
+            mark_setup_completed(&app_state).await;
+            
+            // Redirect to main page
+            Redirect::to("/").into_response()
+        },
+        Err(e) => {
+            error!("Failed to configure system for Simple mode: {}", e);
+            
+            // Return error template
+            UiTemplate::Error(ErrorTemplate {
+                theme,
+                is_authenticated,
+                title: "Setup Failed".to_string(),
+                message: "There was a problem setting up Simple mode.".to_string(),
+                error_details: format!("{}", e),
+                back_url: "/".to_string(),
+                back_text: "Back to Dashboard".to_string(),
+                show_retry: true,
+                retry_url: "/setup/simple".to_string(),
+            }).into_response()
+        }
+    }
+}
+
+pub async fn setup_flight(
+    State(app_state): State<crate::AppState>,
+    headers: HeaderMap,
+    auth_session: AuthSession,
+) -> Response {
+    // Get theme preference from cookie
+    let theme = get_theme_from_cookie(&headers);
+    let is_authenticated = auth_session.user.is_some();
+    
+    // Configure the system for Flight mode
+    match mode::configure_flight_mode().await {
+        Ok(_) => {
+            info!("System configured for Flight mode - k3s deployment started in background");
+            
+            // Create macOS status bar icon on macOS
+            #[cfg(target_os = "macos")]
+            {
+                info!("Initializing macOS status bar icon for Flight mode");
+                let result = crate::macos_ui::setup_status_bar("Flight", app_state.shutdown_tx.clone()).await;
+                if let Err(e) = result {
+                    error!("Failed to create macOS status bar icon: {}", e);
+                    // Non-critical error, can continue
+                } else {
+                    info!("macOS status bar icon created successfully");
+                }
+            }
+            
+            // Mark setup as completed
+            mark_setup_completed(&app_state).await;
+
+            // Redirect to a flight status page that shows installation progress
+            // For now, just redirect to main page
+            Redirect::to("/").into_response()
+        },
+        Err(e) => {
+            error!("Failed to configure system for Flight mode: {}", e);
+            
+            // Return error template
+            UiTemplate::Error(ErrorTemplate {
+                theme,
+                is_authenticated,
+                title: "Flight Mode Setup Failed".to_string(),
+                message: "There was a problem setting up Flight mode.".to_string(),
+                error_details: format!("{}", e),
+                back_url: "/".to_string(),
+                back_text: "Back to Dashboard".to_string(),
+                show_retry: true,
+                retry_url: "/setup/flight".to_string(),
+            }).into_response()
+        }
+    }
+}
+
+pub async fn setup_swarm(
+    State(app_state): State<crate::AppState>,
+    headers: HeaderMap,
+    auth_session: AuthSession,
+) -> Response {
+    // Get theme preference from cookie
+    let theme = get_theme_from_cookie(&headers);
+    let is_authenticated = auth_session.user.is_some();
+    
+    // Configure the system for Swarm mode
+    match mode::configure_swarm_mode().await {
+        Ok(_) => {
+            info!("System configured for Swarm mode");
+            
+            // Create macOS status bar icon on macOS
+            #[cfg(target_os = "macos")]
+            {
+                info!("Initializing macOS status bar icon for Swarm mode");
+                let result = crate::macos_ui::setup_status_bar("Swarm", app_state.shutdown_tx.clone()).await;
+                if let Err(e) = result {
+                    error!("Failed to create macOS status bar icon: {}", e);
+                    // Non-critical error, can continue
+                } else {
+                    info!("macOS status bar icon created successfully");
+                }
+            }
+            
+            // Mark setup as completed 
+            mark_setup_completed(&app_state).await;
+            
+            // Redirect to main page
+            Redirect::to("/").into_response()
+        },
+        Err(e) => {
+            error!("Failed to configure system for Swarm mode: {}", e);
+            
+            // Return error template
+            UiTemplate::Error(ErrorTemplate {
+                theme,
+                is_authenticated,
+                title: "Swarm Mode Setup Failed".to_string(),
+                message: "There was a problem setting up Swarm mode.".to_string(),
+                error_details: format!("{}", e),
+                back_url: "/".to_string(),
+                back_text: "Back to Dashboard".to_string(),
+                show_retry: true,
+                retry_url: "/setup/swarm".to_string(),
+            }).into_response()
+        }
+    }
+}
+
+// Helper to mark setup as completed
+async fn mark_setup_completed(app_state: &crate::AppState) {
+    // Use dedicated function to mark setup as completed
+    if let Err(e) = crate::db::mark_setup_completed(true).await {
+        tracing::error!("Failed to mark setup as completed: {}", e);
+    } else {
+        tracing::info!("Setup marked as completed");
+        
+        // Also update the in-memory settings - tokio::sync::Mutex::lock returns a MutexGuard, not a Result
+        let mut settings = app_state.settings.lock().await;
+        settings.setup_completed = true;
+    }
 } 

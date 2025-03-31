@@ -78,10 +78,11 @@ pub struct Admin {
     pub password_hash: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct Settings {
     pub require_login: bool,
     pub default_os: Option<String>,
+    pub setup_completed: bool,
 }
 
 impl Default for Settings {
@@ -89,6 +90,7 @@ impl Default for Settings {
         Self {
             require_login: false,
             default_os: None,
+            setup_completed: false,
         }
     }
 }

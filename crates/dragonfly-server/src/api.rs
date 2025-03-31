@@ -61,6 +61,7 @@ pub fn api_router() -> Router<crate::AppState> {
         .route("/machines/{id}/tags", put(update_machine_tags))
         .route("/events", get(machine_events))
         .route("/machines/{id}/workflow-progress", get(get_workflow_progress))
+        .route("/heartbeat", get(heartbeat))
 }
 
 async fn register_machine(
@@ -1720,7 +1721,15 @@ async fn download_and_verify_artifact(
 // Keep the download_hookos_artifacts function
 pub async fn download_hookos_artifacts(version: &str) -> Result<()> {
     // Get artifact directory
-    let hookos_dir = get_artifacts_dir().join("hookos");
+    let artifacts_dir = get_artifacts_dir();
+    let hookos_dir = artifacts_dir.join("hookos");
+    
+    // Create all parent directories if they don't exist
+    fs::create_dir_all(&artifacts_dir).await.map_err(|e| {
+        Error::Internal(format!("Failed to create artifacts directory: {}", e))
+    })?;
+    
+    // Now create the hookos directory
     fs::create_dir_all(&hookos_dir).await.map_err(|e| {
         Error::Internal(format!("Failed to create hookos directory: {}", e))
     })?;
@@ -1841,13 +1850,48 @@ fn get_artifacts_dir() -> PathBuf {
     const DEFAULT_ARTIFACT_DIR: &str = "/var/lib/dragonfly/ipxe-artifacts";
     const ARTIFACT_DIR_ENV_VAR: &str = "DRAGONFLY_IPXE_ARTIFACT_DIR";
 
-    let dir = env::var(ARTIFACT_DIR_ENV_VAR)
-        .unwrap_or_else(|_| {
-            // Log at DEBUG level instead of WARN
-            debug!("{} not set, using default: {}", ARTIFACT_DIR_ENV_VAR, DEFAULT_ARTIFACT_DIR);
-            DEFAULT_ARTIFACT_DIR.to_string()
-        });
-    PathBuf::from(dir)
+    // First check if the directory is specified in an environment variable
+    if let Ok(dir) = env::var(ARTIFACT_DIR_ENV_VAR) {
+        return PathBuf::from(dir);
+    }
+    
+    // Check if the default directory is writable
+    let default_dir = PathBuf::from(DEFAULT_ARTIFACT_DIR);
+    let is_writable = if default_dir.exists() {
+        // Check if we can write to an existing directory
+        match std::fs::metadata(&default_dir) {
+            Ok(metadata) => metadata.permissions().readonly() == false,
+            Err(_) => false,
+        }
+    } else {
+        // If it doesn't exist, check if we can create it by creating a parent directory
+        let parent = default_dir.parent().unwrap_or(&default_dir);
+        match std::fs::metadata(parent) {
+            Ok(metadata) => metadata.permissions().readonly() == false,
+            Err(_) => false,
+        }
+    };
+    
+    if is_writable {
+        // Use the default if we can write to it
+        debug!("Using default artifacts directory: {}", DEFAULT_ARTIFACT_DIR);
+        return default_dir;
+    }
+    
+    // Fall back to a user-specific directory in their home folder
+    if let Ok(home) = env::var("HOME") {
+        let user_dir = PathBuf::from(home).join(".dragonfly/ipxe-artifacts");
+        debug!("Using user-specific artifacts directory: {:?}", user_dir);
+        return user_dir;
+    }
+    
+    // Last resort, use the current directory
+    let fallback_dir = std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("dragonfly-ipxe-artifacts");
+    
+    debug!("Using fallback artifacts directory: {:?}", fallback_dir);
+    fallback_dir
 }
 
 // Keep the download_file function
@@ -2390,4 +2434,9 @@ pub async fn check_hookos_artifacts() -> bool {
     
     // All artifacts exist
     true
+}
+
+// Add a heartbeat route for health checking and handoff coordination
+pub async fn heartbeat() -> impl IntoResponse {
+    "OK"
 }

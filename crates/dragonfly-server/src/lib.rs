@@ -11,6 +11,10 @@ use std::net::SocketAddr;
 use tower_cookies::CookieManagerLayer;
 use tower_http::services::ServeDir;
 use tokio::signal::unix::{signal, SignalKind};
+use tokio::sync::watch;
+use std::process::Command;
+use anyhow::Context;
+use listenfd::ListenFd;
 
 use crate::auth::{AdminBackend, auth_router, load_credentials, generate_default_credentials, load_settings, Settings};
 use crate::db::init_db;
@@ -24,6 +28,11 @@ mod ui;
 mod tinkerbell;
 mod event_manager;
 mod os_templates;
+pub mod mode;
+
+// macOS-specific UI features (only compiled on macOS)
+#[cfg(target_os = "macos")]
+mod macos_ui;
 
 // Global static for accessing event manager from other modules
 use std::sync::RwLock;
@@ -37,9 +46,65 @@ pub static EVENT_MANAGER_REF: Lazy<RwLock<Option<std::sync::Arc<EventManager>>>>
 pub struct AppState {
     pub settings: Arc<Mutex<Settings>>,
     pub event_manager: Arc<EventManager>,
+    pub setup_mode: bool,  // Explicit CLI setup mode
+    pub first_run: bool,   // First run based on settings
+    pub shutdown_tx: watch::Sender<()>,  // Channel to signal shutdown
+}
+
+// Clean up any existing processes
+async fn cleanup_existing_processes() {
+    info!("Checking for existing Dragonfly processes");
+    
+    // Check for processes using port 3000
+    let lsof_output = Command::new("lsof")
+        .args(["-i:3000", "-t"])
+        .output();
+    
+    if let Ok(output) = lsof_output {
+        if output.status.success() && !output.stdout.is_empty() {
+            info!("Found existing process on port 3000, attempting to terminate");
+            
+            // Get the PID as a string
+            let pid = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            
+            // Try to terminate gracefully first
+            let _ = Command::new("kill")
+                .arg(&pid)
+                .output();
+                
+            // Wait a moment for graceful shutdown
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            
+            // Check if it's still running
+            let check_output = Command::new("lsof")
+                .args(["-i:3000", "-t"])
+                .output();
+                
+            if let Ok(check) = check_output {
+                if check.status.success() && !check.stdout.is_empty() {
+                    // Force kill if still running
+                    info!("Process still running, forcing termination");
+                    let _ = Command::new("kill")
+                        .args(["-9", &pid])
+                        .output();
+                }
+            }
+        }
+    }
+    
+    // Clean up any Swift UI processes
+    #[cfg(target_os = "macos")]
+    {
+        let _ = Command::new("pkill")
+            .args(["-f", "dragonfly_status_bar.swift"])
+            .output();
+    }
 }
 
 pub async fn run() -> anyhow::Result<()> {
+    // Clean up any existing processes
+    cleanup_existing_processes().await;
+
     // Initialize the database 
     let db_pool = init_db().await?;
     
@@ -49,20 +114,7 @@ pub async fn run() -> anyhow::Result<()> {
     // Load historical timing data
     tinkerbell::load_historical_timings().await?;
     
-    // --- Start HookOS Artifacts Download in Background ---
-    info!("Starting HookOS artifacts check and download in background...");
-    tokio::spawn(async move {
-        // First check if artifacts exist
-        if !api::check_hookos_artifacts().await {
-            info!("HookOS artifacts not found. Downloading HookOS artifacts...");
-            match api::download_hookos_artifacts("v0.10.0").await {
-                Ok(_) => info!("HookOS artifacts downloaded successfully"),
-                Err(e) => warn!("Failed to download HookOS artifacts: {}", e),
-            }
-        } else {
-            info!("HookOS artifacts already exist");
-        }
-    });
+    // Remove automatic HookOS download at startup - we'll do this when the user selects Flight mode
     
     // --- Start OS Templates Initialization in Background ---
     info!("Starting OS templates initialization in background...");
@@ -118,10 +170,29 @@ pub async fn run() -> anyhow::Result<()> {
         }
     };
     
+    // Check if setup mode is enabled via environment variable (set by CLI)
+    let setup_mode = std::env::var("DRAGONFLY_SETUP_MODE").is_ok();
+    
+    // If setup mode is enabled, reset the setup flag
+    if setup_mode {
+        info!("Setup mode enabled, resetting setup completion status");
+        let mut settings_copy = settings.clone();
+        settings_copy.setup_completed = false;
+        if let Err(e) = auth::save_settings(&settings_copy).await {
+            warn!("Failed to reset setup status: {}", e);
+        }
+    }
+    
+    // Check if this is the first run by looking at the setup_completed flag
+    let first_run = !settings.setup_completed || setup_mode;
+    
     // Create application state
     let app_state = AppState {
         settings: Arc::new(Mutex::new(settings)),
         event_manager: event_manager,
+        setup_mode,
+        first_run,
+        shutdown_tx: shutdown_tx.clone(),
     };
     
     // Set up the persistent session store using the sqlx store
@@ -168,10 +239,102 @@ pub async fn run() -> anyhow::Result<()> {
         )
         .with_state(app_state);
     
-    // --- Start Server with Graceful Shutdown ---
-    info!("Starting server on 0.0.0.0:3000");
-    let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    // Check if we need to start the handoff listener
+    let current_mode = mode::get_current_mode().await.unwrap_or(None);
+    if let Some(mode) = current_mode {
+        if mode == mode::DeploymentMode::Flight {
+            info!("Running in Flight mode - starting handoff listener");
+            tokio::spawn(async move {
+                if let Err(e) = mode::start_handoff_listener(shutdown_rx.clone()).await {
+                    error!("Handoff listener failed: {}", e);
+                }
+            });
+        }
+        
+        // Initialize macOS status bar icon if running on macOS and a mode is already set
+        #[cfg(target_os = "macos")]
+        {
+            // Get the deployment mode for the status bar icon
+            let mode_str = mode.as_str();
+            
+            // Clone shutdown_tx for use with the macOS UI
+            let ui_shutdown_tx = shutdown_tx.clone();
+            
+            // Initialize the macOS status bar icon
+            tokio::spawn(async move {
+                // Wait a moment for the server to fully start
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                
+                // Now try to initialize the status bar icon
+                info!("Initializing macOS status bar icon for {} mode on startup", mode_str);
+                match macos_ui::setup_status_bar(mode_str, ui_shutdown_tx).await {
+                    Ok(_) => info!("macOS status bar icon initialized successfully on startup"),
+                    Err(e) => error!("Could not initialize macOS status bar icon on startup: {}", e),
+                }
+            });
+        }
+    }
+    
+    // --- Start Server with Socket Activation Support ---
+    
+    let server_port = 3000;
+    let addr = SocketAddr::from(([0, 0, 0, 0], server_port));
+    
+    // Try to get listener socket from environment (systemfd/socket activation)
+    let mut listenfd = ListenFd::from_env();
+    
+    // Look for LISTEN_FDS environment variable (set by systemd/launchd socket activation)
+    let socket_activation = std::env::var("LISTEN_FDS").is_ok();
+    
+    if socket_activation {
+        info!("Socket activation detected via LISTEN_FDS={}",
+            std::env::var("LISTEN_FDS").unwrap_or_else(|_| "1".to_string()));
+    }
+    
+    let listener = match listenfd.take_tcp_listener(0).context("Failed to take TCP listener from environment") {
+        Ok(Some(listener)) => {
+            // Convert the std::net TCP listener to a tokio one
+            info!("Successfully acquired socket from socket activation");
+            tokio::net::TcpListener::from_std(listener).context("Failed to convert TCP listener")?
+        },
+        Ok(None) => {
+            // No socket from environment, create our own
+            if socket_activation {
+                warn!("Socket activation was detected (LISTEN_FDS), but no socket was found at fd 3");
+            }
+            info!("Binding to port {} directly", server_port);
+            
+            match tokio::net::TcpListener::bind(addr).await {
+                Ok(listener) => listener,
+                Err(e) => {
+                    // Handle address in use error specifically
+                    if e.kind() == std::io::ErrorKind::AddrInUse {
+                        error!("Failed to start server: Port {} is already in use", server_port);
+                        error!("Another instance of Dragonfly may be running. Try the following:");
+                        error!("1. Check if Dragonfly is already running in the status bar");
+                        error!("2. Run 'lsof -i:{}' to identify the process", server_port);
+                        error!("3. Kill the process with 'kill -9 <PID>'");
+                        return Err(anyhow::anyhow!("Port {} is already in use by another process. See above for resolution steps.", server_port));
+                    }
+                    
+                    // Handle other kinds of socket binding errors
+                    return Err(anyhow::anyhow!("Failed to bind to address: {}", e));
+                }
+            }
+        },
+        Err(e) => {
+            warn!("Failed to check for socket activation: {}", e);
+            // Fall back to normal binding
+            match tokio::net::TcpListener::bind(addr).await {
+                Ok(listener) => listener,
+                Err(e) => {
+                    return Err(anyhow::anyhow!("Failed to bind to address: {}", e));
+                }
+            }
+        }
+    };
+    
+    info!("Dragonfly server listening on http://{}", listener.local_addr().context("Failed to get local address")?);
 
     // Define the shutdown signal future
     let shutdown_signal = async move {
@@ -198,20 +361,42 @@ pub async fn run() -> anyhow::Result<()> {
             _ = terminate => {
                  info!("Received SIGTERM, initiating shutdown...");
             },
+            // Add a case for SIGUSR1 (handoff signal)
+            _ = async {
+                // Set up a signal handler for SIGUSR1
+                if let Ok(mut sigusr1) = signal(SignalKind::user_defined1()) {
+                    sigusr1.recv().await;
+                    info!("Received SIGUSR1 signal for handoff");
+                    true
+                } else {
+                    // If the signal handler can't be set up, this should never complete
+                    std::future::pending::<bool>().await
+                }
+            } => {
+                info!("Initiating handoff based on SIGUSR1 signal");
+            }
         }
 
-        // Send the shutdown signal to background tasks
-        info!("Sending shutdown signal to background tasks...");
+        // Signal all subsystems to shut down
         let _ = shutdown_tx.send(());
+        info!("Shutdown signal sent to all subsystems");
+        
+        // Short delay to ensure cleanup tasks can run
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     };
 
-    // Run the server with graceful shutdown
-    axum::serve(listener, app.into_make_service())
+    // Start the server with graceful shutdown
+    axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal)
-        .await?;
+        .await
+        .context("Server error")?;
 
-    info!("Server shutdown complete.");
-
+    // Clean up at exit
+    cleanup_existing_processes().await;
+    
+    // Final cleanup message
+    info!("Shutdown complete");
+    
     Ok(())
 } 
 

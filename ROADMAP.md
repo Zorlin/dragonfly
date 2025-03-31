@@ -1,7 +1,11 @@
 # Roadmap
 Here's things we would like to work on and add to Dragonfly next.
 
+This is speculative and subject to change.
+
 ## Upcoming planned features
+* First run wizard:
+
 * Lock individual nodes to prevent them from being reimaged or deleted
 * Authentication system
   * Admin login for managing and adopting machines
@@ -37,3 +41,63 @@ Here's things we would like to work on and add to Dragonfly next.
     * Show average deployment time by OS template
     * Show average deployment time by hardware type
     * Failed/succeeded counts by OS template, date, and time of day
+
+Simple mode.
+Tinkerbell mode.
+Distributed mode.
+
+Simple mode will use *direct PXE imaging completely agentlessly*, simply using MAC-to-hostname mapping (with the same reverse DNS lookup trick where a machine that attempts to PXE boot from it will be looked up in reverse DNS, so if it has a static DHCP lease and a DNS name, it can not just be assigned a real hostname *but also tags and roles* automatically. It'll literally just Kickstart/preseed/whatever VMs instead of using our deployment system, and it'll be slower but the tradeoff is that it will directly install machines without any intermediate steps.
+
+Distributed mode will stretch and loadbalance the IPXE distribution/image distribution system, as well as make the entire system effortlessly HA. And there will be a "Convert to Dragonfly" button on newly deployed machines that turns a machine into a Dragonfly node automatically and joins it to the existing cluster.
+
+If the user runs:
+`dragonfly`
+
+And no install, no run, no flags:
+You launch the Dragonfly Demo Experience™
+
+What This Demo Mode Should Do:
+✅ Run in-memory only
+No filesystem writes
+
+No k3s startup
+
+No agent listening
+
+PXE disabled
+
+Temporary port binding (e.g., localhost:3000)
+
+Just enough to render the full Web UI with mock data
+
+🧑‍🏫 Show the Real UI
+Simulated machine list
+
+Realtime-looking status
+
+Tag editing
+
+Tinkerbell workflows “in progress”
+
+But everything is ephemeral and safe to explore
+
+🧭 Show a banner:
+Demo Mode: Dragonfly is not installed yet.
+This is a preview — none of your hardware is touched.
+[🚀 Install Now] [📖 Docs] [🛠 Advanced Setup]
+
+🧠 Why This Is Brilliant
+🪶 Zero commitment
+
+⚡ Immediate UX payoff
+
+🧠 Helps people decide without docs or flags
+
+📦 Makes dragonfly self-explanatory — the binary is the experience
+
+🧩 Bonus
+Let users type:
+
+dragonfly --demo
+
+to re-enter it later — great for testing or CI screenshots.

@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block title %}Error - Dragonfly{% endblock %}
+
+{% block content %}
+<div class="min-h-screen flex flex-col items-center justify-center px-4 py-12 sm:px-6 lg:px-8">
+    <div class="max-w-md w-full bg-white dark:bg-gray-800 shadow-lg rounded-lg overflow-hidden">
+        <div class="px-6 py-8">
+            <div class="flex justify-center mb-6">
+                <div class="inline-flex h-16 w-16 items-center justify-center rounded-full bg-red-100 dark:bg-red-900">
+                    <svg class="h-8 w-8 text-red-600 dark:text-red-200" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+                    </svg>
+                </div>
+            </div>
+            <h3 class="text-center text-xl font-semibold text-gray-900 dark:text-white mb-2">{{ title }}</h3>
+            <p class="text-center text-gray-600 dark:text-gray-300 mb-6">{{ message }}</p>
+            
+            {% if error_details != "" %}
+            <div class="mt-4 mb-6 p-3 bg-gray-100 dark:bg-gray-700 rounded-md">
+                <p class="text-sm text-gray-700 dark:text-gray-300 font-mono">{{ error_details }}</p>
+            </div>
+            {% endif %}
+            
+            <div class="flex justify-center mt-6 space-x-4">
+                <a href="{{ back_url }}" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                    {{ back_text }}
+                </a>
+                {% if show_retry %}
+                <a href="{{ retry_url }}" class="inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-md text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                    Try Again
+                </a>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %} 
