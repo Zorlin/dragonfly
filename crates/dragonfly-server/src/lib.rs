@@ -20,19 +20,24 @@ use crate::auth::{AdminBackend, auth_router, load_credentials, generate_default_
 use crate::db::init_db;
 use crate::event_manager::EventManager;
 
+// Add MiniJinja imports
+use minijinja::path_loader;
+use minijinja::{Environment};
+use minijinja_autoreload::AutoReloader;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 mod auth;
 mod api;
 mod db;
-mod filters;
-mod ui;
-mod tinkerbell;
-mod event_manager;
-mod os_templates;
+mod filters; // Uncomment unused module
+pub mod ui;
+pub mod tinkerbell;
+pub mod event_manager;
+pub mod os_templates;
 pub mod mode;
-
-// macOS-specific UI features (only compiled on macOS)
-#[cfg(target_os = "macos")]
-mod macos_ui;
+// Remove missing module declarations
+// pub mod state;
+// pub mod utils;
 
 // Global static for accessing event manager from other modules
 use std::sync::RwLock;
@@ -40,6 +45,14 @@ use once_cell::sync::Lazy;
 pub static EVENT_MANAGER_REF: Lazy<RwLock<Option<std::sync::Arc<EventManager>>>> = Lazy::new(|| {
     RwLock::new(None)
 });
+
+// Enum to hold either static or reloading environment
+#[derive(Clone)]
+pub enum TemplateEnv {
+    Static(Arc<Environment<'static>>),
+    #[cfg(debug_assertions)]
+    Reloading(Arc<AutoReloader>),
+}
 
 // Application state struct
 #[derive(Clone)]
@@ -49,6 +62,8 @@ pub struct AppState {
     pub setup_mode: bool,  // Explicit CLI setup mode
     pub first_run: bool,   // First run based on settings
     pub shutdown_tx: watch::Sender<()>,  // Channel to signal shutdown
+    // Use the new enum for the environment
+    pub template_env: TemplateEnv,
 }
 
 // Clean up any existing processes
@@ -186,6 +201,96 @@ pub async fn run() -> anyhow::Result<()> {
     // Check if this is the first run by looking at the setup_completed flag
     let first_run = !settings.setup_completed || setup_mode;
     
+    // --- MiniJinja Environment Setup ---
+    // Determine template path
+    let preferred_template_path = "/opt/dragonfly/templates";
+    let fallback_template_path = "crates/dragonfly-server/templates";
+    // Clone path for potential use in reloader closure
+    let template_path = if std::path::Path::new(preferred_template_path).exists() {
+        preferred_template_path
+    } else {
+        fallback_template_path
+    }.to_string(); 
+
+    let template_env = {
+        // Enable debug auto-reloading if in development mode
+        #[cfg(debug_assertions)]
+        {
+            info!("Setting up MiniJinja with auto-reload for development");
+            
+            // Flag to signal when templates are reloaded
+            let templates_reloaded_flag = Arc::new(AtomicBool::new(false));
+            let flag_clone_for_closure = templates_reloaded_flag.clone();
+            
+            let reloader = AutoReloader::new(move |notifier| {
+                info!("MiniJinja environment is being (re)created...");
+                let mut env = Environment::new();
+                let path_for_closure = template_path.clone();
+                env.set_loader(path_loader(&path_for_closure));
+                // TODO: Add custom filters
+                // Add filters::json_pretty to the environment
+                // env.add_filter("json_pretty", filters::json_pretty_filter);
+                
+                // Signal that the environment was created/reloaded
+                flag_clone_for_closure.store(true, Ordering::SeqCst);
+                
+                // Watch the template directory
+                notifier.watch_path(path_for_closure.as_str(), true);
+                
+                Ok(env)
+            });
+            
+            // Spawn the watcher loop
+            let reloader_arc = Arc::new(reloader);
+            let reloader_clone = reloader_arc.clone();
+            let flag_clone_for_loop = templates_reloaded_flag.clone(); // Clone flag for the loop
+            // Get a weak reference to the event manager for the watcher loop
+            let event_manager_weak = Arc::downgrade(&event_manager);
+            tokio::spawn(async move { 
+                info!("Starting MiniJinja watcher loop...");
+                loop {
+                    // Acquire the environment guard. This checks for changes.
+                    match reloader_clone.acquire_env() {
+                        Ok(_) => {
+                            // Check the flag set by the closure
+                            if flag_clone_for_loop.swap(false, Ordering::SeqCst) {
+                                info!("Templates reloaded - sending refresh event");
+                                // Use the weak reference to the event manager
+                                if let Some(event_manager) = event_manager_weak.upgrade() {
+                                    if let Err(e) = event_manager.send("template_changed:refresh".to_string()) {
+                                        warn!("Failed to send template refresh event: {}", e);
+                                    } else {
+                                        info!("Reload event sent successfully.");
+                                    }
+                                } else {
+                                    warn!("EventManager dropped, cannot send reload event.");
+                                }
+                            }
+                        },
+                        Err(e) => {
+                            error!("MiniJinja watcher refresh failed: {}", e);
+                        }
+                    }
+                    
+                    // Check more frequently in development mode
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                }
+            });
+            TemplateEnv::Reloading(reloader_arc)
+        }
+        
+        // Static environment for release builds
+        #[cfg(not(debug_assertions))]
+        {
+            info!("Using static MiniJinja environment for release build");
+            let mut env = Environment::new();
+            env.set_loader(path_loader(&template_path));
+            // TODO: Add custom filters here too
+            TemplateEnv::Static(Arc::new(env))
+        }
+    };
+    // --- End MiniJinja Setup ---
+    
     // Create application state
     let app_state = AppState {
         settings: Arc::new(Mutex::new(settings)),
@@ -193,6 +298,8 @@ pub async fn run() -> anyhow::Result<()> {
         setup_mode,
         first_run,
         shutdown_tx: shutdown_tx.clone(),
+        // Add the environment enum to the state
+        template_env,
     };
     
     // Set up the persistent session store using the sqlx store
@@ -247,29 +354,6 @@ pub async fn run() -> anyhow::Result<()> {
             tokio::spawn(async move {
                 if let Err(e) = mode::start_handoff_listener(shutdown_rx.clone()).await {
                     error!("Handoff listener failed: {}", e);
-                }
-            });
-        }
-        
-        // Initialize macOS status bar icon if running on macOS and a mode is already set
-        #[cfg(target_os = "macos")]
-        {
-            // Get the deployment mode for the status bar icon
-            let mode_str = mode.as_str();
-            
-            // Clone shutdown_tx for use with the macOS UI
-            let ui_shutdown_tx = shutdown_tx.clone();
-            
-            // Initialize the macOS status bar icon
-            tokio::spawn(async move {
-                // Wait a moment for the server to fully start
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                
-                // Now try to initialize the status bar icon
-                info!("Initializing macOS status bar icon for {} mode on startup", mode_str);
-                match macos_ui::setup_status_bar(mode_str, ui_shutdown_tx).await {
-                    Ok(_) => info!("macOS status bar icon initialized successfully on startup"),
-                    Err(e) => error!("Could not initialize macOS status bar icon on startup: {}", e),
                 }
             });
         }
@@ -401,5 +485,19 @@ pub async fn run() -> anyhow::Result<()> {
 } 
 
 async fn handle_favicon() -> impl IntoResponse {
-    (StatusCode::NOT_FOUND, "Favicon not found")
+    // Serve the favicon from the static directory instead of returning 404
+    let path = if std::path::Path::new("/opt/dragonfly/static/favicon/favicon.ico").exists() {
+        "/opt/dragonfly/static/favicon/favicon.ico"
+    } else {
+        "crates/dragonfly-server/static/favicon/favicon.ico"
+    };
+    
+    match tokio::fs::read(path).await {
+        Ok(contents) => (
+            StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "image/x-icon")],
+            contents
+        ).into_response(),
+        Err(_) => (StatusCode::NOT_FOUND, "Favicon not found").into_response()
+    }
 }

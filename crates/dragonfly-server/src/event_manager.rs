@@ -1,5 +1,5 @@
 use tokio::sync::broadcast;
-use tracing::info;
+use tracing::{info, warn};
 
 // Event types that can be published
 #[derive(Debug, Clone)]
@@ -25,11 +25,32 @@ impl EventManager {
         self.tx.subscribe()
     }
 
-    // Publish an event
-    pub fn send(&self, message: String) {
-        if let Err(e) = self.tx.send(message.clone()) {
-            info!("Failed to send event: {}", e);
+    // Publish an event, returning Result to handle errors
+    pub fn send(&self, message: String) -> Result<usize, broadcast::error::SendError<String>> {
+        let receivers = self.tx.receiver_count();
+        
+        // Only attempt to send if we have receivers to avoid log spam
+        if receivers > 0 {
+            match self.tx.send(message.clone()) {
+                Ok(n) => {
+                    info!("Event sent to {} receivers: {}", n, message);
+                    Ok(n)
+                },
+                Err(e) => {
+                    warn!("Failed to send event: {}", e);
+                    Err(e)
+                }
+            }
+        } else {
+            // Create a more descriptive error when there are no receivers
+            warn!("No receivers for event: {}", message);
+            Err(broadcast::error::SendError(message))
         }
+    }
+    
+    // Get the current receiver count
+    pub fn receiver_count(&self) -> usize {
+        self.tx.receiver_count()
     }
 }
 

@@ -2,16 +2,16 @@ use std::fs;
 use std::io;
 use std::path::Path;
 use std::sync::Arc;
-use std::collections::HashMap;
 
 use argon2::{password_hash::SaltString, Argon2, PasswordHasher, PasswordVerifier};
 use axum::{
-    extract::{Form, Extension, FromRequest, Request},
-    http::StatusCode,
+    extract::{Form, Extension, Request, State},
+    http::{StatusCode},
     middleware::Next,
     response::{Html, IntoResponse, Redirect, Response},
     Router,
     routing::{get, post},
+    Json,
 };
 use axum_login::{AuthUser, AuthnBackend};
 use rand::{distributions::Alphanumeric, Rng, rngs::OsRng};
@@ -19,7 +19,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tracing::{error, info};
 use async_trait::async_trait;
-use askama::Template;
+use serde_json;
+use minijinja::{Error as MiniJinjaError, ErrorKind as MiniJinjaErrorKind};
 
 // Constants for the initial password file (not for loading, just for UX)
 const INITIAL_PASSWORD_FILE: &str = "initial_password.txt";
@@ -228,17 +229,42 @@ pub fn auth_router() -> Router<crate::AppState> {
         .route("/logout", post(logout))
 }
 
-#[derive(Template)]
-#[template(path = "login.html")]
+// Remove Askama derives, add Serialize
+#[derive(Serialize)]
 struct LoginTemplate {}
 
-async fn login_page() -> impl IntoResponse {
+async fn login_page(State(app_state): State<crate::AppState>) -> impl IntoResponse {
     let template = LoginTemplate {};
-    match template.render() {
+    
+    // Get the environment based on the mode (static or reloading)
+    let render_result = match &app_state.template_env {
+        crate::TemplateEnv::Static(env) => {
+            env.get_template("login.html")
+               .and_then(|tmpl| tmpl.render(&template))
+        }
+        #[cfg(debug_assertions)]
+        crate::TemplateEnv::Reloading(reloader) => {
+            // Acquire the environment from the reloader
+            match reloader.acquire_env() {
+                Ok(env) => {
+                    env.get_template("login.html")
+                       .and_then(|tmpl| tmpl.render(&template))
+                }
+                Err(e) => {
+                    error!("Failed to acquire MiniJinja env from reloader: {}", e);
+                    Err(MiniJinjaError::new(MiniJinjaErrorKind::InvalidOperation, 
+                        format!("Failed to acquire env from reloader: {}", e)))
+                }
+            }
+        }
+    };
+
+    // Handle the final rendering result
+    match render_result {
         Ok(html) => Html(html).into_response(),
-        Err(err) => {
-            error!("Template rendering error: {}", err);
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        Err(e) => {
+            error!("MiniJinja render/load error for login.html: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Template error: {}", e)).into_response()
         }
     }
 }
@@ -429,21 +455,12 @@ pub async fn save_settings(settings: &Settings) -> io::Result<()> {
     }
 }
 
-// Define how credentials are converted from a Form submission
-impl<S> FromRequest<S> for Credentials
-where
-    S: Send + Sync,
-{
-    type Rejection = StatusCode;
-
-    async fn from_request(req: Request<axum::body::Body>, state: &S) -> Result<Self, Self::Rejection> {
-        let Form(map) = Form::<HashMap<String, String>>::from_request(req, state).await
-            .map_err(|_| StatusCode::BAD_REQUEST)?;
-        
-        Ok(Credentials {
-            username: map.get("username").cloned().unwrap_or_default(),
-            password: map.get("password").cloned(),
-            password_hash: "".to_string(), // This will be set during authentication
-        })
+// Add pub to make require_admin public
+pub fn require_admin(auth_session: &AuthSession) -> Result<(), Response> {
+    if auth_session.user.is_none() {
+        let body = serde_json::json!({ "error": "Unauthorized", "message": "Admin authentication required" });
+        Err((StatusCode::UNAUTHORIZED, Json(body)).into_response())
+    } else {
+        Ok(())
     }
-} 
+}

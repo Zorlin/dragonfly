@@ -61,8 +61,21 @@
                             hx-select="#machine-list > tr"
                             hx-target="#machine-list"
                             hx-trigger="load, refreshMachines from:body"
-                            hx-swap="morph"
+                            hx-swap="morph:innerHTML"
+                            hx-indicator=".htmx-indicator"
                         >
+                            <!-- Loading indicator -->
+                            <tr class="htmx-indicator">
+                                <td colspan="6" class="py-10 text-center">
+                                    <div class="inline-flex items-center px-4 py-2 font-semibold leading-6 text-sm text-gray-500 dark:text-gray-300">
+                                        <svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-indigo-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                        </svg>
+                                        Loading machines...
+                                    </div>
+                                </td>
+                            </tr>
                             {% for machine in machines %}
                             <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer" @click="window.location='/machines/{{ machine.id }}'">
                                 <td class="px-6 py-4 whitespace-nowrap">
@@ -74,7 +87,7 @@
                                                     {{ machine.hostname.as_ref().unwrap() }}
                                                 {% else %}
                                                     {# Fallback to ID if no hostname #}
-                                                    {% let id_str = machine.id.to_string() %}{{ id_str }}
+                                                    {{ machine.id }}
                                                 {% endif %}
                                             </a>
                                             {# Display memorable_name below if it exists #}
@@ -94,24 +107,24 @@
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap">
                                     <span class="px-3 py-1 inline-flex text-sm leading-5 font-semibold rounded-full 
-                                        {% if machine.status == MachineStatus::Ready %}
+                                        {% if machine.status == "Ready" %}
                                             bg-green-100 text-green-800 dark:bg-green-400/10 dark:text-green-300 dark:border dark:border-green-500/20
-                                        {% else if machine.status == MachineStatus::InstallingOS %}
+                                        {% else if machine.status == "InstallingOS" %}
                                             bg-yellow-100 text-yellow-800 dark:bg-yellow-400/10 dark:text-yellow-300 dark:border dark:border-yellow-500/20
-                                        {% else if machine.status == MachineStatus::AwaitingAssignment %}
+                                        {% else if machine.status == "AwaitingAssignment" %}
                                             bg-blue-100 text-blue-800 dark:bg-blue-400/10 dark:text-blue-300 dark:border dark:border-blue-500/20
-                                        {% else if machine.status == MachineStatus::ExistingOS %}
+                                        {% else if machine.status == "ExistingOS" %}
                                             bg-sky-100 text-sky-800 dark:bg-sky-400/10 dark:text-sky-300 dark:border dark:border-sky-500/20
                                         {% else %}
                                             bg-red-100 text-red-800 dark:bg-red-400/10 dark:text-red-300 dark:border dark:border-red-500/20
                                         {% endif %}">
-                                        {% if machine.status == MachineStatus::Ready %}
+                                        {% if machine.status == "Ready" %}
                                             Provisioned
-                                        {% else if machine.status == MachineStatus::InstallingOS %}
+                                        {% else if machine.status == "InstallingOS" %}
                                             Installing OS
-                                        {% else if machine.status == MachineStatus::AwaitingAssignment %}
+                                        {% else if machine.status == "AwaitingAssignment" %}
                                             Awaiting OS Selection
-                                        {% else if machine.status == MachineStatus::ExistingOS %}
+                                        {% else if machine.status == "ExistingOS" %}
                                             Existing OS
                                         {% else %}
                                             Error {# Explicitly handle Error or other unexpected statuses #}
@@ -125,7 +138,7 @@
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
                                     {% match machine.status %}
-                                        {% when MachineStatus::InstallingOS %}
+                                        {% when "InstallingOS" %}
                                             {% if let Some(info) = workflow_infos.get(machine.id) %}
                                                 <div class="flex flex-col space-y-1">
                                                     <div class="flex justify-between text-xs">
@@ -164,7 +177,7 @@
                                                 </button>
                                                 
                                                 {# Reimage Action #}
-                                                {% if machine.status == MachineStatus::Ready || machine.status == MachineStatus::AwaitingAssignment || machine.status == MachineStatus::ExistingOS || machine.status == MachineStatus::Offline %}
+                                                {% if machine.status == "Ready" || machine.status == "AwaitingAssignment" || machine.status == "ExistingOS" || machine.status == "Offline" %}
                                                 <button @click="openReimageModal('{{ machine.id }}')" class="inline-flex items-center px-3 py-1 border border-transparent text-sm leading-5 font-medium rounded text-cyan-700 bg-cyan-100 hover:bg-cyan-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-cyan-500 dark:bg-cyan-900 dark:text-cyan-200 dark:hover:bg-cyan-800">
                                                     ♻️ Reimage
                                                 </button>

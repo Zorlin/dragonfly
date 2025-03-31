@@ -10,49 +10,50 @@ default = []
 
 [dependencies]
 # Web Framework
-axum = { version = "0.8", features = ["macros"] }
+axum = { version = "0.8.3", features = ["macros", "ws", "http2"] }
 # Authentication
 # Revert axum-login back to stable version
 axum-login = { version = "0.17.0" }
-axum-extra = "0.10.1"
+axum-extra = { version = "0.10.1", features = ["typed-header"] }
 # Sessions
 tower-sessions = { version = "0.14.0" }
 # Use sqlx store - trying version 0.15.0 for compatibility
 tower-sessions-sqlx-store = { version = "0.15.0", features = ["sqlite"] }
 async-session = "3.0.0"
 async-trait = "0.1.79"
+# For SSE streaming
+async-stream = "0.3.5"
 # Password hashing
 argon2 = "0.5.2"
 # Templating
-askama = { version = "0.12", features = ["with-axum"] }
-askama_axum = "0.4"
+# askama = { version = "0.12", features = ["with-axum"] }
+askama_axum = "0.4.0"
+minijinja = { version = "2.3.0", features = ["loader"] }
+minijinja-autoreload = "2.3.0"
+minijinja-embed = "2.3.0"
 # Databases
 sqlx = { version = "0.8.3", features = ["runtime-tokio-rustls", "postgres", "sqlite", "uuid", "chrono", "json", "migrate"] }
 # Utilities
 rand = "0.8.5"
 time = "0.3"
-uuid = { version = "1.5", features = ["v4", "serde"] }
-tower = "0.4"
-tower-http = { version = "0.5", features = ["trace", "auth", "fs", "cors"] }
-tokio = { version = "1.36.1", features = ["full"] }
+uuid = { version = "1.8.0", features = ["v4", "serde"] }
+tower = { version = "0.4", features = ["util"] }
+tower-http = { version = "0.5.0", features = ["fs", "trace", "cors"] }
+tokio = { version = "1.36.0", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures = "0.3"
-serde = { version = "1.0.186", features = ["derive"] }
-serde_json = "1.0.96"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 serde_yaml = "0.9"
-chrono = { version = "0.4.24", features = ["serde"] }
-anyhow = "1.0.76"
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1.0.81"
 thiserror = "1.0.48"
-tracing = "0.1.37"
-tracing-subscriber = "0.3.17"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["registry", "env-filter", "fmt"] }
 once_cell = "1.17.1"
 cookie = "0.18"
 bincode = "1.3"
 tower-cookies = "0.11.0"
-
-# macOS UI (only used on macOS)
-tray-icon = { version = "0.20.0", optional = true }
-image = { version = "0.24.7", optional = true }
 
 # Networking / DNS
 # dns_lookup = "2.0.4" # Removed synchronous resolver
@@ -66,7 +67,7 @@ kube = { version = "0.87.1", features = ["client", "derive", "runtime"] }
 k8s-openapi = { version = "0.20.0", features = ["v1_28"] }
 
 # Artifact download dependencies
-reqwest = { version = "0.12.15", features = ["json", "stream"] }
+reqwest = { version = "0.12.4", features = ["json", "rustls-tls"], default-features = false }
 bytes = "1.10.1"
 sha2 = "0.10.8"
 http-body-util = "0.1.3"
@@ -75,11 +76,20 @@ url = "2.5.4"
 tempfile = "3.19.1"
 
 # Unix utilities
-nix = { version = "0.27.1", features = ["process", "term", "signal", "fs"] }
+nix = { version = "0.28.0", features = ["user", "fs"] }
 
 # Background/socket activation
-listenfd = "1.0.2"
+listenfd = "1.0.1"
 
-[target.'cfg(target_os = "macos")'.dependencies]
-tray-icon = "0.20.0"
-image = "0.24.7"
+# Logging to file
+tracing-appender = "0.2"
+
+# Platform-specific directories
+dirs = "5.0"
+
+# Low-level C bindings
+libc = "0.2"
+
+sysinfo = "0.30"
+
+[dev-dependencies]

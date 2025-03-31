@@ -1,4 +1,3 @@
-use askama::Template;
 use axum::{
     extract::{Query, State},
     http::{header, HeaderMap, StatusCode},
@@ -9,17 +8,14 @@ use axum::{
 use dragonfly_common::models::{Machine, MachineStatus};
 use tracing::{error, info, warn};
 use std::collections::HashMap;
-use serde_json;
-use uuid;
 use chrono::{DateTime, Utc};
 use cookie::{Cookie, SameSite};
 use std::fs;
-
-use crate::db;
+use serde::Serialize;
+use crate::db::{self, get_app_settings, save_app_settings, mark_setup_completed};
 use crate::auth::{self, AuthSession, Settings, Credentials};
-use crate::filters;
-use crate::tinkerbell::WorkflowInfo;
 use crate::mode;
+use minijinja::{Environment, Error as MiniJinjaError, ErrorKind as MiniJinjaErrorKind};
 
 // Extract theme from cookies
 pub fn get_theme_from_cookie(headers: &HeaderMap) -> String {
@@ -37,8 +33,7 @@ pub fn get_theme_from_cookie(headers: &HeaderMap) -> String {
     "light".to_string()
 }
 
-#[derive(Template)]
-#[template(path = "index.html")]
+#[derive(Serialize)]
 pub struct IndexTemplate {
     pub title: String,
     pub machines: Vec<Machine>,
@@ -49,8 +44,7 @@ pub struct IndexTemplate {
     pub display_dates: HashMap<String, String>,
 }
 
-#[derive(Template)]
-#[template(path = "machine_list.html")]
+#[derive(Serialize)]
 pub struct MachineListTemplate {
     pub machines: Vec<Machine>,
     pub theme: String,
@@ -59,8 +53,7 @@ pub struct MachineListTemplate {
     pub workflow_infos: HashMap<uuid::Uuid, crate::tinkerbell::WorkflowInfo>,
 }
 
-#[derive(Template)]
-#[template(path = "machine_details.html")]
+#[derive(Serialize)]
 pub struct MachineDetailsTemplate {
     pub machine: Machine,
     pub theme: String,
@@ -70,8 +63,7 @@ pub struct MachineDetailsTemplate {
     pub workflow_info: Option<crate::tinkerbell::WorkflowInfo>,
 }
 
-#[derive(Template)]
-#[template(path = "settings.html")]
+#[derive(Serialize)]
 pub struct SettingsTemplate {
     pub theme: String,
     pub is_authenticated: bool,
@@ -89,24 +81,23 @@ pub struct SettingsTemplate {
     pub error_message: Option<String>,
 }
 
-// Add a new template for just the workflow progress section
-#[derive(Template)]
-#[template(path = "partials/workflow_progress.html")]
+#[derive(Serialize)]
 pub struct WorkflowProgressTemplate {
-    pub machine: Machine,
-    pub workflow_info: Option<WorkflowInfo>,
+    pub id: String,
+    pub current_task_name: String,
+    pub current_action_index: i64,
+    pub current_action_name: String,
+    pub current_action_status: String,
+    pub total_number_of_actions: i64,
 }
 
-// Add new template for welcome page
-#[derive(Template)]
-#[template(path = "welcome.html")]
+#[derive(Serialize)]
 pub struct WelcomeTemplate {
     pub theme: String,
     pub is_authenticated: bool,
 }
 
-#[derive(Template)]
-#[template(path = "error.html")]
+#[derive(Serialize)]
 pub struct ErrorTemplate {
     pub theme: String,
     pub is_authenticated: bool,
@@ -119,72 +110,42 @@ pub struct ErrorTemplate {
     pub retry_url: String,
 }
 
-enum UiTemplate {
-    Index(IndexTemplate),
-    MachineList(MachineListTemplate),
-    MachineDetails(MachineDetailsTemplate),
-    Settings(SettingsTemplate),
-    Welcome(WelcomeTemplate),
-    Error(ErrorTemplate),
-}
+// Updated render_minijinja function
+fn render_minijinja<T: Serialize>(
+    app_state: &crate::AppState,
+    template_name: &str, 
+    context: T
+) -> Response {
+    // Get the environment based on the mode (static or reloading)
+    let render_result = match &app_state.template_env {
+        crate::TemplateEnv::Static(env) => {
+            env.get_template(template_name)
+               .and_then(|tmpl| tmpl.render(context))
+        }
+        #[cfg(debug_assertions)]
+        crate::TemplateEnv::Reloading(reloader) => {
+            // Acquire the environment from the reloader
+            match reloader.acquire_env() {
+                Ok(env) => {
+                    env.get_template(template_name)
+                       .and_then(|tmpl| tmpl.render(context))
+                }
+                Err(e) => {
+                    error!("Failed to acquire MiniJinja env from reloader: {}", e);
+                    // Convert minijinja::Error to rendering result error
+                    Err(MiniJinjaError::new(MiniJinjaErrorKind::InvalidOperation, 
+                        format!("Failed to acquire env from reloader: {}", e)))
+                }
+            }
+        }
+    };
 
-impl IntoResponse for UiTemplate {
-    fn into_response(self) -> Response {
-        match self {
-            UiTemplate::Index(template) => {
-                match template.render() {
-                    Ok(html) => Html(html).into_response(),
-                    Err(err) => {
-                        eprintln!("Template error: {}", err);
-                        StatusCode::INTERNAL_SERVER_ERROR.into_response()
-                    }
-                }
-            },
-            UiTemplate::MachineList(template) => {
-                match template.render() {
-                    Ok(html) => Html(html).into_response(),
-                    Err(err) => {
-                        eprintln!("Template error: {}", err);
-                        StatusCode::INTERNAL_SERVER_ERROR.into_response()
-                    }
-                }
-            },
-            UiTemplate::MachineDetails(template) => {
-                match template.render() {
-                    Ok(html) => Html(html).into_response(),
-                    Err(err) => {
-                        eprintln!("Template error: {}", err);
-                        StatusCode::INTERNAL_SERVER_ERROR.into_response()
-                    }
-                }
-            },
-            UiTemplate::Settings(template) => {
-                match template.render() {
-                    Ok(html) => Html(html).into_response(),
-                    Err(err) => {
-                        eprintln!("Template error: {}", err);
-                        StatusCode::INTERNAL_SERVER_ERROR.into_response()
-                    }
-                }
-            },
-            UiTemplate::Welcome(template) => {
-                match template.render() {
-                    Ok(html) => Html(html).into_response(),
-                    Err(err) => {
-                        eprintln!("Template error: {}", err);
-                        StatusCode::INTERNAL_SERVER_ERROR.into_response()
-                    }
-                }
-            },
-            UiTemplate::Error(template) => {
-                match template.render() {
-                    Ok(html) => Html(html).into_response(),
-                    Err(err) => {
-                        eprintln!("Template error: {}", err);
-                        StatusCode::INTERNAL_SERVER_ERROR.into_response()
-                    }
-                }
-            },
+    // Handle the final rendering result
+    match render_result {
+        Ok(html) => Html(html).into_response(),
+        Err(e) => {
+            error!("MiniJinja render/load error for {}: {}", template_name, e);
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Template error: {}", e)).into_response()
         }
     }
 }
@@ -280,7 +241,8 @@ pub async fn index(
                 display_dates.insert(machine.id.to_string(), format_datetime(&machine.created_at));
             }
             
-            UiTemplate::Index(IndexTemplate {
+            // Replace Askama render with placeholder
+            let context = IndexTemplate {
                 title: "Dragonfly".to_string(),
                 machines,
                 status_counts,
@@ -288,11 +250,14 @@ pub async fn index(
                 theme,
                 is_authenticated,
                 display_dates,
-            }).into_response()
+            };
+            // Pass AppState to render_minijinja
+            render_minijinja(&app_state, "index.html", context)
         },
         Err(e) => {
             error!("Error fetching machines for index page: {}", e);
-            UiTemplate::Index(IndexTemplate {
+            // Replace Askama render with placeholder
+            let context = IndexTemplate {
                 title: "Dragonfly".to_string(),
                 machines: vec![],
                 status_counts: HashMap::new(),
@@ -300,7 +265,9 @@ pub async fn index(
                 theme: "system".to_string(),
                 is_authenticated,
                 display_dates: HashMap::new(),
-            }).into_response()
+            };
+            // Pass AppState to render_minijinja
+            render_minijinja(&app_state, "index.html", context)
         }
     }
 }
@@ -337,23 +304,29 @@ pub async fn machine_list(
                 }
             }
 
-            UiTemplate::MachineList(MachineListTemplate {
+            // Replace Askama render with placeholder
+            let context = MachineListTemplate {
                 machines,
                 theme,
                 is_authenticated,
                 is_admin,
                 workflow_infos,
-            }).into_response()
+            };
+            // Pass AppState to render_minijinja
+            render_minijinja(&app_state, "machine_list.html", context)
         },
         Err(e) => {
             error!("Error fetching machines for machine list page: {}", e);
-            UiTemplate::MachineList(MachineListTemplate {
+            // Replace Askama render with placeholder
+            let context = MachineListTemplate {
                 machines: vec![],
                 theme,
                 is_authenticated,
                 is_admin,
                 workflow_infos: HashMap::new(),
-            }).into_response()
+            };
+            // Pass AppState to render_minijinja
+            render_minijinja(&app_state, "machine_list.html", context)
         }
     }
 }
@@ -408,19 +381,22 @@ pub async fn machine_details(
                         None
                     };
                     
-                    UiTemplate::MachineDetails(MachineDetailsTemplate { 
+                    // Replace Askama render with placeholder
+                    let context = MachineDetailsTemplate {
                         machine,
                         theme,
                         is_authenticated,
                         created_at_formatted,
                         updated_at_formatted,
                         workflow_info,
-                    }).into_response()
+                    };
+                    // Pass AppState to render_minijinja
+                    render_minijinja(&app_state, "machine_details.html", context)
                 },
                 Ok(None) => {
                     error!("Machine not found: {}", uuid);
-                    // Return to index page with error
-                    UiTemplate::Index(IndexTemplate {
+                    // Replace Askama render with placeholder
+                    let context = IndexTemplate {
                         title: "Dragonfly - Machine Not Found".to_string(),
                         machines: vec![],
                         status_counts: HashMap::new(),
@@ -428,12 +404,14 @@ pub async fn machine_details(
                         theme: "system".to_string(),
                         is_authenticated,
                         display_dates: HashMap::new(),
-                    }).into_response()
+                    };
+                    // Pass AppState to render_minijinja
+                    render_minijinja(&app_state, "index.html", context)
                 },
                 Err(e) => {
                     error!("Error fetching machine {}: {}", uuid, e);
-                    // Return to index page with error
-                    UiTemplate::Index(IndexTemplate {
+                    // Replace Askama render with placeholder
+                    let context = IndexTemplate {
                         title: "Dragonfly - Error".to_string(),
                         machines: vec![],
                         status_counts: HashMap::new(),
@@ -441,14 +419,16 @@ pub async fn machine_details(
                         theme: "system".to_string(),
                         is_authenticated,
                         display_dates: HashMap::new(),
-                    }).into_response()
+                    };
+                    // Pass AppState to render_minijinja
+                    render_minijinja(&app_state, "index.html", context)
                 }
             }
         },
         Err(e) => {
             error!("Invalid UUID: {}", e);
-            // Return to index page with error
-            UiTemplate::Index(IndexTemplate {
+            // Replace Askama render with placeholder
+            let context = IndexTemplate {
                 title: "Dragonfly - Invalid UUID".to_string(),
                 machines: vec![],
                 status_counts: HashMap::new(),
@@ -456,7 +436,9 @@ pub async fn machine_details(
                 theme: "system".to_string(),
                 is_authenticated,
                 display_dates: HashMap::new(),
-            }).into_response()
+            };
+            // Pass AppState to render_minijinja
+            render_minijinja(&app_state, "index.html", context)
         }
     }
 }
@@ -540,7 +522,8 @@ pub async fn settings_page(
         (false, String::new())
     };
     
-    UiTemplate::Settings(SettingsTemplate {
+    // Replace Askama render with placeholder
+    let context = SettingsTemplate {
         theme,
         is_authenticated,
         admin_username,
@@ -555,7 +538,9 @@ pub async fn settings_page(
         rendered_password,
         show_admin_settings,
         error_message: None,
-    }).into_response()
+    };
+    // Pass AppState to render_minijinja
+    render_minijinja(&app_state, "settings.html", context)
 }
 
 #[derive(serde::Deserialize)]
@@ -564,84 +549,96 @@ pub struct SettingsForm {
     pub require_login: Option<String>,
     pub default_os: Option<String>,
     pub username: Option<String>,
-    pub old_password: Option<String>,
-    pub password: Option<String>,
+    pub admin_password: Option<String>,
     pub password_confirm: Option<String>,
+    pub setup_completed: Option<String>,
 }
 
 // Handler for settings form submission
 pub async fn update_settings(
     State(app_state): State<crate::AppState>,
-    auth_session: AuthSession,
+    mut auth_session: AuthSession,
     Form(form): Form<SettingsForm>,
 ) -> Response {
-    // Check if user is authenticated
-    let is_authenticated = auth_session.user.is_some();
-    
-    // If updating password, verify credentials first
-    if let (Some(_old_password), Some(password), Some(password_confirm)) = 
-        (&form.old_password, &form.password, &form.password_confirm) {
-        
-        if !password.is_empty() && password == password_confirm {
-            // Only allow password update if authenticated
-            if is_authenticated {
-                let username = form.username.unwrap_or_else(|| "admin".to_string());
-                
-                // Create new credentials directly
-                match Credentials::create(username, password.clone()) {
-                    Ok(new_credentials) => {
-                        // Save them
-                        if let Err(e) = auth::save_credentials(&new_credentials).await {
-                            return Response::builder()
-                                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                                .body(format!("Failed to save credentials: {}", e).into())
-                                .unwrap();
+    // Require admin authentication
+    if let Err(response) = auth::require_admin(&auth_session) {
+        return response;
+    }
+
+    // Load current settings to get existing setup_completed value
+    let current_settings = match get_app_settings().await {
+        Ok(settings) => settings,
+        Err(e) => {
+            error!("Failed to load current settings: {}", e);
+            // Return an error response or use defaults
+            Settings::default()
+        }
+    };
+
+    // Construct the new settings, preserving existing setup_completed
+    let new_settings = Settings {
+        require_login: form.require_login.is_some(),
+        // Handle optional default_os correctly by filtering out empty strings
+        default_os: form.default_os.filter(|os| !os.is_empty()),
+        // Use the setup_completed value from the form if present (checkbox is checked),
+        // otherwise keep the current value from the database.
+        setup_completed: form.setup_completed.is_some().then_some(true).unwrap_or(current_settings.setup_completed),
+    };
+
+    // Save the general settings
+    if let Err(e) = save_app_settings(&new_settings).await {
+        error!("Failed to save settings: {}", e);
+        // Handle error, maybe return an error message to the user
+        // For now, just log and continue
+    }
+
+    // Update admin password if provided and confirmed
+    // Check form.admin_password instead of form.password
+    if let (Some(password), Some(confirm)) = (&form.admin_password, &form.password_confirm) {
+        if !password.is_empty() && password == confirm {
+            // Load current credentials to get username (or use default 'admin')
+            let username = match auth::load_credentials().await {
+                Ok(creds) => creds.username,
+                Err(_) => {
+                    warn!("Could not load current credentials, defaulting username to 'admin' for password change.");
+                    "admin".to_string()
+                }
+            };
+
+            // Hash the new password
+            match Credentials::create(username, password.clone()) {
+                Ok(new_creds) => {
+                    if let Err(e) = auth::save_credentials(&new_creds).await {
+                        error!("Failed to save new admin password: {}", e);
+                        // Handle credential saving error
+                    } else {
+                        // Password updated successfully, delete initial password file if it exists
+                        if std::path::Path::new("initial_password.txt").exists() {
+                            if let Err(e) = std::fs::remove_file("initial_password.txt") {
+                                warn!("Failed to remove initial_password.txt: {}", e);
+                            }
                         }
-                    },
-                    Err(e) => {
-                        return Response::builder()
-                            .status(StatusCode::INTERNAL_SERVER_ERROR)
-                            .body(format!("Failed to create credentials: {}", e).into())
-                            .unwrap();
+                        // Force logout after password change
+                        let _ = auth_session.logout().await;
+                        return Redirect::to("/login?message=password_updated").into_response();
                     }
+                }
+                Err(e) => {
+                    error!("Failed to hash new password: {}", e);
+                    // Handle hashing error (e.g., display message to user)
                 }
             }
         }
     }
-    
-    // Update settings
-    let mut settings = match app_state.settings.try_lock() {
-        Ok(guard) => (*guard).clone(),
-        Err(_) => Settings::default(),
-    };
-    
-    // Update require_login setting
-    settings.require_login = form.require_login.is_some();
-    
-    // Update default OS setting
-    match form.default_os.as_deref() {
-        Some("none") => settings.default_os = None,
-        Some(os) if !os.is_empty() => settings.default_os = Some(os.to_string()),
-        _ => {}
-    }
-    
-    // Save the updated settings
-    if let Err(e) = auth::save_settings(&settings).await {
-        error!("Failed to save settings: {}", e);
-    }
-    
-    // Update settings in app state
-    if let Ok(mut guard) = app_state.settings.try_lock() {
-        *guard = settings;
-    }
-    
-    // Set the theme cookie based on the form submission
+
+    // --- Add theme cookie setting logic back --- 
+    // Create cookie with proper builder pattern
     let mut cookie = Cookie::new("dragonfly_theme", form.theme);
     cookie.set_path("/");
     cookie.set_max_age(time::Duration::days(365));
     cookie.set_same_site(SameSite::Lax);
-
-    // Redirect back to settings page with the theme cookie set
+    
+    // Set cookie header and redirect back to settings page
     (
         [(header::SET_COOKIE, cookie.to_string())],
         Redirect::to("/settings")
@@ -650,6 +647,7 @@ pub async fn update_settings(
 
 // New handler for welcome page
 pub async fn welcome_page(
+    State(app_state): State<crate::AppState>,
     headers: HeaderMap,
     auth_session: AuthSession,
 ) -> Response {
@@ -657,10 +655,13 @@ pub async fn welcome_page(
     let theme = get_theme_from_cookie(&headers);
     let is_authenticated = auth_session.user.is_some();
     
-    UiTemplate::Welcome(WelcomeTemplate {
+    // Replace Askama render with placeholder
+    let context = WelcomeTemplate {
         theme,
         is_authenticated,
-    }).into_response()
+    };
+    // Pass AppState to render_minijinja
+    render_minijinja(&app_state, "welcome.html", context)
 }
 
 // Handlers for the different setup modes
@@ -691,8 +692,16 @@ pub async fn setup_simple(
                 }
             }
             
-            // Mark setup as completed
-            mark_setup_completed(&app_state).await;
+            // Fix this: Mark setup as completed by passing bool instead of &AppState
+            if let Err(e) = mark_setup_completed(true).await {
+                error!("Failed to mark setup as completed: {}", e);
+            } else {
+                info!("Setup marked as completed");
+                
+                // Also update the in-memory settings
+                let mut settings = app_state.settings.lock().await;
+                settings.setup_completed = true;
+            }
             
             // Redirect to main page
             Redirect::to("/").into_response()
@@ -700,8 +709,8 @@ pub async fn setup_simple(
         Err(e) => {
             error!("Failed to configure system for Simple mode: {}", e);
             
-            // Return error template
-            UiTemplate::Error(ErrorTemplate {
+            // Replace Askama render with placeholder
+            let context = ErrorTemplate {
                 theme,
                 is_authenticated,
                 title: "Setup Failed".to_string(),
@@ -711,7 +720,9 @@ pub async fn setup_simple(
                 back_text: "Back to Dashboard".to_string(),
                 show_retry: true,
                 retry_url: "/setup/simple".to_string(),
-            }).into_response()
+            };
+            // Pass AppState to render_minijinja
+            render_minijinja(&app_state, "error.html", context)
         }
     }
 }
@@ -743,8 +754,16 @@ pub async fn setup_flight(
                 }
             }
             
-            // Mark setup as completed
-            mark_setup_completed(&app_state).await;
+            // Fix this: Mark setup as completed by passing bool instead of &AppState
+            if let Err(e) = mark_setup_completed(true).await {
+                error!("Failed to mark setup as completed: {}", e);
+            } else {
+                info!("Setup marked as completed");
+                
+                // Also update the in-memory settings
+                let mut settings = app_state.settings.lock().await;
+                settings.setup_completed = true;
+            }
 
             // Redirect to a flight status page that shows installation progress
             // For now, just redirect to main page
@@ -753,18 +772,20 @@ pub async fn setup_flight(
         Err(e) => {
             error!("Failed to configure system for Flight mode: {}", e);
             
-            // Return error template
-            UiTemplate::Error(ErrorTemplate {
+            // Replace Askama render with placeholder
+            let context = ErrorTemplate {
                 theme,
                 is_authenticated,
-                title: "Flight Mode Setup Failed".to_string(),
+                title: "Setup Failed".to_string(),
                 message: "There was a problem setting up Flight mode.".to_string(),
                 error_details: format!("{}", e),
                 back_url: "/".to_string(),
                 back_text: "Back to Dashboard".to_string(),
                 show_retry: true,
                 retry_url: "/setup/flight".to_string(),
-            }).into_response()
+            };
+            // Pass AppState to render_minijinja
+            render_minijinja(&app_state, "error.html", context)
         }
     }
 }
@@ -796,8 +817,16 @@ pub async fn setup_swarm(
                 }
             }
             
-            // Mark setup as completed 
-            mark_setup_completed(&app_state).await;
+            // Fix this: Mark setup as completed by passing bool instead of &AppState
+            if let Err(e) = mark_setup_completed(true).await {
+                error!("Failed to mark setup as completed: {}", e);
+            } else {
+                info!("Setup marked as completed");
+                
+                // Also update the in-memory settings
+                let mut settings = app_state.settings.lock().await;
+                settings.setup_completed = true;
+            }
             
             // Redirect to main page
             Redirect::to("/").into_response()
@@ -805,32 +834,20 @@ pub async fn setup_swarm(
         Err(e) => {
             error!("Failed to configure system for Swarm mode: {}", e);
             
-            // Return error template
-            UiTemplate::Error(ErrorTemplate {
+            // Replace Askama render with placeholder
+            let context = ErrorTemplate {
                 theme,
                 is_authenticated,
-                title: "Swarm Mode Setup Failed".to_string(),
+                title: "Setup Failed".to_string(),
                 message: "There was a problem setting up Swarm mode.".to_string(),
                 error_details: format!("{}", e),
                 back_url: "/".to_string(),
                 back_text: "Back to Dashboard".to_string(),
                 show_retry: true,
                 retry_url: "/setup/swarm".to_string(),
-            }).into_response()
+            };
+            // Pass AppState to render_minijinja
+            render_minijinja(&app_state, "error.html", context)
         }
-    }
-}
-
-// Helper to mark setup as completed
-async fn mark_setup_completed(app_state: &crate::AppState) {
-    // Use dedicated function to mark setup as completed
-    if let Err(e) = crate::db::mark_setup_completed(true).await {
-        tracing::error!("Failed to mark setup as completed: {}", e);
-    } else {
-        tracing::info!("Setup marked as completed");
-        
-        // Also update the in-memory settings - tokio::sync::Mutex::lock returns a MutexGuard, not a Result
-        let mut settings = app_state.settings.lock().await;
-        settings.setup_completed = true;
     }
 } 

@@ -1550,4 +1550,23 @@ pub async fn start_workflow_polling_task(
             }
         }
     });
+}
+
+// Get workflow information from Kubernetes for a specific machine ID
+pub async fn get_workflow_info_by_id(id: &uuid::Uuid) -> Result<Option<WorkflowInfo>> {
+    // First, find the machine by ID
+    match crate::db::get_machine_by_id(id).await {
+        Ok(Some(machine)) => {
+            // Use the existing get_workflow_info function once we have the machine
+            get_workflow_info(&machine).await
+        },
+        Ok(None) => {
+            warn!("Cannot get workflow info: Machine with ID {} not found", id);
+            Ok(None)
+        },
+        Err(e) => {
+            error!("Error fetching machine with ID {}: {}", id, e);
+            Err(anyhow!("Error fetching machine: {}", e))
+        }
+    }
 } 

@@ -1,6 +1,7 @@
-use askama::Result;
+// use askama::Result;
 use chrono::{DateTime, Utc};
 
+/* TODO: Refactor filters for MiniJinja
 pub fn length<T>(collection: &[T]) -> Result<usize> {
     Ok(collection.len())
 }
@@ -24,4 +25,5 @@ pub fn unwrap_or<'a>(opt: &'a Option<String>, default: &'a str) -> Result<&'a st
 // Format DateTime<Utc> without subsecond precision
 pub fn format_datetime(dt: &DateTime<Utc>) -> Result<String> {
     Ok(dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
-} 
+}
+*/ 

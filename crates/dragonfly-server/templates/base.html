@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Dragonfly{% endblock %}</title>
+    <!-- Add favicon -->
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
     <script>
         (function() {
             // Get the server-provided theme first, then fallback to localStorage, then system
@@ -51,32 +53,15 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-    <!-- TODO: Replace with proper Tailwind CSS installation via PostCSS or CLI -->
-    <!-- See: https://tailwindcss.com/docs/installation -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-      // Tailwind Configuration
-      tailwind.config = {
-        darkMode: 'class',
-        theme: {
-          extend: {
-            fontFamily: {
-              sans: ['Inter', 'ui-sans-serif', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'Helvetica Neue', 'Arial', 'sans-serif'],
-              mono: ['JetBrains Mono', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', 'Courier New', 'monospace'],
-            },
-          }
-        }
-      }
-    </script>
-    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <!-- Remove CDN version and use the local styles.css file with Tailwind classes -->
+    <link rel="stylesheet" href="/static/css/tailwind.min.css">
+    <link rel="stylesheet" href="/static/styles.css">
     {% block head %}{% endblock %}
     <style>
         [x-cloak] { display: none !important; }
     </style>
 
 <!-- Add styles to prevent flash of wrong theme -->
-    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
-    {% block head %}{% endblock %}
     <style>
         [x-cloak] { display: none !important; }
         
@@ -99,7 +84,232 @@
             font-family: 'JetBrains Mono', monospace !important;
             letter-spacing: -0.025em;
         }
+        
+        /* Dark mode styles */
+        html.dark {
+            color-scheme: dark;
+        }
+        
+        html.dark body {
+            background-color: #0A0B10;
+            color: #f3f4f6;
+        }
+        
+        /* Force dark mode for users with system preference */
+        @media (prefers-color-scheme: dark) {
+            html[data-theme="system"] {
+                color-scheme: dark;
+            }
+            
+            html[data-theme="system"] body {
+                background-color: #0A0B10;
+                color: #f3f4f6;
+            }
+        }
     </style>
+    
+    <!-- SSE for live reload during development -->
+    <script>
+        // Connect to SSE for real-time updates
+        document.addEventListener("DOMContentLoaded", function() {
+            const evtSource = new EventSource("/api/sse-events");
+            
+            // Set up listeners for specific event types
+            evtSource.addEventListener("machine_updated", function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    console.log("Machine updated:", data);
+                    
+                    // Only refresh if we're viewing the machines page or the specific machine
+                    const machineListElement = document.getElementById('machine-list');
+                    const currentPath = window.location.pathname;
+                    
+                    if (machineListElement) {
+                        // We're on the machines page - refresh the list
+                        htmx.trigger(machineListElement, 'refreshMachines');
+                        
+                        // Show toast notification
+                        showToast(`Machine ${data.id} updated`, 'info');
+                    } 
+                    else if (currentPath.match(/^\/machines\/[a-f0-9-]+$/)) {
+                        // We're viewing a specific machine, check if it's the one that was updated
+                        const machineId = currentPath.split('/').pop();
+                        if (machineId === data.id) {
+                            // Refresh just the machine details
+                            const detailsElement = document.querySelector('[hx-trigger="refreshMachineDetails"]');
+                            if (detailsElement) {
+                                htmx.trigger(detailsElement, 'refreshMachineDetails');
+                                showToast("Machine details updated", 'info');
+                            }
+                        }
+                    }
+                } catch (e) {
+                    console.error("Error parsing SSE event data:", e, "Raw data:", event.data);
+                }
+            });
+            
+            // Add handler for template_changed event for live reload during development
+            evtSource.addEventListener("template_changed", function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    console.log("Template changed, checking if reload needed:", data);
+                    window.location.reload();
+                } catch (e) {
+                    console.error("Error parsing template_changed event data:", e, "Raw data:", event.data);
+                }
+            });
+            
+            evtSource.addEventListener("machine_discovered", function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    console.log("Machine discovered:", data);
+                    
+                    // Only refresh if we're viewing the machines page
+                    const machineListElement = document.getElementById('machine-list');
+                    if (machineListElement) {
+                        htmx.trigger(machineListElement, 'refreshMachines');
+                        showToast("New machine discovered", 'success');
+                    }
+                } catch (e) {
+                    console.error("Error parsing machine_discovered event data:", e, "Raw data:", event.data);
+                }
+            });
+            
+            evtSource.addEventListener("machine_deleted", function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    console.log("Machine deleted:", data);
+                    
+                    const machineListElement = document.getElementById('machine-list');
+                    const currentPath = window.location.pathname;
+                    
+                    if (machineListElement) {
+                        htmx.trigger(machineListElement, 'refreshMachines');
+                        showToast(`Machine ${data.id} deleted`, 'warning');
+                    } 
+                    else if (currentPath.match(/^\/machines\/[a-f0-9-]+$/)) {
+                        // If we're viewing the machine that was deleted, redirect to the machines list
+                        const machineId = currentPath.split('/').pop();
+                        if (machineId === data.id) {
+                            showToast("This machine has been deleted", 'error');
+                            // Redirect after a short delay so the user can see the message
+                            setTimeout(() => {
+                                window.location.href = "/machines";
+                            }, 2000);
+                        }
+                    }
+                } catch (e) {
+                    console.error("Error parsing machine_deleted event data:", e, "Raw data:", event.data);
+                }
+            });
+            
+            // Handle generic messages (fallback)
+            evtSource.addEventListener("message", function(event) {
+                console.log("Generic event received:", event.data);
+                try {
+                    const data = JSON.parse(event.data);
+                    
+                    // For backward compatibility - reload if type is "reload"
+                    if (data.type === "reload") {
+                        // Try targeted refresh first
+                        const machineListElement = document.getElementById('machine-list');
+                        if (machineListElement) {
+                            htmx.trigger(machineListElement, 'refreshMachines');
+                        } else {
+                            // Fall back to full page reload if needed
+                            console.log("No specific handler for this event, refreshing selected elements or page...");
+                            
+                            // Try to refresh any element with a refreshable trigger
+                            const refreshTargets = document.querySelectorAll('[hx-trigger*="refresh"]');
+                            if (refreshTargets.length > 0) {
+                                refreshTargets.forEach(target => {
+                                    // Extract the refresh trigger from the element
+                                    const triggerAttr = target.getAttribute('hx-trigger');
+                                    const refreshTrigger = triggerAttr.split(',').find(t => t.includes('refresh'));
+                                    if (refreshTrigger) {
+                                        const triggerName = refreshTrigger.trim().split(' ')[0];
+                                        htmx.trigger(target, triggerName);
+                                    }
+                                });
+                            } else {
+                                // If no specific refreshable elements found and it's a UI-changing action
+                                if (data.message && (
+                                    data.message.includes('updated') || 
+                                    data.message.includes('created') || 
+                                    data.message.includes('deleted'))
+                                ) {
+                                    window.location.reload();
+                                }
+                            }
+                        }
+                    }
+                } catch (e) {
+                    console.error("Error parsing SSE generic event:", e, "Raw data:", event.data);
+                }
+            });
+            
+            evtSource.onerror = function(err) {
+                console.log("SSE connection error, reconnecting...");
+                // EventSource will automatically try to reconnect
+            };
+            
+            // Clean up the connection when the page is unloaded
+            window.addEventListener("beforeunload", function() {
+                evtSource.close();
+            });
+        });
+        
+        // Helper function to show toast notifications
+        function showToast(message, type = 'info') {
+            // Remove existing toasts
+            const existingToasts = document.querySelectorAll('.df-toast');
+            existingToasts.forEach(toast => {
+                toast.classList.add('opacity-0');
+                setTimeout(() => toast.remove(), 300);
+            });
+            
+            // Create toast element
+            const toast = document.createElement('div');
+            toast.className = 'df-toast fixed bottom-4 right-4 p-4 rounded-lg shadow-lg z-50 transform transition-all duration-300 flex items-center';
+            
+            // Set color based on type
+            let icon = '';
+            switch(type) {
+                case 'success':
+                    toast.classList.add('bg-green-100', 'text-green-800', 'border-l-4', 'border-green-500');
+                    icon = `<svg class="w-5 h-5 mr-2 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>`;
+                    break;
+                case 'error':
+                    toast.classList.add('bg-red-100', 'text-red-800', 'border-l-4', 'border-red-500');
+                    icon = `<svg class="w-5 h-5 mr-2 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>`;
+                    break;
+                case 'warning':
+                    toast.classList.add('bg-yellow-100', 'text-yellow-800', 'border-l-4', 'border-yellow-500');
+                    icon = `<svg class="w-5 h-5 mr-2 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>`;
+                    break;
+                default: // info
+                    toast.classList.add('bg-blue-100', 'text-blue-800', 'border-l-4', 'border-blue-500');
+                    icon = `<svg class="w-5 h-5 mr-2 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>`;
+            }
+            
+            toast.innerHTML = `${icon}<span>${message}</span>`;
+            
+            // Add to DOM
+            document.body.appendChild(toast);
+            
+            // Animation: fade in
+            setTimeout(() => {
+                toast.classList.add('opacity-100');
+            }, 10);
+            
+            // Auto remove after 4 seconds
+            setTimeout(() => {
+                toast.classList.remove('opacity-100');
+                toast.classList.add('opacity-0', 'translate-y-2');
+                setTimeout(() => toast.remove(), 300);
+            }, 4000);
+        }
+    </script>
 </head>
 <body class="bg-gray-100 dark:bg-[#0A0B10] flex flex-col min-h-screen" x-data="{
     settingsOpen: false,
@@ -391,28 +601,62 @@
     </footer>
 
     <script>
+        // Ensure dark mode is properly applied on page load
+        document.addEventListener("DOMContentLoaded", function() {
+            const theme = '{{ theme }}' || localStorage.getItem('theme') || 'system';
+            document.documentElement.setAttribute('data-theme', theme);
+            
+            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            const shouldBeDark = theme === 'dark' || (theme === 'system' && prefersDark);
+            
+            if (shouldBeDark) {
+                document.documentElement.classList.add('dark');
+            } else {
+                document.documentElement.classList.remove('dark');
+            }
+            
+            // Watch for system preference changes
+            window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+                if (theme === 'system') {
+                    if (e.matches) {
+                        document.documentElement.classList.add('dark');
+                    } else {
+                        document.documentElement.classList.remove('dark');
+                    }
+                }
+            });
+        });
+        
         // Handoff detection mechanism - Retries if server is temporarily unavailable during handoff
         function checkHeartbeat() {
-            fetch("/api/heartbeat")
+            fetch("/api/heartbeat", { method: "HEAD" })
                 .catch(error => {
-                    console.log("Heartbeat check failed, server might be in handoff - retrying in 50ms", error);
+                    console.log("Heartbeat check failed, server might be in handoff - retrying in 500ms", error);
                     setTimeout(() => {
-                        // Try again after a short delay
-                        fetch("/api/heartbeat")
+                        // Try again after a longer delay
+                        fetch("/api/heartbeat", { method: "HEAD" })
                             .catch(() => {
-                                console.log("Heartbeat retry failed, reloading page");
-                                // If still failed, reload the page
-                                location.reload();
+                                console.log("Heartbeat retry failed, server may be unavailable");
+                                // Only reload after multiple failures 
+                                if (window.heartbeatFailCount && window.heartbeatFailCount > 3) {
+                                    console.log("Multiple heartbeat failures, reloading page");
+                                    location.reload();
+                                } else {
+                                    window.heartbeatFailCount = (window.heartbeatFailCount || 0) + 1;
+                                }
+                            })
+                            .then(() => {
+                                window.heartbeatFailCount = 0;
                             });
-                    }, 50);
+                    }, 500);
                 });
         }
         
-        // Check heartbeat every 5 seconds, primarily to detect handoff
-        setInterval(checkHeartbeat, 5000);
+        // Check heartbeat every 30 seconds instead of 5, primarily to detect handoff
+        setInterval(checkHeartbeat, 30000);
         
-        // Immediately check when the page loads
-        document.addEventListener("DOMContentLoaded", checkHeartbeat);
+        // Don't immediately check when the page loads
+        // document.addEventListener("DOMContentLoaded", checkHeartbeat);
     </script>
 </body>
 </html>

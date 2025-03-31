@@ -1,9 +1,16 @@
-use std::path::{Path, PathBuf};
-use anyhow::{Result, Context};
-use tracing::{info, warn, error};
-use tokio::sync::watch;
 use std::process::Command;
+use std::path::{Path, PathBuf};
+use tokio::sync::watch;
 use tokio::signal::unix::{signal, SignalKind};
+use anyhow::{Result, Context, anyhow};
+use tracing::{info, error, warn};
+use tracing_appender;
+use tracing_subscriber;
+use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use dirs;
+use std::os::unix::fs::PermissionsExt;
+use nix::libc;
+use std::str;
 
 // The different deployment modes
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,7 +101,7 @@ pub async fn save_mode(mode: DeploymentMode, already_elevated: bool) -> Result<(
                     
                 if !osa_output.status.success() {
                     let stderr = String::from_utf8_lossy(&osa_output.stderr);
-                    return Err(anyhow::anyhow!("Failed to create mode directory with admin privileges: {}", stderr));
+                    return Err(anyhow!("Failed to create mode directory with admin privileges: {}", stderr));
                 }
                 
                 info!("Mode directory created and mode set to: {}", mode.as_str());
@@ -108,7 +115,7 @@ pub async fn save_mode(mode: DeploymentMode, already_elevated: bool) -> Result<(
                     .context("Failed to create mode directory with sudo")?;
                     
                 if !sudo_mkdir.status.success() {
-                    return Err(anyhow::anyhow!("Failed to create mode directory with sudo: {}", 
+                    return Err(anyhow!("Failed to create mode directory with sudo: {}", 
                         String::from_utf8_lossy(&sudo_mkdir.stderr)));
                 }
                 
@@ -121,7 +128,7 @@ pub async fn save_mode(mode: DeploymentMode, already_elevated: bool) -> Result<(
                     .context("Failed to write mode file with sudo")?;
                     
                 if !sudo_write.status.success() {
-                    return Err(anyhow::anyhow!("Failed to write mode file with sudo: {}", 
+                    return Err(anyhow!("Failed to write mode file with sudo: {}", 
                         String::from_utf8_lossy(&sudo_write.stderr)));
                 }
                 
@@ -137,7 +144,7 @@ pub async fn save_mode(mode: DeploymentMode, already_elevated: bool) -> Result<(
                 info!("Mode directory created and mode set to: {}", mode.as_str());
                 return Ok(());
             } else {
-                return Err(anyhow::anyhow!("Failed to create mode directory and already attempted elevation: {}", e));
+                return Err(anyhow!("Failed to create mode directory and already attempted elevation: {}", e));
             }
         }
     }
@@ -332,108 +339,59 @@ pub async fn generate_launchd_plist(
 }
 
 // Ensure log directory exists with proper permissions
-pub fn ensure_log_directory() -> Result<String> {
-    let log_dir = "/var/log/dragonfly";
-    let path = std::path::Path::new(log_dir);
-    
-    if !path.exists() {
-        // Try to create it with regular permissions first
-        match std::fs::create_dir_all(log_dir) {
+pub fn ensure_log_directory() -> Result<String, anyhow::Error> {
+    let log_dir = if cfg!(target_os = "macos") {
+        // ~/Library/Logs/Dragonfly
+        dirs::home_dir()
+            .ok_or_else(|| anyhow!("Could not find home directory"))?
+            .join("Library/Logs/Dragonfly")
+    } else if cfg!(target_os = "linux") {
+        // /var/log/dragonfly
+        PathBuf::from("/var/log/dragonfly")
+    } else {
+        // Default to ~/.dragonfly/logs for other systems
+        dirs::home_dir()
+            .ok_or_else(|| anyhow!("Could not find home directory"))?
+            .join(".dragonfly/logs")
+    };
+
+    let log_dir_str = log_dir.to_str()
+        .ok_or_else(|| anyhow!("Log directory path is not valid UTF-8"))?
+        .to_string();
+
+    if !log_dir.exists() {
+        match std::fs::create_dir_all(&log_dir) {
             Ok(_) => {
-                // Set directory permissions to be writable by all users
-                let _ = Command::new("chmod")
-                    .args(["777", log_dir])
-                    .output();
-                
-                return Ok(log_dir.to_string());
-            },
-            Err(_e) => {
-                // If we can't create it, try with elevated privileges
-                // Use synchronous platform check
-                if is_macos() {
-                    // Use osascript for macOS
-                    let script = format!(
-                        r#"do shell script "mkdir -p {} && chmod 777 {}" with administrator privileges with prompt \"Dragonfly needs permission to create log directory\""#,
-                        log_dir, log_dir
-                    );
-                    
-                    match Command::new("osascript")
-                        .arg("-e")
-                        .arg(&script)
-                        .output()
-                    {
-                        Ok(output) if output.status.success() => {
-                            return Ok(log_dir.to_string());
-                        },
-                        _ => {
-                            // Fall back to /tmp if we can't create with elevated privileges
-                            return Ok("/tmp".to_string());
+                info!("Created log directory: {}", log_dir.display());
+                #[cfg(target_os = "linux")]
+                {
+                    if !has_root_privileges() {
+                        warn!("Log directory created, but running without root. Cannot set ownership/permissions for /var/log/dragonfly. Logs might not be writable.");
+                    } else {
+                        let current_uid = unsafe { libc::getuid() };
+                        let current_gid = unsafe { libc::getgid() };
+                        match nix::unistd::chown(log_dir.as_path(), Some(current_uid.into()), Some(current_gid.into())) {
+                            Ok(_) => info!("Set ownership of log directory to current user ({}:{})", current_uid, current_gid),
+                            Err(e) => warn!("Failed to set ownership of log directory {}: {}. This might be okay if already owned correctly.", log_dir.display(), e),
                         }
-                    }
-                } else {
-                    // Try with sudo for Linux
-                    let sudo_cmd = format!("sudo mkdir -p {} && sudo chmod 750 {}", log_dir, log_dir);
-                    
-                    match Command::new("sh")
-                        .arg("-c")
-                        .arg(&sudo_cmd)
-                        .output()
-                    {
-                        Ok(output) if output.status.success() => {
-                            return Ok(log_dir.to_string());
-                        },
-                        _ => {
-                            // Fall back to /tmp if we can't create with elevated privileges
-                            return Ok("/tmp".to_string());
+                        match std::fs::set_permissions(&log_dir, std::fs::Permissions::from_mode(0o775)) {
+                            Ok(_) => info!("Set permissions of log directory to 775"),
+                            Err(e) => warn!("Failed to set permissions for log directory {}: {}", log_dir.display(), e),
                         }
                     }
                 }
             }
-        }
-    } else {
-        // Directory exists, check if it's writable
-        match std::fs::metadata(log_dir) {
-            Ok(metadata) => {
-                let permissions = metadata.permissions();
-                
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    if permissions.mode() & 0o222 != 0 {
-                        return Ok(log_dir.to_string());
-                    } else {
-                        let _ = Command::new("chmod").args(["777", log_dir]).output();
-
-                        // Check again
-                        match std::fs::metadata(log_dir) {
-                            Ok(metadata) => {
-                                let permissions = metadata.permissions();
-                                if permissions.mode() & 0o222 != 0 {
-                                    return Ok(log_dir.to_string());
-                                } else {
-                                    return Ok("/tmp".to_string());
-                                }
-                            },
-                            Err(_) => return Ok("/tmp".to_string()),
-                        }
-                    }
+            Err(e) => {
+                if !log_dir.exists() {
+                    return Err(anyhow!("Failed to create log directory {}: {}", log_dir.display(), e));
+                } else {
+                    warn!("Log directory {} already existed or was created concurrently.", log_dir.display());
                 }
-                
-                #[cfg(not(unix))]
-                {
-                    if !permissions.readonly() {
-                        return Ok(log_dir.to_string());
-                    } else {
-                        return Ok("/tmp".to_string());
-                    }
-                }
-            },
-            Err(_) => return Ok("/tmp".to_string()),
+            }
         }
     }
-    
-    // If we get here, fall back to /tmp
-    Ok("/tmp".to_string())
+
+    Ok(log_dir_str)
 }
 
 // Start the service via service manager
@@ -461,7 +419,7 @@ pub fn start_service() -> Result<()> {
             
         if !load_output.status.success() {
             let stderr = String::from_utf8_lossy(&load_output.stderr);
-            return Err(anyhow::anyhow!("Failed to load launchd service: {}", stderr));
+            return Err(anyhow!("Failed to load launchd service: {}", stderr));
         }
         
         // Now start the service
@@ -472,7 +430,7 @@ pub fn start_service() -> Result<()> {
             
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow::anyhow!("Failed to start launchd service: {}", stderr));
+            return Err(anyhow!("Failed to start launchd service: {}", stderr));
         }
         
         info!("Service started successfully");
@@ -510,7 +468,7 @@ pub fn start_service() -> Result<()> {
             
         if !socket_output.status.success() {
             let stderr = String::from_utf8_lossy(&socket_output.stderr);
-            return Err(anyhow::anyhow!("Failed to start systemd socket: {}", stderr));
+            return Err(anyhow!("Failed to start systemd socket: {}", stderr));
         }
         
         // Start the service
@@ -521,7 +479,7 @@ pub fn start_service() -> Result<()> {
             
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow::anyhow!("Failed to start systemd service: {}", stderr));
+            return Err(anyhow!("Failed to start systemd service: {}", stderr));
         }
         
         info!("Socket and service started successfully");
@@ -559,31 +517,39 @@ async fn ensure_var_lib_ownership() -> Result<()> {
             // Need to use admin privileges
             let user = std::env::var("USER").context("Failed to get current username")?;
             let script = format!(
-                r#"do shell script "mkdir -p {} && chown {} {} && chmod 755 {}" with administrator privileges with prompt \"Dragonfly needs permission to create data directory\""#,
-                var_lib_dir.display(), 
+                r#"do shell script "mkdir -p '{}' && chown '{}' '{}' && chmod 755 '{}'" with administrator privileges with prompt \"Dragonfly needs permission to create data directory\""#,
+                var_lib_dir.display(),
                 user,
                 var_lib_dir.display(),
                 var_lib_dir.display()
             );
             
-            let osa_output = Command::new("osascript")
+            let osa_output_result = Command::new("osascript")
                 .arg("-e")
                 .arg(&script)
                 .output()
-                .context("Failed to execute osascript for sudo prompt")?;
-                
-            if !osa_output.status.success() {
-                let stderr = String::from_utf8_lossy(&osa_output.stderr);
-                warn!("Failed to create and chown /var/lib/dragonfly: {}", stderr);
-                // Continue anyway since this is not critical
-            } else {
-                info!("Created and set ownership of /var/lib/dragonfly to user {}", user);
+                .context("Failed to execute osascript for sudo prompt");
+
+            // Handle the result of the command execution
+            match osa_output_result {
+                Ok(osa_output) => {
+                    if !osa_output.status.success() {
+                        let stderr_str = String::from_utf8_lossy(&osa_output.stderr);
+                        warn!("Failed to create and chown /var/lib/dragonfly: {}", stderr_str);
+                        // Continue anyway since this is not critical
+                    } else {
+                        info!("Created and set ownership of /var/lib/dragonfly to user {}", user);
+                    }
+                }
+                Err(e) => {
+                    warn!("Error executing osascript for directory creation: {}", e);
+                }
             }
         } else {
             // Directory was created, now set ownership
             let user = std::env::var("USER").context("Failed to get current username")?;
             let script = format!(
-                r#"do shell script "chown {} {}" with administrator privileges with prompt \"Dragonfly needs permission to set ownership of data directory\""#,
+                r#"do shell script "chown '{}' '{}'" with administrator privileges with prompt \"Dragonfly needs permission to set ownership of data directory\""#,
                 user,
                 var_lib_dir.display()
             );
@@ -597,10 +563,12 @@ async fn ensure_var_lib_ownership() -> Result<()> {
                 if output.status.success() {
                     info!("Set ownership of /var/lib/dragonfly to user {}", user);
                 } else {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    warn!("Failed to set ownership of /var/lib/dragonfly: {}", stderr);
+                    let stderr_str = String::from_utf8_lossy(&output.stderr);
+                    warn!("Failed to set ownership of /var/lib/dragonfly: {}", stderr_str);
                     // Continue anyway since this is not critical
                 }
+            } else if let Err(e) = osa_output {
+                 warn!("Error executing osascript for ownership setting: {}", e);
             }
         }
     } else {
@@ -619,7 +587,7 @@ async fn ensure_var_lib_ownership() -> Result<()> {
                 info!("Changing ownership of /var/lib/dragonfly from {} to {}", current_owner, user);
                 
                 let script = format!(
-                    r#"do shell script "chown -R {} {}" with administrator privileges with prompt \"Dragonfly needs permission to set ownership of data directory\""#,
+                    r#"do shell script "chown -R '{}' '{}'" with administrator privileges with prompt \"Dragonfly needs permission to set ownership of data directory\""#,
                     user,
                     var_lib_dir.display()
                 );
@@ -633,18 +601,49 @@ async fn ensure_var_lib_ownership() -> Result<()> {
                     if output.status.success() {
                         info!("Set ownership of /var/lib/dragonfly to user {}", user);
                     } else {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        warn!("Failed to set ownership of /var/lib/dragonfly: {}", stderr);
+                        let stderr_str = String::from_utf8_lossy(&output.stderr);
+                        warn!("Failed to set ownership of /var/lib/dragonfly: {}", stderr_str);
                         // Continue anyway since this is not critical
                     }
-                }
+                 } else if let Err(e) = osa_output {
+                     warn!("Error executing osascript for ownership change: {}", e);
+                 }
             } else {
                 info!("/var/lib/dragonfly is already owned by user {}", user);
             }
+        } else if let Err(e) = stat_output {
+             warn!("Error executing stat command for ownership check: {}", e);
         }
     }
     
     Ok(())
+}
+
+// Check if the current process has root privileges
+fn has_root_privileges() -> bool {
+    #[cfg(unix)]
+    {
+        // Check if we can access a typically root-only directory
+        if let Ok(uid) = std::process::Command::new("id")
+            .args(["-u"])
+            .output()
+        {
+            if let Ok(uid_str) = String::from_utf8(uid.stdout) {
+                if let Ok(uid_num) = uid_str.trim().parse::<u32>() {
+                    return uid_num == 0;
+                }
+            }
+        }
+        
+        // Fallback to checking if we can write to a protected directory
+        std::fs::metadata("/root").is_ok()
+    }
+    
+    #[cfg(not(unix))]
+    {
+        // On other platforms, always return false
+        return false;
+    }
 }
 
 // Configure the system for Simple mode
@@ -663,7 +662,8 @@ pub async fn configure_simple_mode() -> Result<()> {
     let current_exec_path = std::env::current_exe()
         .context("Failed to get current executable path")?;
     
-    // Variables to track if we've used elevated privileges
+    // Initialize logger
+    let log_dir_path = ensure_log_directory()?;
     let mut used_elevation = false;
     
     // Copy executable to /usr/local/bin if needed
@@ -694,7 +694,8 @@ pub async fn configure_simple_mode() -> Result<()> {
                 },
                 _ => {
                     info!("Need elevated permissions to copy executable to {}", EXECUTABLE_TARGET_PATH);
-                    
+                    used_elevation = true;
+
                     // Need to use sudo, with one command that does everything:
                     // 1. Copy executable
                     // 2. Set executable permissions
@@ -703,14 +704,16 @@ pub async fn configure_simple_mode() -> Result<()> {
                     
                     // Build a script that does everything we need with a single privilege elevation
                     let script = format!(
-                        r#"do shell script "cp '{}' '{}' && chmod +x '{}' && mkdir -p {} && echo {} > {} && chmod 755 {}" with administrator privileges with prompt \"Dragonfly needs permission to configure Simple mode\""#,
-                        source_path, 
-                        EXECUTABLE_TARGET_PATH, 
+                        r#"do shell script "cp '{}' '{}' && chmod +x '{}' && mkdir -p {} && echo {} > {} && chmod 755 {} && mkdir -p '{}' && chmod 755 '{}'" with administrator privileges with prompt \"Dragonfly needs permission to configure Simple mode\""#,
+                        source_path,
+                        EXECUTABLE_TARGET_PATH,
                         EXECUTABLE_TARGET_PATH,
                         MODE_DIR,
                         DeploymentMode::Simple.as_str(),
                         MODE_FILE,
-                        MODE_DIR
+                        MODE_DIR,
+                        log_dir_path,
+                        log_dir_path
                     );
                     
                     let osa_output = Command::new("osascript")
@@ -721,11 +724,10 @@ pub async fn configure_simple_mode() -> Result<()> {
                         
                     if !osa_output.status.success() {
                         let stderr = String::from_utf8_lossy(&osa_output.stderr);
-                        return Err(anyhow::anyhow!("Failed to configure with admin privileges: {}", stderr));
+                        return Err(anyhow!("Failed to configure with admin privileges: {}", stderr));
                     }
                     
                     info!("System configured with admin privileges");
-                    used_elevation = true;
                 }
             }
         } else {
@@ -747,7 +749,8 @@ pub async fn configure_simple_mode() -> Result<()> {
                 },
                 Err(e) => {
                     info!("Need elevated permissions to copy executable to {}: {}", EXECUTABLE_TARGET_PATH, e);
-                    
+                    used_elevation = true;
+
                     // Try with pkexec first (graphical sudo)
                     let pkexec_available = Command::new("which")
                         .arg("pkexec")
@@ -760,14 +763,16 @@ pub async fn configure_simple_mode() -> Result<()> {
                         
                         // Do everything in one command
                         let script = format!(
-                            "pkexec sh -c 'cp \"{}\" \"{}\" && chmod +x \"{}\" && mkdir -p {} && echo {} > {} && chmod 755 {}'",
+                            "pkexec sh -c 'cp \"{}\" \"{}\" && chmod +x \"{}\" && mkdir -p {} && echo {} > {} && chmod 755 {} && mkdir -p {} && chmod 755 {}'",
                             current_exec_path.display(),
                             EXECUTABLE_TARGET_PATH,
                             EXECUTABLE_TARGET_PATH,
                             MODE_DIR,
                             DeploymentMode::Simple.as_str(),
                             MODE_FILE,
-                            MODE_DIR
+                            MODE_DIR,
+                            log_dir_path,
+                            log_dir_path
                         );
                         
                         let pkexec_output = Command::new("sh")
@@ -778,21 +783,22 @@ pub async fn configure_simple_mode() -> Result<()> {
                         match pkexec_output {
                             Ok(output) if output.status.success() => {
                                 info!("System configured with pkexec");
-                                used_elevation = true;
                             },
                             _ => {
                                 info!("pkexec failed or was cancelled, trying regular sudo");
                                 
                                 // Try with regular sudo, doing everything in one command
                                 let sudo_script = format!(
-                                    "sudo sh -c 'cp \"{}\" \"{}\" && chmod +x \"{}\" && mkdir -p {} && echo {} > {} && chmod 755 {}'",
+                                    "sudo sh -c 'cp \"{}\" \"{}\" && chmod +x \"{}\" && mkdir -p {} && echo {} > {} && chmod 755 {} && mkdir -p {} && chmod 755 {}'",
                                     current_exec_path.display(),
                                     EXECUTABLE_TARGET_PATH,
                                     EXECUTABLE_TARGET_PATH,
                                     MODE_DIR,
                                     DeploymentMode::Simple.as_str(),
                                     MODE_FILE,
-                                    MODE_DIR
+                                    MODE_DIR,
+                                    log_dir_path,
+                                    log_dir_path
                                 );
                                 
                                 let sudo_output = Command::new("sh")
@@ -803,24 +809,25 @@ pub async fn configure_simple_mode() -> Result<()> {
                                     
                                 if !sudo_output.status.success() {
                                     let stderr = String::from_utf8_lossy(&sudo_output.stderr);
-                                    return Err(anyhow::anyhow!("Failed to configure with sudo: {}", stderr));
+                                    return Err(anyhow!("Failed to configure with sudo: {}", stderr));
                                 }
                                 
                                 info!("System configured with sudo");
-                                used_elevation = true;
                             }
                         }
                     } else {
                         // Just use regular sudo
                         let sudo_script = format!(
-                            "sudo sh -c 'cp \"{}\" \"{}\" && chmod +x \"{}\" && mkdir -p {} && echo {} > {} && chmod 755 {}'",
+                            "sudo sh -c 'cp \"{}\" \"{}\" && chmod +x \"{}\" && mkdir -p {} && echo {} > {} && chmod 755 {} && mkdir -p {} && chmod 755 {}'",
                             current_exec_path.display(),
                             EXECUTABLE_TARGET_PATH,
                             EXECUTABLE_TARGET_PATH,
                             MODE_DIR,
                             DeploymentMode::Simple.as_str(),
                             MODE_FILE,
-                            MODE_DIR
+                            MODE_DIR,
+                            log_dir_path,
+                            log_dir_path
                         );
                         
                         let sudo_output = Command::new("sh")
@@ -831,11 +838,10 @@ pub async fn configure_simple_mode() -> Result<()> {
                             
                         if !sudo_output.status.success() {
                             let stderr = String::from_utf8_lossy(&sudo_output.stderr);
-                            return Err(anyhow::anyhow!("Failed to configure with sudo: {}", stderr));
+                            return Err(anyhow!("Failed to configure with sudo: {}", stderr));
                         }
                         
                         info!("System configured with sudo");
-                        used_elevation = true;
                     }
                 }
             }
@@ -851,31 +857,31 @@ pub async fn configure_simple_mode() -> Result<()> {
         current_exec_path
     };
     
-    // Create log directory before setting up services
-    let log_dir = "/var/log/dragonfly";
-    if !std::path::Path::new(log_dir).exists() {
-        // Create directory with appropriate permissions
-        if let Err(e) = tokio::fs::create_dir_all(log_dir).await {
-            warn!("Could not create log directory {}: {}", log_dir, e);
-            // Try with sudo if normal creation fails - no prompts if already used elevation
-            if is_macos() {
-                if !used_elevation {
-                    let _ = Command::new("osascript")
+    // Create log directory before setting up services if not already handled by elevated commands
+    if !used_elevation {
+        let log_dir = "/var/log/dragonfly";
+        if !std::path::Path::new(log_dir).exists() {
+            // Create directory with appropriate permissions
+            if let Err(e) = tokio::fs::create_dir_all(log_dir).await {
+                warn!("Could not create log directory {}: {}", log_dir, e);
+                // Try with sudo if normal creation fails
+                if is_macos() {
+                     let _ = Command::new("osascript")
                         .arg("-e")
                         .arg(format!(r#"do shell script "mkdir -p '{}' && chmod 755 '{}'" with administrator privileges"#, log_dir, log_dir))
                         .output();
+                } else {
+                    let _ = Command::new("sudo")
+                        .args(["mkdir", "-p", log_dir])
+                        .output();
+                    let _ = Command::new("sudo")
+                        .args(["chmod", "755", log_dir])
+                        .output();
                 }
-            } else {
-                let _ = Command::new("sudo")
-                    .args(["mkdir", "-p", log_dir])
-                    .output();
-                let _ = Command::new("sudo")
-                    .args(["chmod", "755", log_dir])
-                    .output();
             }
         }
+        info!("Log directory ready at {}", log_dir);
     }
-    info!("Log directory ready at {}", log_dir);
     
     // Check if we're on macOS
     if is_macos() {
@@ -1001,7 +1007,7 @@ pub async fn configure_simple_mode() -> Result<()> {
                 
             if !osa_output.status.success() {
                 let stderr = String::from_utf8_lossy(&osa_output.stderr);
-                return Err(anyhow::anyhow!("Failed to create mode directory with admin privileges: {}", stderr));
+                return Err(anyhow!("Failed to create mode directory with admin privileges: {}", stderr));
             }
             
             info!("Mode set to simple");
@@ -1012,13 +1018,12 @@ pub async fn configure_simple_mode() -> Result<()> {
     }
     
     info!("System configured for Simple mode. Dragonfly will run as a service on startup with a status bar icon.");
-    info!("Logs will be written to {}/dragonfly.log", log_dir);
+    info!("Logs will be written to {}/dragonfly.log", log_dir_path);
     info!("Starting service now...");
     
     // Start the service via the service manager (which will exit this process)
     start_service()?;
     
-    // This line should never be reached because start_service exits the process
     Ok(())
 }
 
@@ -1123,7 +1128,7 @@ pub async fn configure_flight_mode() -> Result<()> {
                 
             if !osa_output.status.success() {
                 let stderr = String::from_utf8_lossy(&osa_output.stderr);
-                return Err(anyhow::anyhow!("Failed to create directories with admin privileges: {}", stderr));
+                return Err(anyhow!("Failed to create directories with admin privileges: {}", stderr));
             }
             
             info!("Directories created and mode set with admin privileges");
@@ -1147,7 +1152,7 @@ pub async fn configure_flight_mode() -> Result<()> {
                 
             if !sudo_output.status.success() {
                 let stderr = String::from_utf8_lossy(&sudo_output.stderr);
-                return Err(anyhow::anyhow!("Failed to create directories with sudo: {}", stderr));
+                return Err(anyhow!("Failed to create directories with sudo: {}", stderr));
             }
             
             info!("Directories created and mode set with sudo");
@@ -1206,7 +1211,7 @@ pub async fn configure_flight_mode() -> Result<()> {
                 
             if !osa_output.status.success() {
                 let stderr = String::from_utf8_lossy(&osa_output.stderr);
-                return Err(anyhow::anyhow!("Failed to create mode directory with admin privileges: {}", stderr));
+                return Err(anyhow!("Failed to create mode directory with admin privileges: {}", stderr));
             }
             
             info!("Mode set to flight");
@@ -1250,7 +1255,7 @@ pub async fn deploy_k3s_and_handoff() -> Result<()> {
             .unwrap_or(false);
             
         if !docker_running {
-            return Err(anyhow::anyhow!("Docker is not installed or not running. Please install and start Docker Desktop."));
+            return Err(anyhow!("Docker is not installed or not running. Please install and start Docker Desktop."));
         }
         
         // Check if k3s container is already running
@@ -1283,7 +1288,7 @@ pub async fn deploy_k3s_and_handoff() -> Result<()> {
                 
             if !run_output.status.success() {
                 let stderr = String::from_utf8_lossy(&run_output.stderr);
-                return Err(anyhow::anyhow!("Failed to start k3s in Docker: {}", stderr));
+                return Err(anyhow!("Failed to start k3s in Docker: {}", stderr));
             }
             
             // Wait for k3s to start
@@ -1309,7 +1314,7 @@ pub async fn deploy_k3s_and_handoff() -> Result<()> {
                     
                 if !start_output.status.success() {
                     let stderr = String::from_utf8_lossy(&start_output.stderr);
-                    return Err(anyhow::anyhow!("Failed to start existing k3s container: {}", stderr));
+                    return Err(anyhow!("Failed to start existing k3s container: {}", stderr));
                 }
                 
                 // Wait for k3s to start
@@ -1337,7 +1342,7 @@ pub async fn deploy_k3s_and_handoff() -> Result<()> {
             
         if !copy_output.status.success() {
             let stderr = String::from_utf8_lossy(&copy_output.stderr);
-            return Err(anyhow::anyhow!("Failed to copy kubeconfig from container: {}", stderr));
+            return Err(anyhow!("Failed to copy kubeconfig from container: {}", stderr));
         }
 
         // Then, modify the kubeconfig file using sed
@@ -1407,7 +1412,7 @@ pub async fn deploy_k3s_and_handoff() -> Result<()> {
                 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(anyhow::anyhow!("k3s installation failed: {}", stderr));
+                return Err(anyhow!("k3s installation failed: {}", stderr));
             }
             
             // Wait for k3s to start
@@ -1427,7 +1432,7 @@ pub async fn deploy_k3s_and_handoff() -> Result<()> {
                 
             if !restart_output.status.success() {
                 let stderr = String::from_utf8_lossy(&restart_output.stderr);
-                return Err(anyhow::anyhow!("Failed to restart k3s service: {}", stderr));
+                return Err(anyhow!("Failed to restart k3s service: {}", stderr));
             }
             
             // Wait for the service to start
@@ -1435,7 +1440,7 @@ pub async fn deploy_k3s_and_handoff() -> Result<()> {
             
             // Check again
             if !check_service_running("k3s").await {
-                return Err(anyhow::anyhow!("k3s service failed to start after installation"));
+                return Err(anyhow!("k3s service failed to start after installation"));
             }
         }
         
@@ -1554,7 +1559,7 @@ async fn configure_kubectl() -> Result<PathBuf> {
     }
     
     if !source_path.exists() {
-        return Err(anyhow::anyhow!("k3s config file not found after 60 seconds"));
+        return Err(anyhow!("k3s config file not found after 60 seconds"));
     }
 
     // Determine if sudo is needed by checking if we can read the file directly
@@ -1579,7 +1584,7 @@ async fn configure_kubectl() -> Result<PathBuf> {
         .context("Failed to copy k3s.yaml")?;
         
     if !cp_output.status.success() {
-        return Err(anyhow::anyhow!("Failed to copy k3s.yaml: {}", 
+        return Err(anyhow!("Failed to copy k3s.yaml: {}", 
             String::from_utf8_lossy(&cp_output.stderr)));
     }
 
@@ -1603,7 +1608,7 @@ async fn configure_kubectl() -> Result<PathBuf> {
         .context("Failed to chown k3s.yaml")?;
         
     if !chown_output.status.success() {
-        return Err(anyhow::anyhow!("Failed to change ownership of k3s.yaml: {}", 
+        return Err(anyhow!("Failed to change ownership of k3s.yaml: {}", 
             String::from_utf8_lossy(&chown_output.stderr)));
     }
 
@@ -1678,7 +1683,7 @@ async fn wait_for_node_ready(kubeconfig_path: &PathBuf) -> Result<()> {
     }
 
     // If we get here, we timed out
-    Err(anyhow::anyhow!("Timed out waiting for Kubernetes node to become ready"))
+    Err(anyhow!("Timed out waiting for Kubernetes node to become ready"))
 }
 
 // Helper function to install Helm
@@ -1705,7 +1710,7 @@ async fn install_helm() -> Result<()> {
         
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow::anyhow!("Helm installation failed: {}", stderr));
+        return Err(anyhow!("Helm installation failed: {}", stderr));
     }
     
     info!("Helm installed successfully");
@@ -1751,8 +1756,8 @@ pub async fn configure_swarm_mode() -> Result<()> {
                 .context("Failed to execute osascript for sudo prompt")?;
                 
             if !osa_output.status.success() {
-                let stderr = String::from_utf8_lossy(&osa_output.stderr);
-                return Err(anyhow::anyhow!("Failed to create mode directory with admin privileges: {}", stderr));
+                let stderr_str = String::from_utf8_lossy(&osa_output.stderr);
+                return Err(anyhow::anyhow!("Failed to create mode directory with admin privileges: {}", stderr_str));
             }
             
             info!("Mode set to swarm");
@@ -1767,5 +1772,30 @@ pub async fn configure_swarm_mode() -> Result<()> {
     // Start the service via service manager instead of daemonizing
     start_service()?;
     
+    Ok(())
+}
+
+fn setup_logging(log_dir: &str) -> Result<(), anyhow::Error> {
+    // Combine log directory and file name
+    let log_path = Path::new(log_dir).join("dragonfly.log");
+    
+    // Create a non-blocking writer to the log file
+    let file_appender = tracing_appender::rolling::daily(log_dir, "dragonfly.log");
+    let (non_blocking_writer, _guard) = tracing_appender::non_blocking(file_appender);
+
+    // Build the subscriber
+    tracing_subscriber::registry()
+        .with(fmt::layer().with_writer(non_blocking_writer))
+        .with(fmt::layer().with_writer(std::io::stdout)) // Also log to stdout
+        .with(EnvFilter::from_default_env() // Read RUST_LOG from environment
+            .add_directive("info".parse()?) // Default level is info
+            .add_directive("tower_http=warn".parse()?) // Quieter HTTP logs
+            .add_directive("minijinja=warn".parse()?) // Quieter template logs
+        )
+        .init();
+        
+    // Log the path where logs are being written
+    info!("Logging initialized. Log file: {}", log_path.display());
+
     Ok(())
 } 
