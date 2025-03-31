@@ -1,0 +1,10 @@
+{
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.0.17",
+    "tailwindcss": "^4.0.17"
+  },
+  "dependencies": {
+    "autoprefixer": "^10.4.21",
+    "postcss": "^8.5.3"
+  }
+}

@@ -1,0 +1,17 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer components {
+  /* Add custom component styles here */
+}
+
+@layer utilities {
+  /* Add custom utility styles here */
+}
+
+/* Custom styles can be added here */
+.tech-mono {
+    font-family: 'JetBrains Mono', monospace !important;
+    letter-spacing: -0.025em;
+} 

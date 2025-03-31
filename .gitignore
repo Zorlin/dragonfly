@@ -1,6 +1,8 @@
 # sqlx
 .sqlx
 
+# node modules
+node_modules/**
 # design
 DESIGN.md
 # pyinfra inventory
