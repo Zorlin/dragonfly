@@ -1,6 +1,9 @@
 # sqlx
 .sqlx
 
+# secrets
+values.yaml
+
 # node modules
 node_modules/**
 # design

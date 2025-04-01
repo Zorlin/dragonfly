@@ -82,6 +82,15 @@ async fn update_install_state(new_state: InstallationState) {
     }
 }
 
+pub async fn sudo_prompt() -> Result<()> {
+    // Just run sudo echo -n "" to prompt for sudo password
+    let output = Command::new("sudo")
+        .arg("echo")
+        .arg("-n")
+        .output()?;
+    Ok(())
+}
+
 // The main function for the install command
 pub async fn run_install(args: InstallArgs, mut shutdown_rx: watch::Receiver<()>) -> Result<()> {
     // Start the webserver immediately
@@ -111,16 +120,20 @@ pub async fn run_install(args: InstallArgs, mut shutdown_rx: watch::Receiver<()>
     // !!! RE-ADD WELCOME MESSAGES HERE !!!
     println!("🐉 Welcome to Dragonfly.");
     println!("🚀 Open http://localhost:3000 to get started. We're ready for you to look around!");
+
+    // Only show sudo message if passwordless sudo is not available
+    // Note: Need to check passwordless_sudo before this point
+    let passwordless_sudo = check_passwordless_sudo().await; // Check needs to be moved up if uncommented
+    if !passwordless_sudo {
+        println!("🔐 Meanwhile, you'll need to enter your sudo password for the next stages of the installer.");
+    }
+
+    // Trigger a sudo prompt and *wait for it to complete before we do anything else*
+    sudo_prompt().await;
     
     // Set initial state (WaitingSudo) - use the helper
     update_install_state(InstallationState::WaitingSudo).await;
     
-    // Only show sudo message if passwordless sudo is not available
-    // Note: Need to check passwordless_sudo before this point
-    // let passwordless_sudo = check_passwordless_sudo().await; // Check needs to be moved up if uncommented
-    // if !passwordless_sudo {
-    //     println!("🔐 Meanwhile, you'll need to enter your sudo password for the next stages of the installer.");
-    // }
 
     // tokio::time::sleep(tokio::time::Duration::from_secs(1)).await; // Remove potential delay before background task
     
