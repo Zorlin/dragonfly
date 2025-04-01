@@ -6,7 +6,32 @@
 <div class="container mx-auto px-4 py-6">
     <h2 class="text-lg font-medium text-purple-600 dark:text-purple-400 uppercase tracking-wider mb-6">Welcome to Dragonfly.</h2>
 
-    <!-- Recent Machines -->
+    {# Conditional display: Installer or Regular Dashboard #}
+    {% if installation_in_progress %}
+    
+    <!-- Installation Progress Section -->
+    <div class="mb-8">
+        <div class="flex justify-between items-center mb-4">
+            <h2 id="installer-title" class="text-lg font-medium text-gray-900 dark:text-gray-200 uppercase tracking-wider">Installation</h2>
+             {# Hide "View all machines" during install #}
+        </div>
+        <div id="installer-status-box" class="bg-white dark:bg-[#0A0B10] shadow-lg rounded-lg overflow-hidden border border-purple-500 dark:border-purple-700">
+             <div class="px-6 py-16"> {# Increased padding for focus #}
+                 <div class="text-center">
+                     <div id="installer-rocket" class="mb-6 {{ initial_animation_class }}">
+                         <svg class="mx-auto h-16 w-16 text-gray-500 rocket-svg" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.59 14.37a6 6 0 01-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 006.16-12.12A14.98 14.98 0 009.631 8.41m5.96 5.96a14.926 14.926 0 01-5.841 2.58m-.119-8.54a6 6 0 00-7.381 5.84h4.8m2.581-5.84a14.927 14.927 0 00-2.58 5.84m2.699 2.7c-.103.021-.207.041-.311.06a15.09 15.09 0 01-2.448-2.448 14.9 14.9 0 01.06-.312m-2.24 2.39a4.493 4.493 0 00-1.757 4.306 4.493 4.493 0 004.306-1.758M16.5 9a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z"></path>
+                         </svg>
+                     </div>
+                     <p id="installer-message" class="mt-4 text-gray-500 dark:text-gray-300">{{ initial_install_message }}</p>
+                 </div>
+             </div>
+        </div>
+    </div>
+    
+    {% else %}
+
+    <!-- Recent Machines Section (Regular View) -->
     <div class="mb-8">
         <div class="flex justify-between items-center mb-4">
             <h2 class="text-lg font-medium text-gray-900 dark:text-gray-200 uppercase tracking-wider">Recent Machines</h2>
@@ -17,7 +42,7 @@
                 </svg>
             </a>
         </div>
-        <div id="machine-list" class="bg-white dark:bg-gray-900 shadow-lg rounded-lg overflow-hidden">
+        <div id="machine-list" class="bg-white dark:bg-[#0A0B10] shadow-lg rounded-lg overflow-hidden border border-purple-500 dark:border-purple-700">
             <ul class="divide-y divide-gray-800 dark:divide-gray-700">
                 {% for machine in machines %}
                 <li class="hover:bg-gray-50 dark:hover:bg-gray-750 cursor-pointer transition-colors duration-150" onclick="window.location='/machines/{{ machine.id }}'">
@@ -72,11 +97,13 @@
                     </div>
                 </li>
                 {% else %}
-                <li class="px-6 py-8">
+                <li class="px-6 py-16"> {# Increased padding #}
                     <div class="text-center">
-                        <svg class="mx-auto h-16 w-16 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.59 14.37a6 6 0 01-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 006.16-12.12A14.98 14.98 0 009.631 8.41m5.96 5.96a14.926 14.926 0 01-5.841 2.58m-.119-8.54a6 6 0 00-7.381 5.84h4.8m2.581-5.84a14.927 14.927 0 00-2.58 5.84m2.699 2.7c-.103.021-.207.041-.311.06a15.09 15.09 0 01-2.448-2.448 14.9 14.9 0 01.06-.312m-2.24 2.39a4.493 4.493 0 00-1.757 4.306 4.493 4.493 0 004.306-1.758M16.5 9a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z"></path>
-                        </svg>
+                        <div class="mb-6">
+                            <svg class="mx-auto h-16 w-16 text-gray-500 rocket-svg" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.59 14.37a6 6 0 01-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 006.16-12.12A14.98 14.98 0 009.631 8.41m5.96 5.96a14.926 14.926 0 01-5.841 2.58m-.119-8.54a6 6 0 00-7.381 5.84h4.8m2.581-5.84a14.927 14.927 0 00-2.58 5.84m2.699 2.7c-.103.021-.207.041-.311.06a15.09 15.09 0 01-2.448-2.448 14.9 14.9 0 01.06-.312m-2.24 2.39a4.493 4.493 0 00-1.757 4.306 4.493 4.493 0 004.306-1.758M16.5 9a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z"></path>
+                            </svg>
+                        </div>
                         <p class="mt-4 text-gray-500 dark:text-gray-400">No machines discovered yet.</p>
                         <p class="mt-2 text-sm text-gray-500 dark:text-gray-500">Machines will appear here once they connect to Dragonfly.</p>
                     </div>
@@ -85,301 +112,189 @@
             </ul>
         </div>
     </div>
+    {% endif %}
 </div>
 {% endblock %}
 
+{% block styles %}
+<style>
+    .rocket-svg {
+        /* Base styles if needed */
+        transition: transform 0.3s ease-out, filter 0.3s ease-out; /* Smooth transitions */
+    }
+    @keyframes sparks {
+        0% { box-shadow: 0 0 0px gold, 0 5px 0px gold; opacity: 1; transform: scale(1); }
+        50% { box-shadow: 5px -5px 2px orange, -5px 5px 2px yellow, 0 10px 5px gold; opacity: 0.8; transform: scale(1.05) rotate(2deg); }
+        100% { box-shadow: 0 0 0px gold, 0 5px 0px gold; opacity: 1; transform: scale(1); }
+    }
+    .rocket-sparks .rocket-svg {
+        animation: sparks 0.6s infinite ease-in-out;
+    }
+
+    @keyframes glow {
+        0% { filter: drop-shadow(0 0 2px #fff) drop-shadow(0 0 5px #a855f7); }
+        50% { filter: drop-shadow(0 0 5px #fff) drop-shadow(0 0 15px #a855f7); }
+        100% { filter: drop-shadow(0 0 2px #fff) drop-shadow(0 0 5px #a855f7); }
+    }
+    .rocket-glowing .rocket-svg {
+        animation: glow 1.5s infinite ease-in-out;
+    }
+
+    @keyframes smokePuff {
+        0% { transform: translate(-50%, 0) scale(0.5); opacity: 0; }
+        50% { opacity: 0.3; }
+        100% { transform: translate(-50%, -50px) scale(2); opacity: 0; }
+    }
+    /* Add a container for smoke puffs */
+    #installer-rocket.rocket-smoke {
+        position: relative; /* Needed for ::after positioning */
+    }
+     /* Add multiple smoke puffs with delays */
+    #installer-rocket.rocket-smoke::before, 
+    #installer-rocket.rocket-smoke::after {
+        content: '';
+        position: absolute;
+        bottom: -5px; /* Start near the base */
+        left: 50%;
+        width: 30px;
+        height: 30px;
+        background-color: rgba(128, 128, 128, 0.5); /* Semi-transparent gray */
+        border-radius: 50%;
+        filter: blur(8px);
+        opacity: 0;
+        animation: smokePuff 2.5s infinite ease-out;
+    }
+    #installer-rocket.rocket-smoke::after {
+        animation-delay: 0.8s; /* Stagger the second puff */
+        width: 35px; 
+        height: 35px;
+        bottom: -8px;
+        left: 55%; /* Slightly offset */
+    }
+
+
+    @keyframes flicker { /* Engine flicker */
+        0%, 100% { filter: drop-shadow(0 3px 3px orange); }
+        25% { filter: drop-shadow(0 5px 5px orangered); }
+        50% { filter: drop-shadow(0 2px 2px yellow); }
+        75% { filter: drop-shadow(0 4px 4px orange); }
+    }
+    .rocket-flicker .rocket-svg {
+         animation: flicker 0.2s infinite linear;
+    }
+
+    @keyframes fire { /* Main engine fire */
+        0%   { filter: drop-shadow(0 8px 6px orangered); transform: translateY(0); }
+        50%  { filter: drop-shadow(0 15px 10px red); transform: translateY(-2px); }
+        100% { filter: drop-shadow(0 8px 6px orangered); transform: translateY(0); }
+    }
+    .rocket-fire .rocket-svg {
+        animation: fire 0.3s infinite ease-in-out;
+    }
+    @keyframes shift { /* Rocket body momentum shift */
+         0%, 100% { transform: translateX(0) rotate(0); }
+         25% { transform: translateX(-1px) rotate(-0.5deg); }
+         75% { transform: translateX(1px) rotate(0.5deg); }
+    }
+    .rocket-shift .rocket-svg {
+        /* Apply shift animation alongside fire */
+        animation: fire 0.3s infinite ease-in-out, shift 0.4s ease-in-out;
+    }
+    
+    .rocket-error .rocket-svg {
+        filter: grayscale(0.8) drop-shadow(0 0 3px red);
+        transform: rotate(-5deg) scale(0.95);
+    }
+    /* Default state */
+    .rocket-idle .rocket-svg {
+         /* Add a subtle idle animation if desired, e.g., slight bob */
+         /* animation: bob 3s infinite ease-in-out; */
+    }
+    /* @keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2px); } } */
+
+</style>
+{% endblock %}
+
 {% block scripts %}
-<script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.1/dist/chart.min.js"></script>
-<script>
-    // Refresh function to reload the page data when machines change
-    function refreshDashboard() {
-        window.location.reload();
-    }
+    {# Conditionally include the correct script tag based on installation progress #}
+    {% if installation_in_progress %}
+    <script>
+    // --- INSTALLER SCRIPT --- 
+    (function() { // IIFE to scope variables
+        console.log("Installation in progress, starting SSE listener...");
+        let evtSource = null;
+        let reconnectAttempts = 0;
+        const MAX_RECONNECT_ATTEMPTS = 10;
 
-    // Server-sent events handling
-    let evtSource = null;
-    let reconnectAttempts = 0;
-    const MAX_RECONNECT_ATTEMPTS = 5;
+        const installerTitleEl = document.getElementById('installer-title');
+        const installerMessageEl = document.getElementById('installer-message');
+        const installerRocketEl = document.getElementById('installer-rocket');
+        const rocketClasses = ['rocket-idle', 'rocket-sparks', 'rocket-glowing', 'rocket-smoke', 'rocket-flicker', 'rocket-fire', 'rocket-shift', 'rocket-error'];
 
-    function connectEventSource() {
-        if (evtSource) {
-            evtSource.close();
-        }
+        function connectInstallEvents() {
+            if (evtSource) evtSource.close();
+            evtSource = new EventSource('/api/events');
 
-        evtSource = new EventSource('/api/events');
-        
-        evtSource.addEventListener('machine_discovered', function(event) {
-            console.log('New machine discovered!');
-            refreshDashboard();
-        });
-        
-        evtSource.addEventListener('machine_updated', function(event) {
-            console.log('Machine updated!');
-            refreshDashboard();
-        });
-        
-        evtSource.addEventListener('machine_deleted', function(event) {
-            console.log('Machine deleted!');
-            refreshDashboard();
-        });
+            evtSource.addEventListener('open', () => {
+                console.log("Install SSE connection opened.");
+                reconnectAttempts = 0;
+            });
 
-        evtSource.onopen = function() {
-            console.log('Dashboard EventSource connected');
-            reconnectAttempts = 0;
-        };
-
-        evtSource.onerror = function(err) {
-            console.error("Dashboard EventSource failed:", err);
-            evtSource.close();
-            
-            if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+            evtSource.addEventListener('error', (e) => {
+                console.error("Install SSE error:", e);
+                evtSource.close();
                 reconnectAttempts++;
-                const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
-                console.log(`Reconnecting in ${delay}ms (attempt ${reconnectAttempts})`);
-                setTimeout(connectEventSource, delay);
-            }
-        };
-    }
+                if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                    const delay = Math.min(1000 * Math.pow(1.5, reconnectAttempts), 30000);
+                    console.log(`Attempting SSE reconnect in ${Math.round(delay / 1000)}s`);
+                    setTimeout(connectInstallEvents, delay);
+                } else {
+                    console.error("Max SSE reconnect attempts reached.");
+                    if (installerMessageEl) installerMessageEl.textContent = "Lost connection. Check terminal.";
+                    if (installerRocketEl) installerRocketEl.className = 'mb-6 rocket-error';
+                }
+            });
 
-    // Initial connection
-    connectEventSource();
-
-    // Clean up when leaving the page
-    window.addEventListener('beforeunload', () => {
-        if (evtSource) {
-            evtSource.close();
-        }
-    });
-
-    // Example data for charts - Replace with actual data from backend
-    const deploymentTimeData = {
-        labels: ['Ubuntu 22.04', 'Debian 11', 'RHEL 8', 'Rocky Linux 9', 'CentOS 7'],
-        datasets: [{
-            label: 'Avg. Deployment Time (minutes)',
-            data: [4.2, 5.1, 6.3, 4.8, 5.5],
-            backgroundColor: [
-                'rgba(75, 192, 192, 0.7)',
-                'rgba(54, 162, 235, 0.7)',
-                'rgba(153, 102, 255, 0.7)',
-                'rgba(255, 159, 64, 0.7)',
-                'rgba(255, 99, 132, 0.7)'
-            ],
-            borderColor: [
-                'rgba(75, 192, 192, 1)',
-                'rgba(54, 162, 235, 1)',
-                'rgba(153, 102, 255, 1)',
-                'rgba(255, 159, 64, 1)',
-                'rgba(255, 99, 132, 1)'
-            ],
-            borderWidth: 1
-        }]
-    };
-
-    // Create deployment time chart
-    const deploymentCtx = document.getElementById('deploymentChart').getContext('2d');
-    const deploymentChart = new Chart(deploymentCtx, {
-        type: 'bar',
-        data: deploymentTimeData,
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: {
-                    display: false
-                },
-                tooltip: {
-                    backgroundColor: 'rgba(0, 0, 0, 0.8)',
-                    titleColor: '#fff',
-                    bodyColor: '#fff',
-                    borderColor: '#333',
-                    borderWidth: 1,
-                    titleFont: {
-                        size: 14,
-                        weight: 'bold'
-                    },
-                    callbacks: {
-                        label: function(context) {
-                            return `${context.parsed.y} minutes`;
+            evtSource.onmessage = function(event) {
+                if (event.data && event.data.startsWith('install_status:')) {
+                    try {
+                        const statusUpdate = JSON.parse(event.data.substring('install_status:'.length));
+                        if (installerMessageEl && statusUpdate.message) installerMessageEl.textContent = statusUpdate.message;
+                        if (installerRocketEl && statusUpdate.animation) {
+                            installerRocketEl.classList.remove(...rocketClasses);
+                            statusUpdate.animation.split(' ').forEach(cls => { if (cls) installerRocketEl.classList.add(cls); });
                         }
-                    }
-                }
-            },
-            scales: {
-                y: {
-                    beginAtZero: true,
-                    title: {
-                        display: true,
-                        text: 'Minutes',
-                        color: '#aaa'
-                    },
-                    grid: {
-                        color: 'rgba(255, 255, 255, 0.1)'
-                    },
-                    ticks: {
-                        color: '#aaa'
-                    }
-                },
-                x: {
-                    grid: {
-                        display: false
-                    },
-                    ticks: {
-                        color: '#aaa'
-                    }
-                }
-            }
-        }
-    });
-
-    // Generate example waterfall data
-    function generateWaterfallData() {
-        const datasets = [];
-        const templates = ['Ubuntu 22.04', 'Debian 11', 'RHEL 8', 'Rocky Linux 9', 'CentOS 7'];
-        const colors = [
-            'rgba(75, 192, 192, 0.7)',
-            'rgba(54, 162, 235, 0.7)',
-            'rgba(153, 102, 255, 0.7)',
-            'rgba(255, 159, 64, 0.7)',
-            'rgba(255, 99, 132, 0.7)'
-        ];
-        
-        // Generate 50 most recent deploys across all templates
-        const labels = Array.from({length: 50}, (_, i) => `Deploy ${50-i}`);
-        
-        templates.forEach((template, tIndex) => {
-            // Generate random deployment times between 3 and 8 minutes
-            const data = Array.from({length: 50}, () => Math.random() * 5 + 3);
-            datasets.push({
-                label: template,
-                data: data,
-                backgroundColor: colors[tIndex % colors.length],
-                borderColor: colors[tIndex % colors.length].replace('0.7', '1'),
-                borderWidth: 1,
-                barPercentage: 0.8,
-                categoryPercentage: 0.9,
-                // Hide all templates except the first one initially
-                hidden: tIndex !== 0
-            });
-        });
-
-        return {
-            labels: labels,
-            datasets: datasets
-        };
-    }
-
-    // Create waterfall chart
-    const waterfallCtx = document.getElementById('waterfallChart').getContext('2d');
-    const waterfallData = generateWaterfallData();
-    const waterfallChart = new Chart(waterfallCtx, {
-        type: 'bar',
-        data: waterfallData,
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                tooltip: {
-                    mode: 'index',
-                    intersect: false,
-                    backgroundColor: 'rgba(0, 0, 0, 0.8)',
-                    callbacks: {
-                        label: function(context) {
-                            return `${context.dataset.label}: ${context.parsed.y.toFixed(2)} minutes`;
+                        if (statusUpdate.animation?.includes('rocket-fire')) {
+                            if(installerTitleEl) installerTitleEl.textContent = "Installation Complete!";
+                            console.log("Installation complete. Reloading...");
+                            evtSource.close();
+                            setTimeout(() => { window.location.reload(); }, 3000);
                         }
-                    }
-                },
-                legend: {
-                    position: 'top',
-                    labels: {
-                        color: '#aaa',
-                        usePointStyle: true,
-                        padding: 20
-                    }
+                    } catch (e) { console.error("SSE JSON parse error:", e, "Data:", event.data); }
                 }
-            },
-            scales: {
-                y: {
-                    beginAtZero: true,
-                    title: {
-                        display: true,
-                        text: 'Deployment Time (minutes)',
-                        color: '#aaa'
-                    },
-                    grid: {
-                        color: 'rgba(255, 255, 255, 0.1)'
-                    },
-                    ticks: {
-                        color: '#aaa'
-                    }
-                },
-                x: {
-                    grid: {
-                        display: false
-                    },
-                    ticks: {
-                        display: false
-                    }
-                }
-            }
+            };
         }
-    });
-
-    // Template selector for waterfall chart
-    document.getElementById('templateSelector').addEventListener('change', function(e) {
-        const selectedValue = e.target.value;
-        const datasets = waterfallChart.data.datasets;
+        // Connect on DOMContentLoaded
+        document.addEventListener('DOMContentLoaded', connectInstallEvents);
+        window.addEventListener('beforeunload', () => { if (evtSource) evtSource.close(); });
+    })(); // End IIFE
+    </script>
+    {% else %}
+    <script>
+    // --- REGULAR DASHBOARD SCRIPT --- 
+    document.addEventListener('DOMContentLoaded', () => {
+        console.log("Not in installation mode, running regular dashboard JS.");
+        // Add regular dashboard JS here...
         
-        if (selectedValue === 'all') {
-            // Show only the first template when "All Templates" is selected
-            datasets.forEach((dataset, index) => {
-                dataset.hidden = index !== 0;
-            });
-        } else {
-            // Show only the selected template
-            const templateIndex = parseInt(selectedValue);
-            datasets.forEach((dataset, index) => {
-                dataset.hidden = index !== templateIndex;
-            });
-        }
-        
-        waterfallChart.update();
+        // Charting code (commented out)
+        /* 
+        const deploymentCtx = document.getElementById('deploymentChart');
+        if (deploymentCtx) { 
+            // ... rest of chart code ...
+        } 
+        */
     });
-
-    // Time period selectors for deployment chart
-    document.getElementById('last7Days').addEventListener('click', function() {
-        // Simulate data filtering for last 7 days
-        updateButtonStyles(this);
-        // You would update chart data here with backend data
-    });
-
-    document.getElementById('last30Days').addEventListener('click', function() {
-        // Simulate data filtering for last 30 days
-        updateButtonStyles(this);
-        // You would update chart data here with backend data
-    });
-
-    document.getElementById('allTime').addEventListener('click', function() {
-        // Simulate data filtering for all time
-        updateButtonStyles(this);
-        // You would update chart data here with backend data
-    });
-
-    function updateButtonStyles(activeButton) {
-        const buttons = [
-            document.getElementById('last7Days'),
-            document.getElementById('last30Days'),
-            document.getElementById('allTime')
-        ];
-        
-        buttons.forEach(button => {
-            if (button === activeButton) {
-                button.classList.remove('bg-gray-700', 'text-gray-300');
-                button.classList.add('bg-blue-700', 'text-blue-200');
-            } else {
-                button.classList.remove('bg-blue-700', 'text-blue-200');
-                button.classList.add('bg-gray-700', 'text-gray-300');
-            }
-        });
-    }
-</script>
+    // Add other non-DOMContentLoaded dashboard logic here if needed
+    </script>
+    {% endif %}
 {% endblock %} 

@@ -10,6 +10,14 @@ use tokio::fs; // For async file operations
 use ipnetwork::Ipv4Network;
 use network_interface::{NetworkInterface, NetworkInterfaceConfig};
 use network_interface::Addr;
+use std::sync::{Arc, Mutex};
+
+// Import state and globals from server crate
+use dragonfly_server::{
+    InstallationState, 
+    INSTALL_STATE_REF, 
+    EVENT_MANAGER_REF
+};
 
 #[derive(Args, Debug)]
 pub struct InstallArgs {
@@ -28,51 +36,165 @@ pub struct InstallArgs {
     // Add other install-specific args here
 }
 
+// Helper function to update the global installation state and send SSE event
+async fn update_install_state(new_state: InstallationState) {
+    // --- Update State --- 
+    let state_arc_mutex: Option<Arc<tokio::sync::Mutex<InstallationState>>> = {
+        // Acquire read lock, clone the Arc if it exists, then drop the lock immediately
+        INSTALL_STATE_REF.read().unwrap().as_ref().cloned()
+    };
+
+    if let Some(state_ref) = state_arc_mutex {
+        let mut state = state_ref.lock().await; // Lock the tokio Mutex
+        *state = new_state.clone();
+    } else {
+        warn!("Install state ref not found, cannot update state");
+        // Don't return early, still try to send event if possible
+    }
+    
+    // --- Send Event --- 
+    let event_manager_arc: Option<Arc<dragonfly_server::event_manager::EventManager>> = {
+         // Acquire read lock, clone the Arc if it exists, then drop the lock immediately
+        EVENT_MANAGER_REF.read().unwrap().as_ref().cloned()
+    };
+
+    if let Some(event_manager) = event_manager_arc {
+        // Prepare the JSON payload for the event
+        let payload = serde_json::json!({
+            "message": new_state.get_message(),
+            "animation": new_state.get_animation_class(),
+        });
+        // Use the cloned state's value for the event, not the potentially updated one
+        let event_data = format!("install_status:{}", payload.to_string()); 
+        
+        // Send the event (handle the result)
+        if let Err(e) = event_manager.send(event_data) {
+            warn!("Failed to send install status update event: {}", e);
+        }
+    } else {
+         warn!("Event manager ref not found, cannot send install status update event");
+    }
+}
+
 // The main function for the install command
 pub async fn run_install(args: InstallArgs) -> Result<()> {
-    let start_time = Instant::now();
+    // Start the webserver immediately with minimal output
+    let server_thread = tokio::spawn(async move {
+        // Use in-memory SQLite for the initial phase
+        std::env::set_var("DATABASE_URL", "sqlite::memory:");
+        
+        // Set logging level to quiet/error only for the server
+        std::env::set_var("RUST_LOG", "error");
+        
+        // Start the server without much logging
+        let _ = dragonfly_server::run().await;
+    });
     
-    info!("Starting Dragonfly installation");
-    debug!("Installation arguments: {:?}", args);
+    // Detect passwordless sudo capability
+    let passwordless_sudo = check_passwordless_sudo().await;
+    
+    // Print the welcome message immediately
+    println!("🐉 Welcome to Dragonfly.");
+    println!("🚀 Open http://localhost:3000 to get started. We're ready for you to look around!");
+    
+    // Set initial state (WaitingSudo) - already done in lib.rs, but send initial event
+    update_install_state(InstallationState::WaitingSudo).await;
+    
+    // Only show sudo message if passwordless sudo is not available
+    if !passwordless_sudo {
+        println!("🔐 Meanwhile, you'll need to enter your sudo password for the next stages of the installer.");
+    }
 
-    // --- 1. Determine Host IP and Network ---
-    info!("Detecting network configuration...");
-    let (host_ip, netmask, network) = get_host_ip_and_mask(args.interface.as_deref())
-        .wrap_err("Failed to determine host IP address and netmask")?;
-    info!("Detected host IP: {} with netmask: {} (network: {})", host_ip, netmask, network);
+    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    
+    // Continue with the actual installation in the background
+    let install_handle = tokio::spawn(async move {
+        let start_time = Instant::now();
+        
+        // --- Actual installation steps, run quietly ---
+        // Capture errors for final report, but also log them in realtime
+        // Stdout will be discarded.
+        
+        // --- 1. Determine Host IP and Network ---
+        let (host_ip, netmask, network) = match get_host_ip_and_mask(args.interface.as_deref()) {
+            Ok(result) => result,
+            Err(e) => {
+                // Return an Error instead of just unit type `()`
+                return Err(e.wrap_err("Failed to determine host IP (required for install)")); 
+            }
+        };
+        
+        // --- 2. Find Available Floating IP ---
+        let bootstrap_ip = find_available_ip(host_ip, network, args.start_offset, args.max_ip_search)
+            .await
+            .wrap_err("Failed to find an available IP address for the bootstrap node")?; // Now `?` is allowed
+        
+        // --- 3. Install k3s ---
+        update_install_state(InstallationState::InstallingK3s).await;
+        install_k3s().await.wrap_err("Failed to set up k3s")?; // `?` allowed
 
-    // --- 2. Find Available Floating IP ---
-    info!("Finding available IP for bootstrap node...");
-    let bootstrap_ip = find_available_ip(host_ip, network, args.start_offset, args.max_ip_search)
-        .await
-        .wrap_err("Failed to find an available IP address for the bootstrap node")?;
-    info!("Found available bootstrap IP: {}", bootstrap_ip);
+        // --- 4. Configure kubectl ---
+        let kubeconfig_path = configure_kubectl().await.wrap_err("Failed to configure kubectl")?; // `?` allowed
+        std::env::set_var("KUBECONFIG", kubeconfig_path.to_string_lossy().to_string());
 
-    // --- 3. Install k3s ---
-    info!("Setting up k3s...");
-    install_k3s().await.wrap_err("Failed to set up k3s")?;
+        // --- 5. Wait for Node Ready ---
+        update_install_state(InstallationState::WaitingK3s).await;
+        wait_for_node_ready(&kubeconfig_path).await.wrap_err("Timed out waiting for Kubernetes node")?; // `?` allowed
 
-    // --- 4. Configure kubectl ---
-    info!("Configuring kubectl...");
-    let kubeconfig_path = configure_kubectl().await.wrap_err("Failed to configure kubectl")?;
-    std::env::set_var("KUBECONFIG", &kubeconfig_path);
-    debug!("Set KUBECONFIG environment variable to: {:?}", kubeconfig_path);
+        // --- 6. Install Helm ---
+        install_helm().await.wrap_err("Failed to set up Helm")?; // `?` allowed
 
-    // --- 5. Wait for Node Ready ---
-    wait_for_node_ready(&kubeconfig_path).await.wrap_err("Timed out waiting for Kubernetes node")?;
+        // --- 7. Install Tinkerbell Stack ---
+        update_install_state(InstallationState::DeployingTinkerbell).await;
+        install_tinkerbell_stack(bootstrap_ip, network, &kubeconfig_path).await.wrap_err("Failed to install Tinkerbell stack")?; // `?` allowed
 
-    // --- 6. Install Helm ---
-    info!("Setting up Helm...");
-    install_helm().await.wrap_err("Failed to set up Helm")?;
+        // --- 8. Install Dragonfly Helm Chart ---
+        // If Dragonfly is deployed via Helm in the future, add state update here
+        // update_install_state(InstallationState::DeployingDragonfly).await;
+        // install_dragonfly_chart(bootstrap_ip, &kubeconfig_path).await.wrap_err("Failed to install Dragonfly helm chart")?;
 
-    // --- 7. Install Tinkerbell Stack ---
-    info!("Installing Tinkerbell stack...");
-    install_tinkerbell_stack(bootstrap_ip, network, &kubeconfig_path).await.wrap_err("Failed to install Tinkerbell stack")?;
+        // --- 9. Mark as Ready ---
+        update_install_state(InstallationState::Ready).await;
+        
+        let elapsed = start_time.elapsed();
+        // info! is silenced, but keep calculation
+        let _ = elapsed; 
+        // info!("✅ Dragonfly Flight mode installation completed in {:.1?}!", elapsed);
+        
+        Ok(()) // Explicitly return Ok(()) for success
+    });
+    
+    // Handle the result of the spawned task
+    match install_handle.await {
+        Ok(Ok(_)) => {
+            // Installation completed successfully in the background
+            // We might want to wait for the server thread indefinitely here
+            // or signal completion somehow if the main process should exit.
+            // For now, just wait for the server.
+             info!("Background installation finished successfully (in theory)."); // This log won't show due to level
+        }
+        Ok(Err(e)) => {
+            // Installation failed in the background
+            error!("Background installation failed: {:#}", e);
+            // Optionally update state to Failed via SSE if needed
+            update_install_state(InstallationState::Failed(e.to_string())).await; // Assuming Failed state exists
+            eprintln!("Installation failed in background: {}", e);
+            // Decide if we should exit the main process or keep the server running
+             // std::process::exit(1);
+        }
+        Err(e) => {
+            // The spawned task itself panicked or was cancelled
+             error!("Installation task failed to complete: {:#}", e);
+             eprintln!("Installation task failed: {}", e);
+             // Decide if we should exit
+             // std::process::exit(1);
+        }
+    }
 
-    let elapsed = start_time.elapsed();
-    info!("✅ Dragonfly installation completed in {:.1?}!", elapsed);
-    info!("PXE services available at: http://{}:3000", bootstrap_ip);
-
+    // Let the web server thread continue running
+    // The main thread will wait for this to complete (which it won't until shutdown)
+    server_thread.await?;
+    
     Ok(())
 }
 
@@ -347,47 +469,114 @@ async fn check_ip_availability(ip: Ipv4Addr) -> Result<bool> {
 }
 
 async fn install_k3s() -> Result<()> {
+    // Add macOS Docker check
+    #[cfg(target_os = "macos")]
+    {
+        debug!("Running on macOS, checking Docker...");
+        let docker_check = Command::new("docker")
+            .arg("info")
+            .output();
+            
+        match docker_check {
+            Ok(output) if output.status.success() => {
+                info!("Docker is installed and running.");
+            }
+            Ok(output) => {
+                 error!("Docker command failed with status: {}. Stderr: {}", 
+                       output.status, String::from_utf8_lossy(&output.stderr));
+                 bail!("Docker is installed but not running or responding. Please start Docker Desktop.");
+            }
+            Err(e) => {
+                 error!("Failed to execute Docker command: {}", e);
+                 bail!("Docker command not found. Please install Docker Desktop from https://www.docker.com/products/docker-desktop/");
+            }
+        }
+    }
+
     debug!("Checking if k3s is already installed");
     
     // Check for existing k3s config and service
     let config_exists = check_file_exists("/etc/rancher/k3s/k3s.yaml").await;
-    let service_exists = is_command_present("k3s");
-    let is_running = check_service_running("k3s").await;
     
-    if service_exists && config_exists && is_running {
-        info!("K3s is already installed and running");
+    // Conditionally define service_exists based on OS
+    #[cfg(not(target_os = "macos"))]
+    let service_exists = is_command_present("k3s");
+    #[cfg(target_os = "macos")]
+    let service_exists = false; // k3s doesn't run as a direct service on macOS
+
+    #[cfg(not(target_os = "macos"))]
+    let is_running = check_service_running("k3s").await;
+    #[cfg(target_os = "macos")]
+    let is_running = false; // Assume not running as a service on macOS initially
+    
+    // Adjust logic for macOS where k3s runs in Docker (handled by k3d or similar)
+    if cfg!(not(target_os = "macos")) && service_exists && config_exists && is_running {
+        info!("K3s is already installed and running (Linux)");
         return Ok(());
     }
     
-    // Handle partially installed k3s
-    if service_exists && !is_running {
-        info!("K3s service exists but isn't running, starting service...");
+    // Handle partially installed k3s on Linux
+    if cfg!(not(target_os = "macos")) && service_exists && !is_running {
+        info!("K3s service exists but isn't running, starting service (Linux)...");
         restart_k3s_service().await?;
         return Ok(());
     }
     
     // Full installation needed
-    info!("Installing k3s (single-node)");
-    let script = r#"curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC='--disable traefik' sh -"#;
-    run_shell_command(script, "k3s installation script")?;
+    if cfg!(target_os = "macos") {
+        // Use k3d to create cluster on macOS, as direct install isn't typical
+        info!("Using k3d to create k3s cluster in Docker (macOS)");
+        // Check if k3d is installed
+        if !is_command_present("k3d") {
+             bail!("k3d command not found. Please install k3d: https://k3d.io/#installation");
+        }
+        // Check if cluster already exists
+        let cluster_check = Command::new("k3d")
+            .args(["cluster", "list", "dragonfly"])
+            .output()?;
+        let cluster_exists = String::from_utf8_lossy(&cluster_check.stdout).contains("dragonfly");
+        
+        if !cluster_exists {
+            info!("Creating k3d cluster 'dragonfly'...");
+            // Create k3d cluster, disable traefik, map necessary ports
+             run_command("k3d", &[
+                 "cluster", "create", "dragonfly",
+                 "--k3s-arg", "--disable=traefik@server:0", // Disable built-in Traefik
+                 "-p", "80:80@loadbalancer",   // Map HTTP
+                 "-p", "443:443@loadbalancer", // Map HTTPS
+                 "-p", "3000:3000@loadbalancer", // Map Dragonfly UI/API
+                 "-p", "8080:8080@loadbalancer", // Map Tinkerbell Hook
+                 // Add other ports needed by Tinkerbell (TFTP, DHCP, DNS)? 
+                 // Mapping UDP ports with k3d needs careful consideration
+             ], "create k3d cluster")?;
+             info!("k3d cluster 'dragonfly' created.");
+        } else {
+             info!("k3d cluster 'dragonfly' already exists.");
+        }
+        // k3d handles starting the k3s server within Docker
+    } else {
+        // Linux k3s installation
+        info!("Installing k3s (single-node Linux)");
+        let script = r#"curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC='--disable traefik' sh -"#;
+        run_shell_command(script, "k3s installation script")?;
 
-    // Verify installation
-    if !is_command_present("k3s") {
-        color_eyre::eyre::bail!("k3s installation command ran, but 'k3s' command not found afterwards.");
+        // Verify installation
+        if !is_command_present("k3s") {
+            bail!("k3s installation command ran, but 'k3s' command not found afterwards.");
+        }
+        
+        // Wait briefly for k3s to create its config
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        
+        // Make sure the service is up
+        if !check_service_running("k3s").await {
+            info!("Starting k3s service...");
+            restart_k3s_service().await?;
+        }
     }
     
-    // Wait briefly for k3s to create its config
-    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-    
-    // Make sure the service is up
-    if !check_service_running("k3s").await {
-        info!("Starting k3s service...");
-        restart_k3s_service().await?;
-    }
-    
-    info!("K3s installed successfully");
-    Ok(())
-}
+    info!("K3s setup completed successfully");
+    Ok(())}
 
 async fn check_service_running(service_name: &str) -> bool {
     let output = Command::new("systemctl")
@@ -888,6 +1077,18 @@ async fn check_file_exists(path: impl AsRef<std::path::Path>) -> bool {
         metadata.is_file()
     } else {
         false
+    }
+}
+
+// Helper function to check if passwordless sudo is available
+async fn check_passwordless_sudo() -> bool {
+    let output = Command::new("sudo")
+        .args(["-n", "true"])  // -n means non-interactive
+        .output();
+        
+    match output {
+        Ok(output) => output.status.success(),
+        Err(_) => false,
     }
 }
 

@@ -16,6 +16,10 @@ use crate::db::{self, get_app_settings, save_app_settings, mark_setup_completed}
 use crate::auth::{self, AuthSession, Settings, Credentials};
 use crate::mode;
 use minijinja::{Environment, Error as MiniJinjaError, ErrorKind as MiniJinjaErrorKind};
+use std::sync::Arc;
+
+// Import global state
+use crate::{AppState, INSTALL_STATE_REF, InstallationState};
 
 // Extract theme from cookies
 pub fn get_theme_from_cookie(headers: &HeaderMap) -> String {
@@ -42,6 +46,9 @@ pub struct IndexTemplate {
     pub theme: String,
     pub is_authenticated: bool,
     pub display_dates: HashMap<String, String>,
+    pub installation_in_progress: bool,
+    pub initial_install_message: String,
+    pub initial_animation_class: String,
 }
 
 #[derive(Serialize)]
@@ -201,76 +208,72 @@ fn format_datetime(dt: &DateTime<Utc>) -> String {
     dt.format("%Y-%m-%d %H:%M:%S UTC").to_string()
 }
 
+#[axum::debug_handler]
 pub async fn index(
-    State(app_state): State<crate::AppState>,
+    State(app_state): State<AppState>,
     headers: HeaderMap,
     auth_session: AuthSession,
 ) -> Response {
-    // Check if we're in setup mode from command line or this is the first run
-    if app_state.setup_mode || app_state.first_run {
-        return Redirect::to("/welcome").into_response();
-    }
-    
-    // Get theme preference from cookie
     let theme = get_theme_from_cookie(&headers);
     let is_authenticated = auth_session.user.is_some();
-    
-    // Check if login is required site-wide
     let require_login = app_state.settings.lock().await.require_login;
-    
-    // If require_login is enabled and user is not authenticated,
-    // redirect to login page
+
     if require_login && !is_authenticated {
         return Redirect::to("/login").into_response();
     }
-    
-    match db::get_all_machines().await {
-        Ok(machines) => {
-            info!("Rendering index page with {} machines", machines.len());
-            
-            // Count machines by status
-            let status_counts = count_machines_by_status(&machines);
-            
-            // Convert status counts to JSON for the chart
-            let status_counts_json = serde_json::to_string(&status_counts)
-                .unwrap_or_else(|_| "{}".to_string());
 
-            // Prepare display dates
-            let mut display_dates = HashMap::new();
-            for machine in &machines {
-                // Store date with UUID as string key for template access
-                display_dates.insert(machine.id.to_string(), format_datetime(&machine.created_at));
-            }
-            
-            // Replace Askama render with placeholder
-            let context = IndexTemplate {
-                title: "Dragonfly".to_string(),
-                machines,
-                status_counts,
-                status_counts_json,
-                theme,
-                is_authenticated,
-                display_dates,
-            };
-            // Pass AppState to render_minijinja
-            render_minijinja(&app_state, "index.html", context)
-        },
-        Err(e) => {
-            error!("Error fetching machines for index page: {}", e);
-            // Replace Askama render with placeholder
-            let context = IndexTemplate {
-                title: "Dragonfly".to_string(),
-                machines: vec![],
-                status_counts: HashMap::new(),
-                status_counts_json: "{}".to_string(),
-                theme: "system".to_string(),
-                is_authenticated,
-                display_dates: HashMap::new(),
-            };
-            // Pass AppState to render_minijinja
-            render_minijinja(&app_state, "index.html", context)
-        }
+    // Check if installation is in progress by reading the global state
+    let mut installation_in_progress = false;
+    let mut initial_install_message = String::new();
+    let mut initial_animation_class = String::new();
+
+    // Clone the Arc out of the RwLock guard before awaiting
+    let install_state_arc_mutex: Option<Arc<tokio::sync::Mutex<InstallationState>>> = {
+        INSTALL_STATE_REF.read().unwrap().as_ref().cloned()
+    };
+
+    if let Some(state_arc_mutex) = install_state_arc_mutex {
+        installation_in_progress = true;
+        // Now lock the tokio::sync::Mutex using await
+        let initial_state = state_arc_mutex.lock().await.clone(); 
+        initial_install_message = initial_state.get_message().to_string();
+        initial_animation_class = initial_state.get_animation_class().to_string();
     }
+    
+    // Prepare context for the template
+    // Only fetch machine data if NOT installing
+    let (machines, status_counts, status_counts_json, display_dates) = if !installation_in_progress {
+        match db::get_all_machines().await {
+            Ok(m) => {
+                let counts = count_machines_by_status(&m);
+                let counts_json = serde_json::to_string(&counts).unwrap_or_else(|_| "{}".to_string());
+                let dates = m.iter().map(|mach| (mach.id.to_string(), format_datetime(&mach.created_at))).collect();
+                (m, counts, counts_json, dates)
+            },
+            Err(e) => {
+                error!("Error fetching machines for index page: {}", e);
+                (vec![], HashMap::new(), "{}".to_string(), HashMap::new())
+            }
+        }
+    } else {
+        // Provide empty defaults if installing
+        (vec![], HashMap::new(), "{}".to_string(), HashMap::new())
+    };
+
+    let context = IndexTemplate {
+        title: "Dragonfly".to_string(),
+        machines,
+        status_counts,
+        status_counts_json,
+        theme,
+        is_authenticated,
+        display_dates,
+        installation_in_progress,
+        initial_install_message,
+        initial_animation_class,
+    };
+    
+    render_minijinja(&app_state, "index.html", context)
 }
 
 pub async fn machine_list(
@@ -405,6 +408,9 @@ pub async fn machine_details(
                         theme: "system".to_string(),
                         is_authenticated,
                         display_dates: HashMap::new(),
+                        installation_in_progress: false,
+                        initial_install_message: String::new(),
+                        initial_animation_class: String::new(),
                     };
                     // Pass AppState to render_minijinja
                     render_minijinja(&app_state, "index.html", context)
@@ -420,6 +426,9 @@ pub async fn machine_details(
                         theme: "system".to_string(),
                         is_authenticated,
                         display_dates: HashMap::new(),
+                        installation_in_progress: false,
+                        initial_install_message: String::new(),
+                        initial_animation_class: String::new(),
                     };
                     // Pass AppState to render_minijinja
                     render_minijinja(&app_state, "index.html", context)
@@ -437,6 +446,9 @@ pub async fn machine_details(
                 theme: "system".to_string(),
                 is_authenticated,
                 display_dates: HashMap::new(),
+                installation_in_progress: false,
+                initial_install_message: String::new(),
+                initial_animation_class: String::new(),
             };
             // Pass AppState to render_minijinja
             render_minijinja(&app_state, "index.html", context)

@@ -21,6 +21,11 @@ use std::time::Duration;
 use serde::Deserialize;
 use tokio_stream::Stream;
 use futures::stream;
+use crate::{
+    INSTALL_STATE_REF, 
+    InstallationState
+};
+use std::sync::Arc;
 
 pub fn api_router() -> Router<crate::AppState> {
     Router::new()
@@ -44,6 +49,7 @@ pub fn api_router() -> Router<crate::AppState> {
         .route("/machines/{id}/workflow-progress", get(get_workflow_progress))
         .route("/heartbeat", get(heartbeat))
         .route("/sse-events", get(sse_events))
+        .route("/install/status", get(get_install_status))
 }
 
 #[axum::debug_handler]
@@ -1349,6 +1355,39 @@ async fn api_update_machine_tags(
                 message: format!("Failed to update tags: {}", e),
             };
             (StatusCode::INTERNAL_SERVER_ERROR, Json(error_response)).into_response()
+        }
+    }
+}
+
+// New handler to get the current installation status
+#[axum::debug_handler]
+async fn get_install_status() -> Response {
+    // Read the current state from the global static
+    let install_state_arc_mutex: Option<Arc<tokio::sync::Mutex<InstallationState>>> = {
+        // Acquire read lock, clone the Arc if it exists, then drop the lock immediately
+        INSTALL_STATE_REF.read().unwrap().as_ref().cloned()
+    };
+    
+    match install_state_arc_mutex {
+        Some(state_ref) => {
+            // Clone the state inside the read guard
+            let current_state = state_ref.lock().await.clone();
+            // Serialize the state to JSON
+             let payload = json!({
+                "status": current_state,
+                "message": current_state.get_message(),
+                "animation": current_state.get_animation_class(),
+            });
+            (StatusCode::OK, Json(payload)).into_response()
+        }
+        None => {
+            // Not in install mode
+             let payload = json!({
+                "status": "NotInstalling",
+                "message": "Dragonfly is not currently installing.",
+                "animation": "",
+            });
+            (StatusCode::OK, Json(payload)).into_response()
         }
     }
 }

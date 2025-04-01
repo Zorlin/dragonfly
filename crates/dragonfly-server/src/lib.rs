@@ -26,6 +26,9 @@ use minijinja::{Environment};
 use minijinja_autoreload::AutoReloader;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+// Add Serialize for the enum
+use serde::Serialize;
+
 mod auth;
 mod api;
 mod db;
@@ -46,12 +49,54 @@ pub static EVENT_MANAGER_REF: Lazy<RwLock<Option<std::sync::Arc<EventManager>>>>
     RwLock::new(None)
 });
 
+// Global static for accessing installation state during install
+pub static INSTALL_STATE_REF: Lazy<RwLock<Option<Arc<Mutex<InstallationState>>>>> = Lazy::new(|| {
+    RwLock::new(None)
+});
+
 // Enum to hold either static or reloading environment
 #[derive(Clone)]
 pub enum TemplateEnv {
     Static(Arc<Environment<'static>>),
     #[cfg(debug_assertions)]
     Reloading(Arc<AutoReloader>),
+}
+
+// Define the InstallationState enum here or import it
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum InstallationState {
+    WaitingSudo,
+    InstallingK3s,
+    WaitingK3s,
+    DeployingTinkerbell,
+    DeployingDragonfly,
+    Ready,
+    Failed(String), // Add Failed variant with error message
+}
+
+impl InstallationState {
+    pub fn get_message(&self) -> &str {
+        match self {
+            InstallationState::WaitingSudo => "Dragonfly is ready to install. Enter your password in your install window — let's do this.",
+            InstallationState::InstallingK3s => "Dragonfly is installing k3s.",
+            InstallationState::WaitingK3s => "Dragonfly is waiting for k3s to be ready.",
+            InstallationState::DeployingTinkerbell => "Dragonfly is deploying Tinkerbell.",
+            InstallationState::DeployingDragonfly => "Dragonfly is deploying... Dragonfly.",
+            InstallationState::Ready => "Dragonfly is ready.",
+            InstallationState::Failed(_) => "Installation failed. Check installer logs for details.", // Message for failed state
+        }
+    }
+    pub fn get_animation_class(&self) -> &str {
+        match self {
+            InstallationState::WaitingSudo => "rocket-idle",
+            InstallationState::InstallingK3s => "rocket-sparks",
+            InstallationState::WaitingK3s => "rocket-glowing",
+            InstallationState::DeployingTinkerbell => "rocket-smoke",
+            InstallationState::DeployingDragonfly => "rocket-flicker",
+            InstallationState::Ready => "rocket-fire rocket-shift",
+            InstallationState::Failed(_) => "rocket-error", // CSS class for failed state
+        }
+    }
 }
 
 // Application state struct
@@ -64,6 +109,8 @@ pub struct AppState {
     pub shutdown_tx: watch::Sender<()>,  // Channel to signal shutdown
     // Use the new enum for the environment
     pub template_env: TemplateEnv,
+    // Add shared installation state, wrapped in Option
+    pub install_state: Option<Arc<Mutex<InstallationState>>>,
 }
 
 // Clean up any existing processes
@@ -72,8 +119,18 @@ async fn cleanup_existing_processes() {
 }
 
 pub async fn run() -> anyhow::Result<()> {
-    // Remove the cleanup function call
-    // Setup rest of application normally
+    let is_install_mode = std::env::var("DRAGONFLY_QUIET").is_ok();
+    
+    let install_state = if is_install_mode {
+        let state = Arc::new(Mutex::new(InstallationState::WaitingSudo));
+        // Store the initial state in the global static
+        if let Ok(mut global_ref) = INSTALL_STATE_REF.write() {
+            *global_ref = Some(state.clone());
+        }
+        Some(state)
+    } else {
+        None
+    };
     
     // Initialize the database 
     let db_pool = init_db().await?;
@@ -102,11 +159,9 @@ pub async fn run() -> anyhow::Result<()> {
     // Create event manager
     let event_manager = Arc::new(EventManager::new());
     
-    // Store the event manager in the global static for access from other modules
+    // Store the event manager in the global static
     if let Ok(mut global_ref) = EVENT_MANAGER_REF.write() {
         *global_ref = Some(event_manager.clone());
-    } else {
-        error!("Failed to store event manager reference");
     }
     
     // Start the workflow polling task with shutdown signal
@@ -253,6 +308,7 @@ pub async fn run() -> anyhow::Result<()> {
         shutdown_tx: shutdown_tx.clone(),
         // Add the environment enum to the state
         template_env,
+        install_state: install_state.clone(), // Pass the install state
     };
     
     // Set up the persistent session store using the sqlx store
@@ -293,9 +349,9 @@ pub async fn run() -> anyhow::Result<()> {
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(trace::DefaultMakeSpan::new()
-                    .level(Level::INFO))
+                    .level(tracing::level_filters::LevelFilter::current().into_level().unwrap_or(Level::INFO)))
                 .on_response(trace::DefaultOnResponse::new()
-                    .level(Level::INFO)),
+                    .level(tracing::level_filters::LevelFilter::current().into_level().unwrap_or(Level::INFO))),
         )
         .with_state(app_state);
     
