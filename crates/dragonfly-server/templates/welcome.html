@@ -110,14 +110,6 @@
         animation: fadeOut 1s ease-in-out forwards;
     }
     
-    .fly-away-offset-1 {
-        animation-delay: 0.1s;
-    }
-    
-    .fly-away-offset-2 {
-        animation-delay: 0.2s;
-    }
-    
     .fade-out {
         animation: fadeOut 1s ease-in-out forwards;
         animation-delay: 0.8s;
@@ -127,11 +119,12 @@
         overflow: hidden;
     }
     
-    /* Xbox controller focus styles */
-    .card-focused {
+    /* Input focus styles - apply when gamepad or keyboard is active */
+    .input-active .card-focused {
         outline: 3px solid white;
         box-shadow: 0 0 15px 5px rgba(255, 255, 255, 0.5);
         transform: scale(1.05);
+        transition: all 0.2s ease-in-out;
     }
     
     /* Controller button guide */
@@ -151,11 +144,34 @@
     .controller-guide.active {
         display: block;
     }
+    
+    /* Keyboard guide */
+    .keyboard-guide {
+        position: fixed;
+        bottom: 20px;
+        left: 20px;
+        background-color: rgba(0, 0, 0, 0.7);
+        color: white;
+        padding: 10px 15px;
+        border-radius: 8px;
+        font-size: 0.9rem;
+        z-index: 100;
+        display: none;
+    }
+    
+    .keyboard-guide.active {
+        display: block;
+    }
 </style>
 
 <div class="controller-guide" id="xbox-guide">
     <div><span class="mr-2">◀ ▶</span> Navigate cards</div>
     <div><span class="mr-2">A</span> Select card</div>
+</div>
+
+<div class="keyboard-guide" id="keyboard-guide">
+    <div><span class="mr-2">← →</span> Navigate cards</div>
+    <div><span class="mr-2">Enter</span> Select card</div>
 </div>
 
 <script>
@@ -164,8 +180,10 @@
         const container = document.getElementById('welcome-container');
         const cardContainer = document.getElementById('card-container');
         const controllerGuide = document.getElementById('xbox-guide');
-        let currentCardIndex = 0;
+        const keyboardGuide = document.getElementById('keyboard-guide');
+        let currentCardIndex = 1;
         let isGamepadConnected = false;
+        let isKeyboardActive = false;
         let animationInProgress = false;
         
         // Function to handle card selection and animation
@@ -227,17 +245,29 @@
             });
         }
         
-        // Initialize with first card focused
-        updateCardFocus();
+        // Function to activate input mode (keyboard or gamepad)
+        function activateInputMode() {
+            document.body.classList.add('input-active');
+            updateCardFocus();
+        }
         
-        let buttonPressed = false;
-        let pollInterval;
+        // Mouse/touch click event handling
+        cards.forEach((card, index) => {
+            card.addEventListener('click', function(e) {
+                e.preventDefault();
+                selectCard(this);
+            });
+        });
         
         // Gamepad connection handler
         window.addEventListener("gamepadconnected", (e) => {
             console.log("Xbox controller connected");
             isGamepadConnected = true;
+            activateInputMode();
             controllerGuide.classList.add('active');
+            
+            // Initialize focus on first connecting gamepad
+            updateCardFocus();
             
             // Start polling for gamepad input
             if (!pollInterval) {
@@ -248,7 +278,18 @@
         window.addEventListener("gamepaddisconnected", (e) => {
             console.log("Xbox controller disconnected");
             isGamepadConnected = false;
+            
+            // Don't remove input-active if keyboard is still active
+            if (!isKeyboardActive) {
+                document.body.classList.remove('input-active');
+            }
+            
             controllerGuide.classList.remove('active');
+            
+            // Remove focus styling when gamepad disconnects
+            cards.forEach(card => {
+                card.querySelector('.flight-card').classList.remove('card-focused');
+            });
             
             // Stop polling if no gamepads connected
             if (pollInterval) {
@@ -263,6 +304,7 @@
             for (let i = 0; i < gamepads.length; i++) {
                 if (gamepads[i]) {
                     isGamepadConnected = true;
+                    activateInputMode();
                     controllerGuide.classList.add('active');
                     
                     if (!pollInterval) {
@@ -272,6 +314,9 @@
                 }
             }
         }
+        
+        let buttonPressed = false;
+        let pollInterval;
         
         // Poll for gamepad input
         function pollGamepad() {
@@ -313,9 +358,16 @@
         // Check for already connected gamepads
         checkGamepad();
         
-        // Also support keyboard navigation
+        // Support keyboard navigation always
         document.addEventListener('keydown', function(e) {
             if (animationInProgress) return;
+            
+            // Activate keyboard navigation on first key press
+            if (!isKeyboardActive && (e.key === 'ArrowRight' || e.key === 'ArrowLeft' || e.key === 'Enter' || e.key === ' ')) {
+                isKeyboardActive = true;
+                activateInputMode();
+                keyboardGuide.classList.add('active');
+            }
             
             // Arrow keys for navigation
             if (e.key === 'ArrowRight') {
