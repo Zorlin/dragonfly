@@ -3,139 +3,93 @@
 {% block title %}Dragonfly - Dashboard{% endblock %}
 
 {% block content %}
-<div class="bg-white dark:bg-gray-800 shadow overflow-hidden sm:rounded-lg">
-    <div class="px-4 py-5 sm:px-6">
-        <h3 class="text-lg leading-6 font-medium text-gray-900 dark:text-gray-100">
-            Infrastructure Overview
-        </h3>
-        <p class="mt-1 max-w-2xl text-sm text-gray-500 dark:text-gray-400">
-            Summary of your bare metal infrastructure
-        </p>
-    </div>
-    <div class="border-t border-gray-200 dark:border-gray-700">
-        <dl>
-            <div class="bg-gray-50 dark:bg-gray-750 px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
-                <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">
-                    Total Machines
-                </dt>
-                <dd class="mt-1 text-sm text-gray-900 dark:text-gray-100 sm:mt-0 sm:col-span-2">
-                    {{ machines|length }}
-                </dd>
-            </div>
-            <div class="bg-white dark:bg-gray-800 px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
-                <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">
-                    Machines Awaiting OS
-                </dt>
-                <dd class="mt-1 text-sm text-gray-900 dark:text-gray-100 sm:mt-0 sm:col-span-2">
-                    {% if status_counts.contains_key("ReadyForAdoption") %}
-                        {{ status_counts["ReadyForAdoption"] }}
-                    {% else %}
-                        0
-                    {% endif %}
-                </dd>
-            </div>
-            <div class="bg-gray-50 dark:bg-gray-750 px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
-                <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">
-                    Machines Installing OS
-                </dt>
-                <dd class="mt-1 text-sm text-gray-900 dark:text-gray-100 sm:mt-0 sm:col-span-2">
-                    {% if status_counts.contains_key("InstallingOS") %}
-                        {{ status_counts["InstallingOS"] }}
-                    {% else %}
-                        0
-                    {% endif %}
-                </dd>
-            </div>
-            <div class="bg-white dark:bg-gray-800 px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
-                <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">
-                    Ready Machines
-                </dt>
-                <dd class="mt-1 text-sm text-gray-900 dark:text-gray-100 sm:mt-0 sm:col-span-2">
-                    {% if status_counts.contains_key("Ready") %}
-                        {{ status_counts["Ready"] }}
-                    {% else %}
-                        0
-                    {% endif %}
-                </dd>
-            </div>
-        </dl>
-    </div>
-</div>
+<div class="container mx-auto px-4 py-6">
+    <h2 class="text-lg font-medium text-purple-600 dark:text-purple-400 uppercase tracking-wider mb-6">Welcome to Dragonfly.</h2>
 
-<div class="mt-8">
-    <div class="flex justify-between items-center">
-        <h2 class="text-lg font-medium text-gray-900 dark:text-gray-100">Recent Machines</h2>
-        <a href="/machines" class="text-sm font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400 dark:hover:text-indigo-300">
-            View all machines
-        </a>
-    </div>
-    <div id="machine-list" class="mt-4 bg-white dark:bg-gray-800 shadow overflow-hidden sm:rounded-md">
-        <ul class="divide-y divide-gray-200 dark:divide-gray-700">
-            {% for machine in machines %}
-            <li class="hover:bg-gray-50 dark:hover:bg-gray-750 cursor-pointer" onclick="window.location='/machines/{{ machine.id }}'">
-                <div class="px-4 py-4 sm:px-6">
-                    <div class="flex items-center justify-between">
-                        <div>
-                            <p class="text-sm font-medium text-indigo-600 dark:text-indigo-400 truncate">
-                                {% if machine.hostname.is_some() %}
-                                    {{ machine.hostname.as_ref().unwrap() }}
-                                {% else %}
-                                    <!-- Fallback to ID if no hostname or memorable name -->
-                                    <span class="tech-mono">{{ machine.id }}</span>
-                                {% endif %}
-                            </p>
-                            {% if machine.memorable_name.is_some() %}
-                                <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                                    ({{ machine.memorable_name.as_ref().unwrap() }})
+    <!-- Recent Machines -->
+    <div class="mb-8">
+        <div class="flex justify-between items-center mb-4">
+            <h2 class="text-lg font-medium text-gray-900 dark:text-gray-200 uppercase tracking-wider">Recent Machines</h2>
+            <a href="/machines" class="text-sm font-medium text-indigo-400 hover:text-indigo-300 flex items-center">
+                <span>View all machines</span>
+                <svg class="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                </svg>
+            </a>
+        </div>
+        <div id="machine-list" class="bg-white dark:bg-gray-900 shadow-lg rounded-lg overflow-hidden">
+            <ul class="divide-y divide-gray-800 dark:divide-gray-700">
+                {% for machine in machines %}
+                <li class="hover:bg-gray-50 dark:hover:bg-gray-750 cursor-pointer transition-colors duration-150" onclick="window.location='/machines/{{ machine.id }}'">
+                    <div class="px-6 py-4">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <p class="text-sm font-medium text-indigo-400 truncate flex items-center">
+                                    {% if machine.hostname %}
+                                        <span class="mr-2">{{ machine.hostname }}</span>
+                                    {% else %}
+                                        <span class="tech-mono mr-2">{{ machine.id }}</span>
+                                    {% endif %}
+                                    
+                                    {% if machine.memorable_name %}
+                                        <span class="text-xs text-gray-500 dark:text-gray-400 italic">
+                                            ({{ machine.memorable_name }})
+                                        </span>
+                                    {% endif %}
                                 </p>
-                            {% endif %}
+                            </div>
+                            <div class="ml-2 flex-shrink-0 flex">
+                                <p class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full 
+                                    {% if machine.status|string == "Ready" %}
+                                        bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200
+                                    {% elif machine.status|string == "InstallingOS" %}
+                                        bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200
+                                    {% elif machine.status|string == "ReadyForAdoption" %}
+                                        bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200
+                                    {% else %}
+                                        bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200
+                                    {% endif %}">
+                                    {{ machine.status }}
+                                </p>
+                            </div>
                         </div>
-                        <div class="ml-2 flex-shrink-0 flex">
-                            <p class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full 
-                                {% if machine.status|string == "Ready" %}
-                                    bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200
-                                {% else if machine.status|string == "InstallingOS" %}
-                                    bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200
-                                {% else if machine.status|string == "ReadyForAdoption" %}
-                                    bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200
-                                {% else %}
-                                    bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200
-                                {% endif %}">
-                                {{ machine.status }}
+                        <div class="mt-2 flex flex-col sm:flex-row sm:justify-between text-xs">
+                            <div class="flex flex-col sm:flex-row sm:space-x-4">
+                                <p class="flex items-center text-gray-500 dark:text-gray-400">
+                                    <span class="font-medium mr-1">MAC:</span>
+                                    <span class="tech-mono">{{ machine.mac_address }}</span>
+                                </p>
+                                <p class="flex items-center text-gray-500 dark:text-gray-400 mt-1 sm:mt-0">
+                                    <span class="font-medium mr-1">IP:</span>
+                                    <span class="tech-mono">{{ machine.ip_address }}</span>
+                                </p>
+                            </div>
+                            <p class="flex items-center text-gray-500 dark:text-gray-400 mt-1 sm:mt-0">
+                                <span class="font-medium mr-1">Registered:</span>
+                                <span class="tech-mono">{{ machine.created_at|string }}</span>
                             </p>
                         </div>
                     </div>
-                    <div class="mt-2 sm:flex sm:justify-between">
-                        <div class="sm:flex">
-                            <p class="flex items-center text-sm text-gray-500 dark:text-gray-400">
-                                MAC: <span class="ml-1 tech-mono">{{ machine.mac_address }}</span>
-                            </p>
-                            <p class="mt-2 flex items-center text-sm text-gray-500 dark:text-gray-400 sm:mt-0 sm:ml-6">
-                                IP: <span class="ml-1 tech-mono">{{ machine.ip_address }}</span>
-                            </p>
-                        </div>
-                        <div class="mt-2 flex items-center text-sm text-gray-500 dark:text-gray-400 sm:mt-0">
-                            <p>
-                                Registered 
-                                <span class="ml-1 tech-mono">
-                                    {{ machine.created_at|string }}
-                                </span>
-                            </p>
-                        </div>
+                </li>
+                {% else %}
+                <li class="px-6 py-8">
+                    <div class="text-center">
+                        <svg class="mx-auto h-16 w-16 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.59 14.37a6 6 0 01-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 006.16-12.12A14.98 14.98 0 009.631 8.41m5.96 5.96a14.926 14.926 0 01-5.841 2.58m-.119-8.54a6 6 0 00-7.381 5.84h4.8m2.581-5.84a14.927 14.927 0 00-2.58 5.84m2.699 2.7c-.103.021-.207.041-.311.06a15.09 15.09 0 01-2.448-2.448 14.9 14.9 0 01.06-.312m-2.24 2.39a4.493 4.493 0 00-1.757 4.306 4.493 4.493 0 004.306-1.758M16.5 9a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z"></path>
+                        </svg>
+                        <p class="mt-4 text-gray-500 dark:text-gray-400">No machines discovered yet.</p>
+                        <p class="mt-2 text-sm text-gray-500 dark:text-gray-500">Machines will appear here once they connect to Dragonfly.</p>
                     </div>
-                </div>
-            </li>
-            {% else %}
-            <li class="px-4 py-4 sm:px-6">
-                <p class="text-center text-gray-500 dark:text-gray-400">No machines discovered yet.</p>
-            </li>
-            {% endfor %}
-        </ul>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
     </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.1/dist/chart.min.js"></script>
 <script>
     // Refresh function to reload the page data when machines change
     function refreshDashboard() {
@@ -196,5 +150,236 @@
             evtSource.close();
         }
     });
+
+    // Example data for charts - Replace with actual data from backend
+    const deploymentTimeData = {
+        labels: ['Ubuntu 22.04', 'Debian 11', 'RHEL 8', 'Rocky Linux 9', 'CentOS 7'],
+        datasets: [{
+            label: 'Avg. Deployment Time (minutes)',
+            data: [4.2, 5.1, 6.3, 4.8, 5.5],
+            backgroundColor: [
+                'rgba(75, 192, 192, 0.7)',
+                'rgba(54, 162, 235, 0.7)',
+                'rgba(153, 102, 255, 0.7)',
+                'rgba(255, 159, 64, 0.7)',
+                'rgba(255, 99, 132, 0.7)'
+            ],
+            borderColor: [
+                'rgba(75, 192, 192, 1)',
+                'rgba(54, 162, 235, 1)',
+                'rgba(153, 102, 255, 1)',
+                'rgba(255, 159, 64, 1)',
+                'rgba(255, 99, 132, 1)'
+            ],
+            borderWidth: 1
+        }]
+    };
+
+    // Create deployment time chart
+    const deploymentCtx = document.getElementById('deploymentChart').getContext('2d');
+    const deploymentChart = new Chart(deploymentCtx, {
+        type: 'bar',
+        data: deploymentTimeData,
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    display: false
+                },
+                tooltip: {
+                    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                    titleColor: '#fff',
+                    bodyColor: '#fff',
+                    borderColor: '#333',
+                    borderWidth: 1,
+                    titleFont: {
+                        size: 14,
+                        weight: 'bold'
+                    },
+                    callbacks: {
+                        label: function(context) {
+                            return `${context.parsed.y} minutes`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    title: {
+                        display: true,
+                        text: 'Minutes',
+                        color: '#aaa'
+                    },
+                    grid: {
+                        color: 'rgba(255, 255, 255, 0.1)'
+                    },
+                    ticks: {
+                        color: '#aaa'
+                    }
+                },
+                x: {
+                    grid: {
+                        display: false
+                    },
+                    ticks: {
+                        color: '#aaa'
+                    }
+                }
+            }
+        }
+    });
+
+    // Generate example waterfall data
+    function generateWaterfallData() {
+        const datasets = [];
+        const templates = ['Ubuntu 22.04', 'Debian 11', 'RHEL 8', 'Rocky Linux 9', 'CentOS 7'];
+        const colors = [
+            'rgba(75, 192, 192, 0.7)',
+            'rgba(54, 162, 235, 0.7)',
+            'rgba(153, 102, 255, 0.7)',
+            'rgba(255, 159, 64, 0.7)',
+            'rgba(255, 99, 132, 0.7)'
+        ];
+        
+        // Generate 50 most recent deploys across all templates
+        const labels = Array.from({length: 50}, (_, i) => `Deploy ${50-i}`);
+        
+        templates.forEach((template, tIndex) => {
+            // Generate random deployment times between 3 and 8 minutes
+            const data = Array.from({length: 50}, () => Math.random() * 5 + 3);
+            datasets.push({
+                label: template,
+                data: data,
+                backgroundColor: colors[tIndex % colors.length],
+                borderColor: colors[tIndex % colors.length].replace('0.7', '1'),
+                borderWidth: 1,
+                barPercentage: 0.8,
+                categoryPercentage: 0.9,
+                // Hide all templates except the first one initially
+                hidden: tIndex !== 0
+            });
+        });
+
+        return {
+            labels: labels,
+            datasets: datasets
+        };
+    }
+
+    // Create waterfall chart
+    const waterfallCtx = document.getElementById('waterfallChart').getContext('2d');
+    const waterfallData = generateWaterfallData();
+    const waterfallChart = new Chart(waterfallCtx, {
+        type: 'bar',
+        data: waterfallData,
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                tooltip: {
+                    mode: 'index',
+                    intersect: false,
+                    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                    callbacks: {
+                        label: function(context) {
+                            return `${context.dataset.label}: ${context.parsed.y.toFixed(2)} minutes`;
+                        }
+                    }
+                },
+                legend: {
+                    position: 'top',
+                    labels: {
+                        color: '#aaa',
+                        usePointStyle: true,
+                        padding: 20
+                    }
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    title: {
+                        display: true,
+                        text: 'Deployment Time (minutes)',
+                        color: '#aaa'
+                    },
+                    grid: {
+                        color: 'rgba(255, 255, 255, 0.1)'
+                    },
+                    ticks: {
+                        color: '#aaa'
+                    }
+                },
+                x: {
+                    grid: {
+                        display: false
+                    },
+                    ticks: {
+                        display: false
+                    }
+                }
+            }
+        }
+    });
+
+    // Template selector for waterfall chart
+    document.getElementById('templateSelector').addEventListener('change', function(e) {
+        const selectedValue = e.target.value;
+        const datasets = waterfallChart.data.datasets;
+        
+        if (selectedValue === 'all') {
+            // Show only the first template when "All Templates" is selected
+            datasets.forEach((dataset, index) => {
+                dataset.hidden = index !== 0;
+            });
+        } else {
+            // Show only the selected template
+            const templateIndex = parseInt(selectedValue);
+            datasets.forEach((dataset, index) => {
+                dataset.hidden = index !== templateIndex;
+            });
+        }
+        
+        waterfallChart.update();
+    });
+
+    // Time period selectors for deployment chart
+    document.getElementById('last7Days').addEventListener('click', function() {
+        // Simulate data filtering for last 7 days
+        updateButtonStyles(this);
+        // You would update chart data here with backend data
+    });
+
+    document.getElementById('last30Days').addEventListener('click', function() {
+        // Simulate data filtering for last 30 days
+        updateButtonStyles(this);
+        // You would update chart data here with backend data
+    });
+
+    document.getElementById('allTime').addEventListener('click', function() {
+        // Simulate data filtering for all time
+        updateButtonStyles(this);
+        // You would update chart data here with backend data
+    });
+
+    function updateButtonStyles(activeButton) {
+        const buttons = [
+            document.getElementById('last7Days'),
+            document.getElementById('last30Days'),
+            document.getElementById('allTime')
+        ];
+        
+        buttons.forEach(button => {
+            if (button === activeButton) {
+                button.classList.remove('bg-gray-700', 'text-gray-300');
+                button.classList.add('bg-blue-700', 'text-blue-200');
+            } else {
+                button.classList.remove('bg-blue-700', 'text-blue-200');
+                button.classList.add('bg-gray-700', 'text-gray-300');
+            }
+        });
+    }
 </script>
 {% endblock %} 

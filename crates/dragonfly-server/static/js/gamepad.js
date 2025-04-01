@@ -89,16 +89,6 @@ class GamepadController {
             document.head.appendChild(styleEl);
         }
         
-        // Add gamepad cursor
-        const cursor = document.createElement('div');
-        cursor.id = 'gamepad-cursor';
-        cursor.className = 'fixed w-8 h-8 pointer-events-none transition-all duration-100 z-50';
-        cursor.innerHTML = `
-          <div class="animate-ping absolute h-4 w-4 rounded-full bg-indigo-400 opacity-75"></div>
-          <div class="relative rounded-full h-3 w-3 bg-indigo-500"></div>
-        `;
-        document.body.appendChild(cursor);
-        
         // Focus the first element
         this.focusElementAtIndex(0);
         

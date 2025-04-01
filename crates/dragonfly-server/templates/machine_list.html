@@ -30,7 +30,7 @@
     <div class="mt-8 flex flex-col">
         <div class="-my-2 -mx-4 overflow-x-auto sm:-mx-6 lg:-mx-8">
             <div class="inline-block min-w-full py-2 align-middle md:px-6 lg:px-8">
-                <div class="overflow-hidden shadow ring-1 ring-black ring-opacity-5 md:rounded-lg">
+                <div class="overflow-hidden shadow md:rounded-lg">
                     <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
                         <thead class="bg-gray-50 dark:bg-gray-800">
                             <tr>
@@ -64,18 +64,6 @@
                             hx-swap="morph:innerHTML"
                             hx-indicator=".htmx-indicator"
                         >
-                            <!-- Loading indicator -->
-                            <tr class="htmx-indicator">
-                                <td colspan="6" class="py-10 text-center">
-                                    <div class="inline-flex items-center px-4 py-2 font-semibold leading-6 text-sm text-gray-500 dark:text-gray-300">
-                                        <svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-indigo-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                        </svg>
-                                        Loading machines...
-                                    </div>
-                                </td>
-                            </tr>
                             {% for machine in machines %}
                             <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer" @click="window.location='/machines/{{ machine.id }}'">
                                 <td class="px-6 py-4 whitespace-nowrap">
@@ -83,17 +71,17 @@
                                         {# Main identifier display #}
                                         <div class="text-sm font-medium text-gray-900 dark:text-white">
                                             <a href="/machines/{{ machine.id }}" class="hover:text-indigo-600 dark:hover:text-indigo-400">
-                                                {% if machine.hostname.is_some() %}
-                                                    {{ machine.hostname.as_ref().unwrap() }}
+                                                {% if machine.hostname %}
+                                                    {{ machine.hostname }}
                                                 {% else %}
                                                     {# Fallback to ID if no hostname #}
                                                     {{ machine.id }}
                                                 {% endif %}
                                             </a>
                                             {# Display memorable_name below if it exists #}
-                                            {% if machine.memorable_name.is_some() %}
+                                            {% if machine.memorable_name %}
                                             <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                                                {{ machine.memorable_name.as_ref().unwrap() }}
+                                                {{ machine.memorable_name }}
                                             </div>
                                             {% endif %}
                                         </div>
@@ -109,22 +97,22 @@
                                     <span class="px-3 py-1 inline-flex text-sm leading-5 font-semibold rounded-full 
                                         {% if machine.status == "Ready" %}
                                             bg-green-100 text-green-800 dark:bg-green-400/10 dark:text-green-300 dark:border dark:border-green-500/20
-                                        {% else if machine.status == "InstallingOS" %}
+                                        {% elif machine.status == "InstallingOS" %}
                                             bg-yellow-100 text-yellow-800 dark:bg-yellow-400/10 dark:text-yellow-300 dark:border dark:border-yellow-500/20
-                                        {% else if machine.status == "AwaitingAssignment" %}
+                                        {% elif machine.status == "AwaitingAssignment" %}
                                             bg-blue-100 text-blue-800 dark:bg-blue-400/10 dark:text-blue-300 dark:border dark:border-blue-500/20
-                                        {% else if machine.status == "ExistingOS" %}
+                                        {% elif machine.status == "ExistingOS" %}
                                             bg-sky-100 text-sky-800 dark:bg-sky-400/10 dark:text-sky-300 dark:border dark:border-sky-500/20
                                         {% else %}
                                             bg-red-100 text-red-800 dark:bg-red-400/10 dark:text-red-300 dark:border dark:border-red-500/20
                                         {% endif %}">
                                         {% if machine.status == "Ready" %}
                                             Provisioned
-                                        {% else if machine.status == "InstallingOS" %}
+                                        {% elif machine.status == "InstallingOS" %}
                                             Installing OS
-                                        {% else if machine.status == "AwaitingAssignment" %}
+                                        {% elif machine.status == "AwaitingAssignment" %}
                                             Awaiting OS Selection
-                                        {% else if machine.status == "ExistingOS" %}
+                                        {% elif machine.status == "ExistingOS" %}
                                             Existing OS
                                         {% else %}
                                             Error {# Explicitly handle Error or other unexpected statuses #}
@@ -132,73 +120,79 @@
                                     </span>
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-                                    {% if machine.os_choice.is_some() %}
-                                        🖥️ {{ machine.os_choice.as_ref().unwrap() }}
+                                    {% if machine.os_choice %}
+                                        🖥️ {{ machine.os_choice }}
                                     {% endif %}
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-                                    {% match machine.status %}
-                                        {% when "InstallingOS" %}
-                                            {% if let Some(info) = workflow_infos.get(machine.id) %}
-                                                <div class="flex flex-col space-y-1">
-                                                    <div class="flex justify-between text-xs">
-                                                        <span>{{ info.progress }}%</span>
-                                                        {% if info.current_action.is_some() %}
-                                                            <span class="ml-2 truncate max-w-[120px]">
-                                                                {{ info.current_action.as_ref().unwrap() }}
-                                                            </span>
-                                                        {% endif %}
-                                                    </div>
-                                                    <div class="w-full bg-gray-200 rounded-full h-2 dark:bg-gray-700">
-                                                        <div class="bg-yellow-500 h-2 rounded-full dark:bg-yellow-600 workflow-progress-bar" data-machine-id="{{ machine.id }}" data-progress="{{ info.progress }}"></div>
-                                                    </div>
+                                    {% if machine.status == "InstallingOS" %}
+                                        {% if workflow_infos.get(machine.id) %}
+                                            <div class="flex flex-col space-y-1">
+                                                <div class="flex justify-between text-xs">
+                                                    <span>{{ workflow_infos.get(machine.id).progress }}%</span>
+                                                    {% if workflow_infos.get(machine.id).current_action %}
+                                                        <span class="ml-2 truncate max-w-[120px]">
+                                                            {{ workflow_infos.get(machine.id).current_action }}
+                                                        </span>
+                                                    {% endif %}
                                                 </div>
-                                            {% else %}
-                                                <span class="text-xs italic text-gray-400">Awaiting progress data...</span>
-                                            {% endif %}
-                                        {% else %}
-                                            {% if is_admin %} {# Wrap all actions in is_admin check #}
-                                            <div class="flex space-x-1 items-center" @click.stop hx-preserve="true">
-                                                {# Common Actions - Tags #}
-                                                <button 
-                                                    @click="openTagModal(
-                                                        '{{ machine.id }}', 
-                                                        '{% if machine.hostname.is_some() %}
-                                                             {{ machine.hostname.as_ref().unwrap() }}
-                                                         {% else if machine.memorable_name.is_some() %}
-                                                             {{ machine.memorable_name.as_ref().unwrap() }}
-                                                         {% else %}
-                                                             {{ machine.id }}
-                                                         {% endif %}'
-                                                    )"
-                                                    class="inline-flex items-center px-3 py-1 border border-transparent text-sm leading-5 font-medium rounded text-purple-700 bg-purple-100 hover:bg-purple-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 dark:bg-purple-900 dark:text-purple-200 dark:hover:bg-purple-800"
-                                                >
-                                                    🏷️ Tags
-                                                </button>
-                                                
-                                                {# Reimage Action #}
-                                                {% if machine.status == "Ready" || machine.status == "AwaitingAssignment" || machine.status == "ExistingOS" || machine.status == "Offline" %}
-                                                <button @click="openReimageModal('{{ machine.id }}')" class="inline-flex items-center px-3 py-1 border border-transparent text-sm leading-5 font-medium rounded text-cyan-700 bg-cyan-100 hover:bg-cyan-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-cyan-500 dark:bg-cyan-900 dark:text-cyan-200 dark:hover:bg-cyan-800">
-                                                    ♻️ Reimage
-                                                </button>
-                                                {% endif %}
-
-                                                {# Power Action #}
-                                                {% if machine.bmc_credentials.is_some() %}
-                                                <button @click="openPowerModal('{{ machine.id }}')" class="inline-flex items-center px-3 py-1 border border-transparent text-sm leading-5 font-medium rounded text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500">
-                                                    ⏻ Power
-                                                </button>
-                                                {% endif %}
-                                                
-                                                {# Delete Action #}
-                                                <button @click="openDeleteModal('{{ machine.id }}')" class="ml-3 inline-flex items-center p-1 border border-transparent text-sm leading-5 font-medium rounded text-red-700 bg-red-100 hover:bg-red-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 dark:bg-red-900 dark:text-red-200 dark:hover:bg-red-800"> {# Added ml-3 for spacing #}
-                                                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4 h-4">
-                                                        <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
-                                                    </svg>
-                                                </button>
+                                                <div class="w-full bg-gray-200 rounded-full h-2 dark:bg-gray-700">
+                                                    <div class="bg-yellow-500 h-2 rounded-full dark:bg-yellow-600 workflow-progress-bar" data-machine-id="{{ machine.id }}" data-progress="{{ workflow_infos.get(machine.id).progress }}"></div>
+                                                </div>
                                             </div>
-                                            {% endif %} {# End is_admin check for actions #}
-                                    {% endmatch %}
+                                        {% else %}
+                                            <span class="text-xs italic text-gray-400">Awaiting progress data...</span>
+                                        {% endif %}
+                                    {% else %}
+                                        {% if is_admin %} {# Wrap all actions in is_admin check #}
+                                        <div class="flex space-x-1 items-center" @click.stop hx-preserve="true">
+                                            {# Common Actions - Tags #}
+                                            <button 
+                                                @click="openTagModal(
+                                                    '{{ machine.id }}', 
+                                                    '{% if machine.hostname %}
+                                                         {{ machine.hostname }}
+                                                     {% elif machine.memorable_name %}
+                                                         {{ machine.memorable_name }}
+                                                     {% else %}
+                                                         {{ machine.id }}
+                                                     {% endif %}'
+                                                )"
+                                                class="inline-flex items-center px-3 py-1 border border-transparent text-sm leading-5 font-medium rounded text-purple-700 bg-purple-100 hover:bg-purple-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 dark:bg-purple-900 dark:text-purple-200 dark:hover:bg-purple-800"
+                                            >
+                                                🏷️ Tags
+                                            </button>
+                                            
+                                            {# Reimage Action #}
+                                            {% if machine.status == "Ready" or machine.status == "AwaitingAssignment" or machine.status == "ExistingOS" or machine.status == "Offline" %}
+                                            <button @click="openReimageModal('{{ machine.id }}')" class="inline-flex items-center px-3 py-1 border border-transparent text-sm leading-5 font-medium rounded text-cyan-700 bg-cyan-100 hover:bg-cyan-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-cyan-500 dark:bg-cyan-900 dark:text-cyan-200 dark:hover:bg-cyan-800">
+                                                ♻️ Reimage
+                                            </button>
+                                            {% endif %}
+
+                                            {# Power Action #}
+                                            {% if machine.bmc_credentials %}
+                                            <button @click="openPowerModal('{{ machine.id }}')" class="inline-flex items-center px-3 py-1 border border-transparent text-sm leading-5 font-medium rounded text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500">
+                                                ⏻ Power
+                                            </button>
+                                            {% endif %}
+                                            
+                                            {# Delete Action #}
+                                            <button @click="openDeleteModal('{{ machine.id }}')" class="ml-3 inline-flex items-center p-1 border border-transparent text-sm leading-5 font-medium rounded text-red-700 bg-red-100 hover:bg-red-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 dark:bg-red-900 dark:text-red-200 dark:hover:bg-red-800"> {# Added ml-3 for spacing #}
+                                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4 h-4">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                                                </svg>
+                                            </button>
+                                        </div>
+                                        {% endif %} {# End is_admin check for actions #}
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="6" class="px-6 py-10 text-center text-gray-500 dark:text-gray-400">
+                                    <p class="mb-2">No machines discovered yet.</p>
+                                    <p class="text-sm italic">Machines will appear here once they connect to Dragonfly.</p>
                                 </td>
                             </tr>
                             {% endfor %}

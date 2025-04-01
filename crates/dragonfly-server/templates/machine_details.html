@@ -21,20 +21,20 @@
             <div class="flex items-center">
                 <span class="font-bold text-gray-900 dark:text-white mr-2">Status:</span>
                 <span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full 
-                    {% if machine.status == MachineStatus::Ready %}
+                    {% if machine.status == "Ready" %}
                         bg-green-100 text-green-800 dark:bg-green-400/10 dark:text-green-300 dark:border dark:border-green-500/20
-                    {% else if machine.status == MachineStatus::InstallingOS %}
+                    {% elif machine.status == "InstallingOS" %}
                         bg-yellow-100 text-yellow-800 dark:bg-yellow-400/10 dark:text-yellow-300 dark:border dark:border-yellow-500/20
-                    {% else if machine.status == MachineStatus::ExistingOS %}
+                    {% elif machine.status == "ExistingOS" %}
                         bg-sky-100 text-sky-800 dark:bg-sky-400/10 dark:text-sky-300 dark:border dark:border-sky-500/20
                     {% else %}
                         bg-red-100 text-red-800 dark:bg-red-400/10 dark:text-red-300 dark:border dark:border-red-500/20
                     {% endif %}">
-                    {% if machine.status == MachineStatus::Ready %}
+                    {% if machine.status == "Ready" %}
                         Provisioned
-                    {% else if machine.status == MachineStatus::InstallingOS %}
+                    {% elif machine.status == "InstallingOS" %}
                         Installing OS
-                    {% else if machine.status == MachineStatus::AwaitingAssignment %}
+                    {% elif machine.status == "AwaitingAssignment" %}
                         Awaiting OS Selection
                     {% else %}
                         {{ machine.status }}
@@ -44,7 +44,7 @@
         </div>
 
         <!-- Deployment Progress Section - Only shown when machine is installing OS -->
-        {% if machine.status == MachineStatus::InstallingOS %}
+        {% if machine.status == "InstallingOS" %}
           {% if workflow_info.is_some() %}
             <div class="border-t border-gray-200 dark:border-gray-700 p-4 sm:p-6 bg-yellow-50 dark:bg-yellow-900/10"
                  id="workflow-progress-container"
@@ -113,7 +113,7 @@
                                         <td class="px-3 py-2 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
                                             {% if task.status == "STATE_SUCCESS" %}
                                                 {{ task.reported_duration }}s
-                                            {% else if task.status == "STATE_RUNNING" %}
+                                            {% elif task.status == "STATE_RUNNING" %}
                                                 <span class="animate-pulse">In progress</span>
                                             {% else %}
                                                 Pending
@@ -135,9 +135,9 @@
                                             <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full 
                                                 {% if task.status == "STATE_SUCCESS" %}
                                                     bg-green-100 text-green-800 dark:bg-green-400/10 dark:text-green-300
-                                                {% else if task.status == "STATE_FAILED" %}
+                                                {% elif task.status == "STATE_FAILED" %}
                                                     bg-red-100 text-red-800 dark:bg-red-400/10 dark:text-red-300
-                                                {% else if task.status == "STATE_RUNNING" %}
+                                                {% elif task.status == "STATE_RUNNING" %}
                                                     bg-yellow-100 text-yellow-800 dark:bg-yellow-400/10 dark:text-yellow-300
                                                 {% else %}
                                                     bg-gray-100 text-gray-800 dark:bg-gray-400/10 dark:text-gray-300
@@ -495,7 +495,7 @@
                                     {% let duration = machine.last_deployment_duration.unwrap() %}
                                     {% if duration < 60 %}
                                         {{ duration }} seconds
-                                    {% else if duration < 3600 %}
+                                    {% elif duration < 3600 %}
                                         {{ duration / 60 }} minutes
                                     {% else %}
                                         {{ duration / 3600 }} hours {{ (duration % 3600) / 60 }} minutes
