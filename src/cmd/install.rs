@@ -222,63 +222,6 @@ pub async fn run_install(args: InstallArgs, mut shutdown_rx: watch::Receiver<()>
     Ok(())
 }
 
-// New function specifically for Flight mode installation from the setup wizard
-pub async fn run_flight_install() -> Result<()> {
-    info!("Starting Dragonfly Flight mode installation");
-    
-    // Use default values for installation parameters
-    let args = InstallArgs {
-        interface: None,
-        start_offset: 1,
-        max_ip_search: 20,
-    };
-    
-    let start_time = Instant::now();
-    
-    // --- 1. Determine Host IP and Network ---
-    info!("Detecting network configuration...");
-    let (host_ip, netmask, network) = get_host_ip_and_mask(args.interface.as_deref())
-        .wrap_err("Failed to determine host IP address and netmask")?;
-    info!("Detected host IP: {} with netmask: {} (network: {})", host_ip, netmask, network);
-
-    // --- 2. Find Available Floating IP ---
-    info!("Finding available IP for bootstrap node...");
-    let bootstrap_ip = find_available_ip(host_ip, network, args.start_offset, args.max_ip_search)
-        .await
-        .wrap_err("Failed to find an available IP address for the bootstrap node")?;
-    info!("Found available bootstrap IP: {}", bootstrap_ip);
-
-    // --- 3. Install k3s ---
-    info!("Setting up k3s...");
-    install_k3s().await.wrap_err("Failed to set up k3s")?;
-
-    // --- 4. Configure kubectl ---
-    info!("Configuring kubectl...");
-    let kubeconfig_path = configure_kubectl().await.wrap_err("Failed to configure kubectl")?;
-    std::env::set_var("KUBECONFIG", &kubeconfig_path);
-    debug!("Set KUBECONFIG environment variable to: {:?}", kubeconfig_path);
-
-    // --- 5. Wait for Node Ready ---
-    wait_for_node_ready(&kubeconfig_path).await.wrap_err("Timed out waiting for Kubernetes node")?;
-
-    // --- 6. Install Helm ---
-    info!("Setting up Helm...");
-    install_helm().await.wrap_err("Failed to set up Helm")?;
-
-    // --- 7. Install Tinkerbell Stack ---
-    info!("Installing Tinkerbell stack...");
-    install_tinkerbell_stack(bootstrap_ip, network, &kubeconfig_path).await.wrap_err("Failed to install Tinkerbell stack")?;
-
-    // --- 8. Install Dragonfly Helm Chart ---
-    info!("Installing Dragonfly helm chart...");
-    install_dragonfly_chart(bootstrap_ip, &kubeconfig_path).await.wrap_err("Failed to install Dragonfly helm chart")?;
-
-    let elapsed = start_time.elapsed();
-    info!("✅ Dragonfly Flight mode installation completed in {:.1?}!", elapsed);
-    
-    Ok(())
-}
-
 // --- Helper function implementations (from previous response) ---
 
 // Placeholder for run_shell_command - Implement robustly
