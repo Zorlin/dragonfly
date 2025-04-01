@@ -340,17 +340,22 @@ fn get_host_ip_and_mask(interface_name: Option<&str>) -> Result<(Ipv4Addr, Ipv4A
 
     // Loop through interfaces to find a suitable one
     for iface in interfaces {
-        // Skip loopback or interfaces without MAC address
-        // The flags API has changed; we now check if interface name is "lo" or has no MAC
-        if iface.name == "lo" || iface.mac_addr.is_none() {
-            debug!("Skipping interface {}: loopback or virtual", iface.name);
+        // Skip loopback, virtual bridges (libvirt, docker, virtualbox), or interfaces without MAC address
+        let name = &iface.name;
+        if name == "lo" || 
+           name.starts_with("virbr") || 
+           name.starts_with("docker") || 
+           name.starts_with("vboxnet") || 
+           iface.mac_addr.is_none() 
+        {
+            debug!("Skipping interface {}: loopback or virtual bridge/interface", name);
             continue;
         }
 
         // If a specific interface is requested, only consider that one
-        if let Some(name) = interface_name {
-            if iface.name != name {
-                debug!("Skipping interface {}: not the requested interface", iface.name);
+        if let Some(requested_name) = interface_name {
+            if name != requested_name {
+                debug!("Skipping interface {}: not the requested interface", name);
                 continue;
             }
         }
