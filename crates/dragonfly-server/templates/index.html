@@ -20,7 +20,75 @@
                  <div class="text-center">
                      <div id="installer-rocket" class="mb-6 {{ initial_animation_class }}">
                          <svg class="mx-auto h-16 w-16 text-gray-500 rocket-svg" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.59 14.37a6 6 0 01-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 006.16-12.12A14.98 14.98 0 009.631 8.41m5.96 5.96a14.926 14.926 0 01-5.841 2.58m-.119-8.54a6 6 0 00-7.381 5.84h4.8m2.581-5.84a14.927 14.927 0 00-2.58 5.84m2.699 2.7c-.103.021-.207.041-.311.06a15.09 15.09 0 01-2.448-2.448 14.9 14.9 0 01.06-.312M16.5 9a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z"></path>
+                             <!-- Main rocket path -->
+                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.59 14.37a6 6 0 01-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 006.16-12.12A14.98 14.98 0 009.631 8.41m5.96 5.96a14.926 14.926 0 01-5.841 2.58m-.119-8.54a6 6 0 00-7.381 5.84h4.8m2.581-5.84a14.927 14.927 0 00-2.58 5.84m2.699 2.7c-.103.021-.207.041-.311.06a15.09 15.09 0 01-2.448-2.448 14.9 14.9 0 01.06-.312M16.5 9a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z">
+                                 <!-- SMIL animations that will be enabled/disabled by JS -->
+                                 <animate id="anim-scanning" attributeName="opacity" values="0.9;1;0.9" dur="2s" repeatCount="indefinite" begin="indefinite" />
+                                 <animateTransform id="anim-scale" attributeName="transform" type="scale" additive="sum" from="1 1" to="1.03 1.03" dur="2s" repeatCount="indefinite" begin="indefinite" />
+                                 
+                                 <animate id="anim-flicker" attributeName="opacity" values="0.9;1;0.8;1;0.9" dur="0.2s" repeatCount="indefinite" begin="indefinite" />
+                                 
+                                 <animateTransform id="anim-fire" attributeName="transform" type="translate" additive="sum" from="0 0" to="0 -2" dur="0.3s" repeatCount="indefinite" begin="indefinite" />
+                                 
+                                 <animateTransform id="anim-shift" attributeName="transform" type="rotate" additive="sum" values="0;-0.5;0.5;0" dur="0.4s" repeatCount="indefinite" begin="indefinite" />
+                                 
+                                 <animate id="anim-glow" attributeName="opacity" values="0.9;1;0.9" dur="1.5s" repeatCount="indefinite" begin="indefinite" />
+                                 
+                             </path>
+                             
+                             <!-- Spark particles group - initially hidden but positioned at bottom of rocket -->
+                             <g id="spark-particles" opacity="0">
+                                 <!-- Bottom left sparks (45 degrees) -->
+                                 <circle id="spark1" cx="7" cy="17" r="0.4" fill="orange" opacity="0">
+                                     <animate id="spark1-appear" attributeName="opacity" from="0" to="1" dur="0.2s" begin="indefinite" />
+                                     <animate id="spark1-fade" attributeName="opacity" from="1" to="0" dur="0.6s" begin="indefinite" />
+                                     <animateMotion id="spark1-move" path="M0,0 q-3,4 -6,8" dur="0.8s" begin="indefinite" fill="freeze" />
+                                 </circle>
+                                 
+                                 <circle id="spark2" cx="7" cy="17" r="0.3" fill="yellow" opacity="0">
+                                     <animate id="spark2-appear" attributeName="opacity" from="0" to="1" dur="0.2s" begin="indefinite" />
+                                     <animate id="spark2-fade" attributeName="opacity" from="1" to="0" dur="0.5s" begin="indefinite" />
+                                     <animateMotion id="spark2-move" path="M0,0 q-2,5 -5,7" dur="0.7s" begin="indefinite" fill="freeze" />
+                                 </circle>
+                                 
+                                 <circle id="spark3" cx="7" cy="17" r="0.25" fill="gold" opacity="0">
+                                     <animate id="spark3-appear" attributeName="opacity" from="0" to="1" dur="0.1s" begin="indefinite" />
+                                     <animate id="spark3-fade" attributeName="opacity" from="1" to="0" dur="0.4s" begin="indefinite" />
+                                     <animateMotion id="spark3-move" path="M0,0 q-4,2 -7,5" dur="0.5s" begin="indefinite" fill="freeze" />
+                                 </circle>
+                                 
+                                 <!-- Bottom right sparks (45 degrees) -->
+                                 <circle id="spark4" cx="7" cy="17" r="0.35" fill="orange" opacity="0">
+                                     <animate id="spark4-appear" attributeName="opacity" from="0" to="1" dur="0.2s" begin="indefinite" />
+                                     <animate id="spark4-fade" attributeName="opacity" from="1" to="0" dur="0.6s" begin="indefinite" />
+                                     <animateMotion id="spark4-move" path="M0,0 q-1,5 -3,10" dur="0.8s" begin="indefinite" fill="freeze" />
+                                 </circle>
+                                 
+                                 <circle id="spark5" cx="7" cy="17" r="0.3" fill="yellow" opacity="0">
+                                     <animate id="spark5-appear" attributeName="opacity" from="0" to="1" dur="0.2s" begin="indefinite" />
+                                     <animate id="spark5-fade" attributeName="opacity" from="1" to="0" dur="0.5s" begin="indefinite" />
+                                     <animateMotion id="spark5-move" path="M0,0 q-2,3 -4,8" dur="0.7s" begin="indefinite" fill="freeze" />
+                                 </circle>
+                                 
+                                 <circle id="spark6" cx="7" cy="17" r="0.25" fill="gold" opacity="0">
+                                     <animate id="spark6-appear" attributeName="opacity" from="0" to="1" dur="0.1s" begin="indefinite" />
+                                     <animate id="spark6-fade" attributeName="opacity" from="1" to="0" dur="0.4s" begin="indefinite" />
+                                     <animateMotion id="spark6-move" path="M0,0 q-3,3 -5,6" dur="0.5s" begin="indefinite" fill="freeze" />
+                                 </circle>
+                                 
+                                 <!-- Additional angled sparks -->
+                                 <circle id="spark7" cx="8" cy="18" r="0.2" fill="#FF9900" opacity="0">
+                                     <animate id="spark7-appear" attributeName="opacity" from="0" to="1" dur="0.1s" begin="indefinite" />
+                                     <animate id="spark7-fade" attributeName="opacity" from="1" to="0" dur="0.5s" begin="indefinite" />
+                                     <animateMotion id="spark7-move" path="M0,0 q-4,1 -8,3" dur="0.6s" begin="indefinite" fill="freeze" />
+                                 </circle>
+                                 
+                                 <circle id="spark8" cx="8" cy="18" r="0.2" fill="#FF9900" opacity="0">
+                                     <animate id="spark8-appear" attributeName="opacity" from="0" to="1" dur="0.1s" begin="indefinite" />
+                                     <animate id="spark8-fade" attributeName="opacity" from="1" to="0" dur="0.5s" begin="indefinite" />
+                                     <animateMotion id="spark8-move" path="M0,0 q-2,4 -4,9" dur="0.6s" begin="indefinite" fill="freeze" />
+                                 </circle>
+                             </g>
                          </svg>
                      </div>
                      <p id="installer-message" class="mt-4 text-gray-500 dark:text-gray-300">{{ initial_install_message }}</p>
@@ -101,7 +169,22 @@
                     <div class="text-center">
                         <div class="mb-6">
                             <svg class="mx-auto h-16 w-16 text-gray-500 rocket-svg" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.59 14.37a6 6 0 01-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 006.16-12.12A14.98 14.98 0 009.631 8.41m5.96 5.96a14.926 14.926 0 01-5.841 2.58m-.119-8.54a6 6 0 00-7.381 5.84h4.8m2.581-5.84a14.927 14.927 0 00-2.58 5.84m2.699 2.7c-.103.021-.207.041-.311.06a15.09 15.09 0 01-2.448-2.448 14.9 14.9 0 01.06-.312M16.5 9a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z"></path>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.59 14.37a6 6 0 01-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 006.16-12.12A14.98 14.98 0 009.631 8.41m5.96 5.96a14.926 14.926 0 01-5.841 2.58m-.119-8.54a6 6 0 00-7.381 5.84h4.8m2.581-5.84a14.927 14.927 0 00-2.58 5.84m2.699 2.7c-.103.021-.207.041-.311.06a15.09 15.09 0 01-2.448-2.448 14.9 14.9 0 01.06-.312M16.5 9a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z">
+                                    <!-- SMIL animations that will be enabled/disabled by JS -->
+                                    <animate id="anim-scanning" attributeName="opacity" values="0.9;1;0.9" dur="2s" repeatCount="indefinite" begin="indefinite" />
+                                    <animateTransform id="anim-scale" attributeName="transform" type="scale" additive="sum" from="1 1" to="1.03 1.03" dur="2s" repeatCount="indefinite" begin="indefinite" />
+                                    
+                                    <animate id="anim-flicker" attributeName="opacity" values="0.9;1;0.8;1;0.9" dur="0.2s" repeatCount="indefinite" begin="indefinite" />
+                                    
+                                    <animateTransform id="anim-fire" attributeName="transform" type="translate" additive="sum" from="0 0" to="0 -2" dur="0.3s" repeatCount="indefinite" begin="indefinite" />
+                                    
+                                    <animateTransform id="anim-shift" attributeName="transform" type="rotate" additive="sum" values="0;-0.5;0.5;0" dur="0.4s" repeatCount="indefinite" begin="indefinite" />
+                                    
+                                    <animate id="anim-glow" attributeName="opacity" values="0.9;1;0.9" dur="1.5s" repeatCount="indefinite" begin="indefinite" />
+                                    
+                                    <animateTransform id="anim-sparks" attributeName="transform" type="scale" additive="sum" from="1 1" to="1.05 1.05" dur="0.6s" repeatCount="indefinite" begin="indefinite" />
+                                    <animateTransform id="anim-sparks-rotate" attributeName="transform" type="rotate" additive="sum" values="0;2;0" dur="0.6s" repeatCount="indefinite" begin="indefinite" />
+                                </path>
                             </svg>
                         </div>
                         <p class="mt-4 text-gray-500 dark:text-gray-400">No machines discovered yet.</p>
@@ -118,116 +201,116 @@
 
 {% block styles %}
 <style>
+    /* Base styling */
     .rocket-svg {
-        /* Base styles if needed */
-        /* Remove base transition to avoid potential conflict with animation */
-        /* transition: transform 0.3s ease-out, filter 0.3s ease-out; */ 
+        display: block;
+        margin: 0 auto;
     }
 
-    @keyframes scanning { /* Animation for DetectingNetwork */
-        0%, 100% { 
-            transform: scale(1); 
-            filter: drop-shadow(0 0 3px #a855f7); /* Purple glow */
-        }
-        50% { 
-            transform: scale(1.03);
-            filter: drop-shadow(0 0 6px #ec4899); /* Pinkish glow */
-        }
-    }
-    .rocket-scanning .rocket-svg {
+    /* Direct animation classes applied to SVG */
+    .rocket-svg.rocket-scanning {
         animation: scanning 2s infinite ease-in-out;
     }
-
-    @keyframes sparks {
-        0% { box-shadow: 0 0 0px gold, 0 5px 0px gold; opacity: 1; transform: scale(1); }
-        50% { box-shadow: 5px -5px 2px orange, -5px 5px 2px yellow, 0 10px 5px gold; opacity: 0.8; transform: scale(1.05) rotate(2deg); }
-        100% { box-shadow: 0 0 0px gold, 0 5px 0px gold; opacity: 1; transform: scale(1); }
-    }
-    .rocket-sparks .rocket-svg {
+    
+    .rocket-svg.rocket-sparks {
         animation: sparks 0.6s infinite ease-in-out;
     }
 
-    @keyframes glow {
-        0% { filter: drop-shadow(0 0 2px #fff) drop-shadow(0 0 5px #a855f7); }
-        50% { filter: drop-shadow(0 0 5px #fff) drop-shadow(0 0 15px #a855f7); }
-        100% { filter: drop-shadow(0 0 2px #fff) drop-shadow(0 0 5px #a855f7); }
-    }
-    .rocket-glowing .rocket-svg {
+    .rocket-svg.rocket-glowing {
         animation: glow 1.5s infinite ease-in-out;
     }
 
-    @keyframes smokePuff { /* Renamed from smoke for clarity */
-        0% { transform: translate(-50%, 0) scale(0.5); opacity: 0; }
-        50% { opacity: 0.3; }
-        100% { transform: translate(-50%, -50px) scale(2); opacity: 0; }
+    .rocket-svg.rocket-flicker {
+        animation: flicker 0.2s infinite linear;
     }
-    /* Add a container for smoke puffs - TARGET THE DIV DIRECTLY */
+    
+    .rocket-svg.rocket-fire {
+        animation: fire 0.3s infinite ease-in-out;
+    }
+    
+    .rocket-svg.rocket-shift {
+        animation: fire 0.3s infinite ease-in-out, shift 0.4s ease-in-out;
+    }
+    
+    .rocket-svg.rocket-error {
+        filter: grayscale(0.8) drop-shadow(0 0 3px red);
+        transform: rotate(-5deg) scale(0.95);
+    }
+
+    /* Simplified keyframes */
+    @keyframes scanning {
+        0% { transform: scale(1); }
+        50% { transform: scale(1.03); }
+        100% { transform: scale(1); }
+    }
+
+    @keyframes sparks {
+        0% { transform: scale(1); }
+        50% { transform: scale(1.05) rotate(2deg); }
+        100% { transform: scale(1); }
+    }
+
+    @keyframes glow {
+        0% { opacity: 0.9; }
+        50% { opacity: 1; }
+        100% { opacity: 0.9; }
+    }
+
+    @keyframes flicker {
+        0% { opacity: 0.9; }
+        25% { opacity: 1; }
+        50% { opacity: 0.8; }
+        75% { opacity: 1; }
+        100% { opacity: 0.9; }
+    }
+
+    @keyframes fire {
+        0% { transform: translateY(0); }
+        50% { transform: translateY(-2px); }
+        100% { transform: translateY(0); }
+    }
+
+    @keyframes shift {
+        0% { transform: translateX(0); }
+        25% { transform: translateX(-1px) rotate(-0.5deg); }
+        75% { transform: translateX(1px) rotate(0.5deg); }
+        100% { transform: translateX(0); }
+    }
+    
+    /* Smoke animation setup */
     #installer-rocket.rocket-smoke {
-        position: relative; /* Needed for ::after positioning */
+        position: relative;
     }
-     /* Add multiple smoke puffs with delays - TARGET THE DIV DIRECTLY */
+    
     #installer-rocket.rocket-smoke::before, 
     #installer-rocket.rocket-smoke::after {
         content: '';
         position: absolute;
-        bottom: -5px; /* Start near the base */
+        bottom: -5px;
         left: 50%;
         width: 30px;
         height: 30px;
-        background-color: rgba(128, 128, 128, 0.5); /* Semi-transparent gray */
+        background-color: rgba(128, 128, 128, 0.5);
         border-radius: 50%;
         filter: blur(8px);
         opacity: 0;
-        /* Use the renamed keyframes */
         animation: smokePuff 2.5s infinite ease-out;
+        z-index: -1;
     }
+    
     #installer-rocket.rocket-smoke::after {
-        animation-delay: 0.8s; /* Stagger the second puff */
+        animation-delay: 0.8s; 
         width: 35px; 
         height: 35px;
         bottom: -8px;
-        left: 55%; /* Slightly offset */
-    }
-
-    @keyframes flicker { /* Engine flicker */
-        0%, 100% { filter: drop-shadow(0 3px 3px orange); }
-        25% { filter: drop-shadow(0 5px 5px orangered); }
-        50% { filter: drop-shadow(0 2px 2px yellow); }
-        75% { filter: drop-shadow(0 4px 4px orange); }
-    }
-    .rocket-flicker .rocket-svg {
-         animation: flicker 0.2s infinite linear;
-    }
-
-    @keyframes fire { /* Main engine fire */
-        0%   { filter: drop-shadow(0 8px 6px orangered); transform: translateY(0); }
-        50%  { filter: drop-shadow(0 15px 10px red); transform: translateY(-2px); }
-        100% { filter: drop-shadow(0 8px 6px orangered); transform: translateY(0); }
-    }
-    .rocket-fire .rocket-svg {
-        animation: fire 0.3s infinite ease-in-out;
-    }
-    @keyframes shift { /* Rocket body momentum shift */
-         0%, 100% { transform: translateX(0) rotate(0); }
-         25% { transform: translateX(-1px) rotate(-0.5deg); }
-         75% { transform: translateX(1px) rotate(0.5deg); }
-    }
-    .rocket-shift .rocket-svg {
-        /* Apply shift animation alongside fire */
-        animation: fire 0.3s infinite ease-in-out, shift 0.4s ease-in-out;
+        left: 55%;
     }
     
-    .rocket-error .rocket-svg {
-        filter: grayscale(0.8) drop-shadow(0 0 3px red);
-        transform: rotate(-5deg) scale(0.95);
+    @keyframes smokePuff {
+        0% { transform: translate(-50%, 0) scale(0.5); opacity: 0; }
+        50% { opacity: 0.3; }
+        100% { transform: translate(-50%, -50px) scale(2); opacity: 0; }
     }
-    /* Default state */
-    .rocket-idle .rocket-svg {
-         /* Add a subtle idle animation if desired, e.g., slight bob */
-         /* animation: bob 3s infinite ease-in-out; */
-    }
-    /* @keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2px); } } */
-
 </style>
 {% endblock %}
 
@@ -238,6 +321,7 @@
     // --- INSTALLER SCRIPT --- 
     (function() { // IIFE to scope variables
         console.log("Installation in progress, starting SSE listener...");
+        // All possible rocket animation classes
         const rocketClasses = ['rocket-idle', 'rocket-scanning', 'rocket-sparks', 'rocket-glowing', 'rocket-smoke', 'rocket-flicker', 'rocket-fire', 'rocket-shift', 'rocket-error'];
         let evtSource = null;
         let reconnectAttempts = 0;
@@ -247,28 +331,71 @@
         // Function to update UI elements
         function updateUI(status) {
             if (!status) return;
+            console.log("Updating UI with status:", status);
 
             // Get element references *inside* the update function
-            const installerMessageEl = document.getElementById('installer-message');
-            const installerRocketEl = document.getElementById('installer-rocket');
+        const installerMessageEl = document.getElementById('installer-message');
+        const installerRocketEl = document.getElementById('installer-rocket');
             const installerTitleEl = document.getElementById('installer-title');
 
             // Check if elements exist before trying to update
             if (installerMessageEl && status.message) {
                 installerMessageEl.textContent = status.message;
+                console.log("Updated message to:", status.message);
             }
+            
             if (installerRocketEl && status.animation) {
-                // Remove all known animation classes first
-                installerRocketEl.classList.remove(...rocketClasses);
-                // Ensure mb-6 is present if it got removed (it shouldn't be if only removing rocketClasses)
-                if (!installerRocketEl.classList.contains('mb-6')) {
-                    installerRocketEl.classList.add('mb-6');
+                // Get direct reference to the SVG
+                const svgEl = installerRocketEl.querySelector('svg');
+                if (!svgEl) {
+                    console.error("SVG element not found inside rocket container!");
+                    return;
                 }
-                // Add the new animation class(es)
-                status.animation.split(' ').forEach(cls => { 
-                    if (cls) installerRocketEl.classList.add(cls); 
+                
+                // Pause all animations first
+                const allAnimations = svgEl.querySelectorAll('animate, animateTransform');
+                allAnimations.forEach(anim => {
+                    try {
+                        anim.setAttribute('begin', 'indefinite');
+                        if (anim.beginElement) anim.endElement();
+                    } catch (e) {
+                        console.warn("Error stopping animation:", e);
+                    }
                 });
+                
+                // Reset any inline styles
+                svgEl.style.filter = '';
+                svgEl.style.transform = '';
+                
+                // Apply animation based on status
+                const animationClass = status.animation;
+                console.log("Applying SMIL animation:", animationClass);
+                
+                if (animationClass.includes('rocket-scanning')) {
+                    startAnimations(svgEl, ['anim-scanning', 'anim-scale']);
+                } else if (animationClass.includes('rocket-sparks')) {
+                    // Don't apply rocket animations, only trigger spark particles
+                    const sparkParticles = svgEl.querySelector('#spark-particles');
+                    if (sparkParticles) {
+                        sparkParticles.setAttribute('opacity', '1');
+                        startSparkCycle(svgEl);
+                    }
+                } else if (animationClass.includes('rocket-glowing')) {
+                    startAnimations(svgEl, ['anim-glow']);
+                } else if (animationClass.includes('rocket-flicker')) {
+                    startAnimations(svgEl, ['anim-flicker']);
+                } else if (animationClass.includes('rocket-fire')) {
+                    startAnimations(svgEl, ['anim-fire']);
+                } else if (animationClass.includes('rocket-shift')) {
+                    startAnimations(svgEl, ['anim-fire', 'anim-shift']);
+                } else if (animationClass.includes('rocket-error')) {
+                    svgEl.style.filter = 'grayscale(0.8) drop-shadow(0 0 3px red)';
+                    svgEl.style.transform = 'rotate(-5deg) scale(0.95)';
+                }
+                
+                console.log("Applied animation:", animationClass);
             }
+            
             if (status.animation?.includes('rocket-fire')) {
                 if(installerTitleEl) installerTitleEl.textContent = "Installation Complete!";
                 console.log("Installation complete. Reloading...");
@@ -315,6 +442,181 @@
         
         // Connect immediately, don't wait for DOMContentLoaded
         connectInstallEvents();
+        
+        // Add manual test function accessible from console
+        window.testRocketAnimation = function(animationClass) {
+            if (!rocketClasses.includes(animationClass) && animationClass !== 'reset') {
+                console.warn(`Unknown animation class: ${animationClass}. Available classes:`, rocketClasses);
+                return;
+            }
+            
+            const rocketEl = document.getElementById('installer-rocket');
+            if (!rocketEl) {
+                console.error("Rocket element not found!");
+                return;
+            }
+            
+            // Direct reference to the SVG
+            const svgEl = rocketEl.querySelector('svg');
+            if (!svgEl) {
+                console.error("SVG element not found inside rocket!");
+                return;
+            }
+            
+            // Pause all animations first
+            const allAnimations = svgEl.querySelectorAll('animate, animateTransform');
+            allAnimations.forEach(anim => {
+                try {
+                    anim.setAttribute('begin', 'indefinite');
+                    if (anim.beginElement) anim.endElement();
+                } catch (e) {
+                    console.warn("Error stopping animation:", e);
+                }
+            });
+            
+            console.log("Starting animation:", animationClass);
+            
+            if (animationClass && animationClass !== 'reset') {
+                // Start the appropriate animations
+                switch(animationClass) {
+                    case 'rocket-scanning':
+                        startAnimations(svgEl, ['anim-scanning', 'anim-scale']);
+                        break;
+                    case 'rocket-sparks':
+                        // Don't apply rocket animations, only trigger spark particles
+                        const sparkParticles = svgEl.querySelector('#spark-particles');
+                        if (sparkParticles) {
+                            sparkParticles.setAttribute('opacity', '1');
+                            startSparkCycle(svgEl);
+                            console.log("Started spark particles animation");
+                        } else {
+                            console.warn("Spark particles element not found");
+                        }
+                        break;
+                    case 'rocket-glowing':
+                        startAnimations(svgEl, ['anim-glow']);
+                        break;
+                    case 'rocket-flicker':
+                        startAnimations(svgEl, ['anim-flicker']);
+                        break;
+                    case 'rocket-fire':
+                        startAnimations(svgEl, ['anim-fire']);
+                        break;
+                    case 'rocket-shift':
+                        startAnimations(svgEl, ['anim-fire', 'anim-shift']);
+                        break;
+                    case 'rocket-error':
+                        // Apply static transform for error state
+                        svgEl.style.filter = 'grayscale(0.8) drop-shadow(0 0 3px red)';
+                        svgEl.style.transform = 'rotate(-5deg) scale(0.95)';
+                        break;
+                }
+                console.log(`Applied SMIL animation for: ${animationClass}`);
+            } else {
+                // Reset any inline styles
+                svgEl.style.filter = '';
+                svgEl.style.transform = '';
+                console.log("Reset rocket to base state (no animation)");
+            }
+        };
+        
+        // Helper function to start SMIL animations by ID
+        function startAnimations(svgElement, animationIds) {
+            animationIds.forEach(id => {
+                const anim = svgElement.querySelector('#' + id);
+                if (anim) {
+                    try {
+                        // Set to start immediately 
+                        anim.setAttribute('begin', '0s');
+                        // Use beginElement if available (more reliable)
+                        if (anim.beginElement) anim.beginElement();
+                        console.log(`Started animation: ${id}`);
+                    } catch (e) {
+                        console.warn(`Error starting animation ${id}:`, e);
+                    }
+                } else {
+                    console.warn(`Animation element #${id} not found`);
+                }
+            });
+            
+            // Special handling for spark particles
+            if (animationIds.includes('anim-sparks')) {
+                const sparkParticles = svgElement.querySelector('#spark-particles');
+                if (sparkParticles) {
+                    sparkParticles.setAttribute('opacity', '1');
+                    
+                    // Start repeating spark animations
+                    startSparkCycle(svgElement);
+                } else {
+                    console.warn('Spark particles group not found');
+                }
+            }
+        }
+        
+        // Function to create repeating spark cycle
+        function startSparkCycle(svgElement) {
+            // Make spark particles group visible
+            const sparkParticles = svgElement.querySelector('#spark-particles');
+            if (sparkParticles) {
+                sparkParticles.setAttribute('opacity', '1');
+            }
+            
+            const startSpark = (num, delay) => {
+                setTimeout(() => {
+                    const appear = svgElement.querySelector(`#spark${num}-appear`);
+                    const fade = svgElement.querySelector(`#spark${num}-fade`);
+                    const move = svgElement.querySelector(`#spark${num}-move`);
+                    
+                    if (appear && fade && move) {
+                        try {
+                            appear.beginElement();
+                            move.beginElement();
+                            
+                            // Start fade after a shorter delay for more realistic spark effect
+                            setTimeout(() => {
+                                fade.beginElement();
+                            }, 100 + Math.random() * 100); // Variable fade timing (100-200ms)
+                            
+                            // Recursively schedule the next animation of this particle with variable timing
+                            setTimeout(() => {
+                                // Reset position for next animation
+                                const circle = svgElement.querySelector(`#spark${num}`);
+                                if (circle) {
+                                    // Different timing for different spark types
+                                    let nextDelay = 0;
+                                    if (num <= 2) { // Main sparks more frequently
+                                        nextDelay = 300 + Math.random() * 400; 
+                                    } else if (num <= 6) { // Secondary sparks less frequently
+                                        nextDelay = 500 + Math.random() * 600;
+                                    } else { // Occasional center sparks
+                                        nextDelay = 800 + Math.random() * 1000;
+                                    }
+                                    startSpark(num, nextDelay);
+                                }
+                            }, 600 + Math.random() * 200); // Complete cycle between 600-800ms
+                        } catch (e) {
+                            console.warn(`Error animating spark ${num}:`, e);
+                        }
+                    }
+                }, delay);
+            };
+            
+            // Start sparks with staggered delays for a more natural effect
+            // Left side sparks
+            startSpark(1, 100);
+            startSpark(2, 250);
+            startSpark(3, 400);
+            
+            // Right side sparks
+            startSpark(4, 150);
+            startSpark(5, 300);
+            startSpark(6, 350);
+            
+            // Center sparks
+            startSpark(7, 200);
+            startSpark(8, 500);
+        }
+        
         window.addEventListener('beforeunload', () => { if (evtSource) evtSource.close(); });
     })(); // End IIFE
     </script>
