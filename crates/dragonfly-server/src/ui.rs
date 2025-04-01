@@ -691,19 +691,6 @@ pub async fn setup_simple(
         Ok(_) => {
             info!("System configured for Simple mode");
             
-            // Create macOS status bar icon on macOS 
-            #[cfg(target_os = "macos")]
-            {
-                info!("Initializing macOS status bar icon for Simple mode");
-                let result = crate::macos_ui::setup_status_bar("Simple", app_state.shutdown_tx.clone()).await;
-                if let Err(e) = result {
-                    error!("Failed to create macOS status bar icon: {}", e);
-                    // Non-critical error, can continue
-                } else {
-                    info!("macOS status bar icon created successfully");
-                }
-            }
-            
             // Fix this: Mark setup as completed by passing bool instead of &AppState
             if let Err(e) = mark_setup_completed(true).await {
                 error!("Failed to mark setup as completed: {}", e);
@@ -752,19 +739,6 @@ pub async fn setup_flight(
     match mode::configure_flight_mode().await {
         Ok(_) => {
             info!("System configured for Flight mode - k3s deployment started in background");
-            
-            // Create macOS status bar icon on macOS
-            #[cfg(target_os = "macos")]
-            {
-                info!("Initializing macOS status bar icon for Flight mode");
-                let result = crate::macos_ui::setup_status_bar("Flight", app_state.shutdown_tx.clone()).await;
-                if let Err(e) = result {
-                    error!("Failed to create macOS status bar icon: {}", e);
-                    // Non-critical error, can continue
-                } else {
-                    info!("macOS status bar icon created successfully");
-                }
-            }
             
             // Fix this: Mark setup as completed by passing bool instead of &AppState
             if let Err(e) = mark_setup_completed(true).await {
@@ -815,19 +789,6 @@ pub async fn setup_swarm(
     match mode::configure_swarm_mode().await {
         Ok(_) => {
             info!("System configured for Swarm mode");
-            
-            // Create macOS status bar icon on macOS
-            #[cfg(target_os = "macos")]
-            {
-                info!("Initializing macOS status bar icon for Swarm mode");
-                let result = crate::macos_ui::setup_status_bar("Swarm", app_state.shutdown_tx.clone()).await;
-                if let Err(e) = result {
-                    error!("Failed to create macOS status bar icon: {}", e);
-                    // Non-critical error, can continue
-                } else {
-                    info!("macOS status bar icon created successfully");
-                }
-            }
             
             // Fix this: Mark setup as completed by passing bool instead of &AppState
             if let Err(e) = mark_setup_completed(true).await {

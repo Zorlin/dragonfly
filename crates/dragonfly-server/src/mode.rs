@@ -261,83 +261,6 @@ WantedBy=multi-user.target
     Ok(())
 }
 
-// Generate launchd plist for macOS
-pub async fn generate_launchd_plist(
-    service_name: &str,
-    exec_path: &str,
-    description: &str
-) -> Result<()> {
-    // Create a more macOS-friendly service name
-    let label = format!("com.dragonfly.{}", service_name);
-    
-    let plist_content = format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>{}</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>{}</string>
-    </array>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>DRAGONFLY_SERVICE</key>
-        <string>1</string>
-    </dict>
-    <key>Sockets</key>
-    <dict>
-        <key>Listeners</key>
-        <dict>
-            <key>SockServiceName</key>
-            <string>3000</string>
-            <key>SockType</key>
-            <string>stream</string>
-            <key>SockFamily</key>
-            <string>IPv4</string>
-        </dict>
-    </dict>
-    <key>KeepAlive</key>
-    <true/>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>StandardErrorPath</key>
-    <string>/var/log/dragonfly/dragonfly.log</string>
-    <key>StandardOutPath</key>
-    <string>/var/log/dragonfly/dragonfly.log</string>
-    <key>WorkingDirectory</key>
-    <string>/</string>
-    <key>ProcessType</key>
-    <string>Background</string>
-    <key>ThrottleInterval</key>
-    <integer>5</integer>
-    <key>Description</key>
-    <string>{}</string>
-    <key>LSUIElement</key>
-    <true/>
-</dict>
-</plist>
-"#,
-        label, exec_path, description
-    );
-    
-    // Ensure the necessary directories exist
-    let home = std::env::var("HOME").context("Failed to get user home directory")?;
-    let launch_agents_dir = format!("{}/Library/LaunchAgents", home);
-    tokio::fs::create_dir_all(&launch_agents_dir).await.ok();
-    
-    // Write the plist file
-    let plist_path = format!("{}/{}.plist", launch_agents_dir, label);
-    tokio::fs::write(&plist_path, plist_content)
-        .await
-        .context("Failed to write launchd plist file")?;
-    
-    info!("Generated launchd plist file: {}", plist_path);
-    
-    Ok(())
-}
-
 // Ensure log directory exists with proper permissions
 pub fn ensure_log_directory() -> Result<String, anyhow::Error> {
     let log_dir = if cfg!(target_os = "macos") {
@@ -397,93 +320,61 @@ pub fn ensure_log_directory() -> Result<String, anyhow::Error> {
 // Start the service via service manager
 #[cfg(unix)]
 pub fn start_service() -> Result<()> {
-    if is_macos() {
-        // For macOS, use launchctl to start the service
-        info!("Starting dragonfly launchd service...");
-        let service_name = "com.dragonfly.dragonfly";
-        
-        // First make sure the service is loaded (this will handle socket creation)
-        let home = std::env::var("HOME").context("Failed to get user home directory")?;
-        let plist_path = format!("{}/Library/LaunchAgents/{}.plist", home, service_name);
-        
-        // Unload first in case it's already loaded
-        let _ = Command::new("launchctl")
-            .args(["unload", &plist_path])
-            .output();
-            
-        // Load the service
-        let load_output = Command::new("launchctl")
-            .args(["load", "-w", &plist_path])
-            .output()
-            .context("Failed to load launchd service")?;
-            
-        if !load_output.status.success() {
-            let stderr = String::from_utf8_lossy(&load_output.stderr);
-            return Err(anyhow!("Failed to load launchd service: {}", stderr));
-        }
-        
-        // Now start the service
-        let output = Command::new("launchctl")
-            .args(["start", service_name])
-            .output()
-            .context("Failed to start launchd service")?;
-            
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow!("Failed to start launchd service: {}", stderr));
-        }
-        
-        info!("Service started successfully");
-    } else {
-        // For Linux, use systemctl to start the socket and service
-        info!("Starting dragonfly systemd socket and service...");
-        
-        // Enable and start the socket first
-        let socket_enable = Command::new("systemctl")
-            .args(["enable", "dragonfly.socket"])
-            .output()
-            .context("Failed to enable systemd socket")?;
-            
-        if !socket_enable.status.success() {
-            let stderr = String::from_utf8_lossy(&socket_enable.stderr);
-            warn!("Failed to enable systemd socket: {}", stderr);
-        }
-        
-        // Enable the service too
-        let service_enable = Command::new("systemctl")
-            .args(["enable", "dragonfly.service"])
-            .output()
-            .context("Failed to enable systemd service")?;
-            
-        if !service_enable.status.success() {
-            let stderr = String::from_utf8_lossy(&service_enable.stderr);
-            warn!("Failed to enable systemd service: {}", stderr);
-        }
-        
-        // Start the socket first for socket activation
-        let socket_output = Command::new("systemctl")
-            .args(["start", "dragonfly.socket"])
-            .output()
-            .context("Failed to start systemd socket")?;
-            
-        if !socket_output.status.success() {
-            let stderr = String::from_utf8_lossy(&socket_output.stderr);
-            return Err(anyhow!("Failed to start systemd socket: {}", stderr));
-        }
-        
-        // Start the service
-        let output = Command::new("systemctl")
-            .args(["start", "dragonfly.service"])
-            .output()
-            .context("Failed to start systemd service")?;
-            
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow!("Failed to start systemd service: {}", stderr));
-        }
-        
-        info!("Socket and service started successfully");
+    // Check if we're on macOS
+    if std::env::consts::OS == "macos" || std::env::consts::OS == "darwin" {
+        info!("Running on macOS - continuing in foreground mode");
+        // Just return successfully without daemonizing or using service management
+        return Ok(());
     }
+
+    // For non-macOS Unix systems, use systemctl to start the socket and service
+    info!("Starting dragonfly systemd socket and service...");
+    
+    // Enable and start the socket first
+    let socket_enable = Command::new("systemctl")
+        .args(["enable", "dragonfly.socket"])
+        .output()
+        .context("Failed to enable systemd socket")?;
+        
+    if !socket_enable.status.success() {
+        let stderr = String::from_utf8_lossy(&socket_enable.stderr);
+        warn!("Failed to enable systemd socket: {}", stderr);
+    }
+    
+    // Enable the service too
+    let service_enable = Command::new("systemctl")
+        .args(["enable", "dragonfly.service"])
+        .output()
+        .context("Failed to enable systemd service")?;
+        
+    if !service_enable.status.success() {
+        let stderr = String::from_utf8_lossy(&service_enable.stderr);
+        warn!("Failed to enable systemd service: {}", stderr);
+    }
+    
+    // Start the socket first for socket activation
+    let socket_output = Command::new("systemctl")
+        .args(["start", "dragonfly.socket"])
+        .output()
+        .context("Failed to start systemd socket")?;
+        
+    if !socket_output.status.success() {
+        let stderr = String::from_utf8_lossy(&socket_output.stderr);
+        return Err(anyhow!("Failed to start systemd socket: {}", stderr));
+    }
+    
+    // Start the service
+    let output = Command::new("systemctl")
+        .args(["start", "dragonfly.service"])
+        .output()
+        .context("Failed to start systemd service")?;
+        
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!("Failed to start systemd service: {}", stderr));
+    }
+    
+    info!("Socket and service started successfully");
     
     // Exit this process now that the service is started
     info!("Exiting current process as the service is now running in the background");
@@ -864,72 +755,23 @@ pub async fn configure_simple_mode() -> Result<()> {
             // Create directory with appropriate permissions
             if let Err(e) = tokio::fs::create_dir_all(log_dir).await {
                 warn!("Could not create log directory {}: {}", log_dir, e);
-                // Try with sudo if normal creation fails
-                if is_macos() {
-                     let _ = Command::new("osascript")
-                        .arg("-e")
-                        .arg(format!(r#"do shell script "mkdir -p '{}' && chmod 755 '{}'" with administrator privileges"#, log_dir, log_dir))
-                        .output();
-                } else {
-                    let _ = Command::new("sudo")
-                        .args(["mkdir", "-p", log_dir])
-                        .output();
-                    let _ = Command::new("sudo")
-                        .args(["chmod", "755", log_dir])
-                        .output();
-                }
+                // Try with sudo
+                let _ = Command::new("sudo")
+                    .args(["mkdir", "-p", log_dir])
+                    .output();
+                let _ = Command::new("sudo")
+                    .args(["chmod", "755", log_dir])
+                    .output();
             }
         }
         info!("Log directory ready at {}", log_dir);
     }
     
     // Check if we're on macOS
-    if is_macos() {
-        // Ensure /var/lib/dragonfly exists and is owned by the current user
-        if let Err(e) = ensure_var_lib_ownership().await {
-            warn!("Failed to ensure /var/lib/dragonfly ownership: {}", e);
-            // Non-critical, continue anyway
-        }
-        
-        // Generate the launchd plist for macOS
-        info!("Setting up launchd service for macOS");
-        generate_launchd_plist(
-            "dragonfly", 
-            exec_path.to_str().unwrap(), 
-            "Dragonfly Simple Mode"
-        ).await?;
-        
-        // Load the service
-        let service_name = "com.dragonfly.dragonfly";
-        let home = std::env::var("HOME").context("Failed to get user home directory")?;
-        let plist_path = format!("{}/Library/LaunchAgents/{}.plist", home, service_name);
-        
-        // Unload first in case it's already loaded
-        let _ = Command::new("launchctl")
-            .args(["unload", &plist_path])
-            .output();
-            
-        // Load the service and set to run on login
-        let output = Command::new("launchctl")
-            .args(["load", "-w", &plist_path])
-            .output()
-            .context("Failed to load launchd service")?;
-            
-        if !output.status.success() {
-            warn!("Failed to load launchd service: {}", String::from_utf8_lossy(&output.stderr));
-        } else {
-            info!("Launchd service loaded and set to start on boot");
-            
-            // The notification shown by macOS about login items
-            info!("Dragonfly has been added to Login Items and appears in System Settings > General > Login Items");
-        }
-        
-        // Create a directory for data storage
-        let data_dir = PathBuf::from(&home).join(".dragonfly");
-        tokio::fs::create_dir_all(&data_dir).await.ok();
-    } else {
-        // Generate the systemd socket and service units for Linux
-        info!("Setting up systemd socket and service for Linux");
+    let is_macos = std::env::consts::OS == "macos" || std::env::consts::OS == "darwin";
+    
+    if !is_macos {
+        info!("Setting up systemd socket and service");
         generate_systemd_unit(
             "dragonfly", 
             exec_path.to_str().unwrap(), 
@@ -984,45 +826,35 @@ pub async fn configure_simple_mode() -> Result<()> {
         } else {
             info!("Systemd service started successfully");
         }
-        
-        // Create a directory for data storage
+    }
+    
+    // Create a directory for data storage
+    if is_macos {
+        let home = std::env::var("HOME").context("Failed to get user home directory")?;
+        let data_dir = PathBuf::from(&home).join(".dragonfly");
+        tokio::fs::create_dir_all(&data_dir).await.ok();
+    } else {
         let data_dir = PathBuf::from("/var/lib/dragonfly");
         tokio::fs::create_dir_all(&data_dir).await.ok();
     }
     
     // Save the mode if we haven't already done it with elevated privileges
     if !used_elevation {
-        if is_macos() {
-            // We've already tried directly, now use osascript
-            let script = format!(
-                r#"do shell script "mkdir -p {0} && echo '{1}' > {2} && chmod 755 {0}" with administrator privileges with prompt "Dragonfly needs permission to save your deployment mode""#,
-                MODE_DIR, DeploymentMode::Simple.as_str(), MODE_FILE
-            );
-            
-            let osa_output = Command::new("osascript")
-                .arg("-e")
-                .arg(&script)
-                .output()
-                .context("Failed to execute osascript for sudo prompt")?;
-                
-            if !osa_output.status.success() {
-                let stderr = String::from_utf8_lossy(&osa_output.stderr);
-                return Err(anyhow!("Failed to create mode directory with admin privileges: {}", stderr));
-            }
-            
-            info!("Mode set to simple");
-        } else {
-            // Use the regular save_mode function for Linux
-            save_mode(DeploymentMode::Simple, false).await?;
-        }
+        save_mode(DeploymentMode::Simple, false).await?;
     }
     
-    info!("System configured for Simple mode. Dragonfly will run as a service on startup with a status bar icon.");
-    info!("Logs will be written to {}/dragonfly.log", log_dir_path);
-    info!("Starting service now...");
+    let is_macos = std::env::consts::OS == "macos" || std::env::consts::OS == "darwin";
     
-    // Start the service via the service manager (which will exit this process)
-    start_service()?;
+    info!("System configured for Simple mode. Dragonfly will run as a service on startup.");
+    info!("Logs will be written to {}/dragonfly.log", log_dir_path);
+    
+    if !is_macos {
+        info!("Starting service now...");
+        // Start the service via the service manager (which will exit this process on non-macOS)
+        start_service()?;
+    } else {
+        info!("Running in foreground mode on macOS");
+    }
     
     Ok(())
 }
@@ -1231,8 +1063,14 @@ pub async fn configure_flight_mode() -> Result<()> {
     
     info!("System configured for Flight mode. K3s deployment started in background.");
     
-    // Start the service via service manager instead of daemonizing
-    start_service()?;
+    let is_macos = std::env::consts::OS == "macos" || std::env::consts::OS == "darwin";
+    
+    if !is_macos {
+        // Start the service via service manager (which will exit on non-macOS)
+        start_service()?;
+    } else {
+        info!("Running in foreground mode on macOS");
+    }
     
     Ok(())
 }
@@ -1503,16 +1341,17 @@ pub async fn deploy_k3s_and_handoff() -> Result<()> {
 // Helper function to check if a service is running
 async fn check_service_running(service_name: &str) -> bool {
     // Check if we're on macOS
-    if is_macos() {
-        // For macOS, use launchctl
-        let service_name = format!("com.dragonfly.{}", service_name);
-        let output = Command::new("launchctl")
-            .args(["list", &service_name])
+    if std::env::consts::OS == "macos" || std::env::consts::OS == "darwin" {
+        // For macOS, use pgrep to check if process is running
+        let output = Command::new("pgrep")
+            .arg("-f")
+            .arg(service_name)
             .output();
             
         match output {
             Ok(output) => {
-                output.status.success() && !String::from_utf8_lossy(&output.stdout).is_empty()
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                !stdout.trim().is_empty()
             },
             Err(_) => false,
         }
@@ -1769,8 +1608,14 @@ pub async fn configure_swarm_mode() -> Result<()> {
     
     info!("System configured for Swarm mode.");
     
-    // Start the service via service manager instead of daemonizing
-    start_service()?;
+    let is_macos = std::env::consts::OS == "macos" || std::env::consts::OS == "darwin";
+    
+    if !is_macos {
+        // Start the service via service manager (which will exit on non-macOS)
+        start_service()?;
+    } else {
+        info!("Running in foreground mode on macOS");
+    }
     
     Ok(())
 }

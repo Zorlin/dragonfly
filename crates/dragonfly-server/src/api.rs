@@ -1332,17 +1332,17 @@ async fn api_update_machine_tags(
     match db_update_machine_tags(&id, &tags).await {
         Ok(true) => {
             // Emit machine updated event
-            state.event_manager.send(format!("machine_updated:{}", id));
+            state.event_manager.send(format!("machine_updated:{}", id)); 
             (StatusCode::OK, Json(json!({ "success": true, "message": "Tags updated" }))).into_response()
         }
-        Ok(false) => {
+                    Ok(false) => {
             let error_response = ErrorResponse {
                 error: "Not Found".to_string(),
                 message: format!("Machine with ID {} not found", id),
             };
             (StatusCode::NOT_FOUND, Json(error_response)).into_response()
         }
-        Err(e) => {
+                Err(e) => {
             error!("Failed to update tags for machine {}: {}", id, e);
             let error_response = ErrorResponse {
                 error: "Database Error".to_string(),
