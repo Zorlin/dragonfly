@@ -95,6 +95,7 @@ pub struct WorkflowProgressTemplate {
 pub struct WelcomeTemplate {
     pub theme: String,
     pub is_authenticated: bool,
+    pub hide_footer: bool,
 }
 
 #[derive(Serialize)]
@@ -671,6 +672,7 @@ pub async fn welcome_page(
     let context = WelcomeTemplate {
         theme,
         is_authenticated,
+        hide_footer: true,
     };
     // Pass AppState to render_minijinja
     render_minijinja(&app_state, "welcome.html", context)

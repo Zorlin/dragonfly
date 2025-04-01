@@ -3,7 +3,7 @@
 {% block title %}Welcome to Dragonfly{% endblock %}
 
 {% block content %}
-<div class="py-8 px-4 sm:px-0">
+<div class="py-8 px-4 sm:px-0" id="welcome-container">
     <div class="text-center mb-10">
         <h1 class="text-4xl font-bold bg-gradient-to-r from-green-500 to-purple-600 bg-clip-text text-transparent dark:from-indigo-400 dark:to-purple-300 dark:drop-shadow-[0_0_6px_rgba(129,140,248,0.5)]">
             Welcome to Dragonfly
@@ -18,77 +18,159 @@
     </div>
 
     <div class="mt-12 max-w-6xl mx-auto">
-        <h2 class="text-2xl font-bold text-gray-800 dark:text-gray-100 text-center mb-8">Choose Your Flight Path</h2>
-        
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
-            <!-- Simple Mode -->
-            <div class="bg-emerald-800 dark:bg-emerald-900/90 rounded-xl shadow-md overflow-hidden border border-emerald-700 dark:border-emerald-800 transition-all hover:shadow-lg hover:scale-[1.02] duration-300 flex flex-col">
-                <div class="p-6 flex-grow">
-                    <div class="flex justify-center items-center mb-6">
-                        <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-emerald-700 dark:bg-emerald-800">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-emerald-300 dark:text-emerald-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
-                            </svg>
-                        </div>
-                    </div>
-                    <h3 class="text-xl font-semibold text-white mb-3 text-center">Simple</h3>
-                    <p class="text-emerald-100 dark:text-emerald-200 mb-6 text-center">
-                        Simple operating system deployment. Requires you to define your machines to deploy them.
-                    </p>
-                </div>
-                <div class="px-6 pb-5 mt-2">
-                    <a href="/setup/simple" class="inline-flex w-full justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-emerald-600 hover:bg-emerald-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 dark:bg-emerald-700 dark:hover:bg-emerald-600 dark:focus:ring-offset-emerald-900">
-                        Use Simple Mode
-                    </a>
-                </div>
-            </div>
-            
-            <!-- Flight Mode -->
-            <div class="bg-purple-900 dark:bg-purple-950/90 rounded-xl shadow-md overflow-hidden border border-purple-800 dark:border-purple-800 transition-all hover:shadow-lg hover:scale-[1.02] duration-300 flex flex-col">
-                <div class="p-6 flex-grow">
-                    <div class="flex justify-center items-center mb-6">
-                        <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-purple-800 dark:bg-purple-800">
-                            <span class="text-2xl">🐉</span>
-                        </div>
-                    </div>
-                    <h3 class="text-center text-xl font-semibold text-white mb-2">Flight</h3>
-                    <p class="text-center text-purple-100 dark:text-purple-200 mb-4">
-                        The full power of Dragonfly. Machines register themselves and provision in real time.
-                    </p>
-                </div>
-                <div class="px-6 pb-6 mt-auto">
-                    <a href="/setup/flight" class="inline-flex w-full justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-purple-700 hover:bg-purple-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 dark:bg-purple-700 dark:hover:bg-purple-600 dark:focus:ring-offset-purple-900">
-                        Enable Flight Mode
-                    </a>
-                </div>
-            </div>
-            
-            <!-- Swarm Mode -->
-            <div class="bg-cyan-800 dark:bg-cyan-900/90 rounded-xl shadow-md overflow-hidden border border-cyan-700 dark:border-cyan-800 transition-all hover:shadow-lg hover:scale-[1.02] duration-300 flex flex-col">
-                <div class="p-6 flex-grow">
-                    <div class="flex justify-center items-center mb-6">
-                        <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-cyan-700 dark:bg-cyan-700">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-cyan-300 dark:text-cyan-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
-                            </svg>
-                        </div>
-                    </div>
-                    <h3 class="text-center text-xl font-semibold text-white mb-2">Swarm</h3>
-                    <p class="text-center text-cyan-100 dark:text-cyan-200 mb-4">
-                        Dragonfly, distributed. High availability, horizontal scaling and other goodies.
-                    </p>
-                </div>
-                <div class="px-6 pb-6 mt-auto">
-                    <a href="/setup/swarm" class="inline-flex w-full justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-cyan-600 hover:bg-cyan-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-cyan-500 dark:bg-cyan-600 dark:hover:bg-cyan-500 dark:focus:ring-offset-cyan-800">
-                        Build the Swarm
-                    </a>
-                </div>
-            </div>
-        </div>
-        <p class="mt-10 text-center text-gray-800 dark:text-gray-100 font-bold text-md">
+        <h2 class="text-2xl font-bold text-gray-800 dark:text-gray-100 text-center mb-4">Choose Your Flight Path</h2>
+        <p class="mb-6 text-center text-gray-800 dark:text-gray-100 font-bold text-md">
             You can change your mind later, or mix and match.
         </p>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-8" id="card-container">
+            <!-- Simple Mode -->
+            <a href="/setup/simple" class="card-link" data-href="/setup/simple">
+                <div class="flight-card bg-emerald-800 dark:bg-emerald-900/90 rounded-xl shadow-md overflow-hidden border border-emerald-700 dark:border-emerald-800 transition-all hover:shadow-lg hover:scale-[1.02] duration-300 flex flex-col" style="height: 16em;">
+                    <div class="p-6 flex-grow">
+                        <div class="flex justify-center items-center mb-6">
+                            <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-emerald-700 dark:bg-emerald-800">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-emerald-300 dark:text-emerald-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
+                                </svg>
+                            </div>
+                        </div>
+                        <h3 class="text-xl font-semibold text-white mb-3 text-center">Simple</h3>
+                        <p class="text-emerald-100 dark:text-emerald-200 mt-6 mb-4 text-center">
+                            Simple operating system deployment. Requires you to define your machines to deploy them.
+                        </p>
+                    </div>
+                </div>
+            </a>
+            <!-- Flight Mode -->
+            <a href="/setup/flight" class="card-link" data-href="/setup/flight">
+                <div class="flight-card bg-purple-900 dark:bg-purple-950/90 rounded-xl shadow-md overflow-hidden border border-purple-800 dark:border-purple-800 transition-all hover:shadow-lg hover:scale-[1.02] duration-300 flex flex-col" style="height: 16em;">
+                    <div class="p-6 flex-grow">
+                        <div class="flex justify-center items-center mb-6">
+                            <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-purple-800 dark:bg-purple-800">
+                                <span class="text-2xl">🐉</span>
+                            </div>
+                        </div>
+                        <h3 class="text-center text-xl font-semibold text-white mb-2">Flight</h3>
+                        <p class="text-center text-purple-100 dark:text-purple-200 mt-6 mb-2">
+                            The full power of Dragonfly. Machines register themselves and provision in real time.
+                        </p>
+                    </div>
+                </div>
+            </a>
+            
+            <!-- Swarm Mode -->
+            <a href="/setup/swarm" class="card-link" data-href="/setup/swarm">
+                <div class="flight-card bg-cyan-800 dark:bg-cyan-900/90 rounded-xl shadow-md overflow-hidden border border-cyan-700 dark:border-cyan-800 transition-all hover:shadow-lg hover:scale-[1.02] duration-300 flex flex-col" style="height: 16em;">
+                    <div class="p-6 flex-grow">
+                        <div class="flex justify-center items-center mb-6">
+                            <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-cyan-700 dark:bg-cyan-700">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-cyan-300 dark:text-cyan-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
+                                </svg>
+                            </div>
+                        </div>
+                        <h3 class="text-center text-xl font-semibold text-white mb-2">Swarm</h3>
+                        <p class="text-center text-cyan-100 dark:text-cyan-200 mt-6 mb-6">
+                            Dragonfly, distributed. High availability, horizontal scaling and other goodies.
+                        </p>
+                    </div>
+                </div>
+            </a>
+        </div>
     </div>
 </div>
-{% endblock %}
 
+<style>
+    @keyframes glow {
+        0% { box-shadow: 0 0 5px rgba(255, 255, 255, 0.3); }
+        50% { box-shadow: 0 0 10px 5px rgba(255, 255, 255, 0.7); }
+        100% { box-shadow: 0 0 5px rgba(255, 255, 255, 0.3); }
+    }
+    
+    @keyframes flyAway {
+        0% { transform: scale(1) translateY(0); opacity: 1; }
+        25% { transform: scale(1.1) translateY(0); opacity: 1; }
+        100% { transform: scale(0.1) translateY(-500px); opacity: 0; }
+    }
+    
+    @keyframes fadeOut {
+        0% { opacity: 1; }
+        100% { opacity: 0; }
+    }
+    
+    .card-glowing {
+        animation: glow 1s ease-in-out;
+    }
+    
+    .card-fly-away {
+        animation: flyAway 1.5s cubic-bezier(0.165, 0.84, 0.44, 1) forwards;
+    }
+    
+    .card-fade-out {
+        animation: fadeOut 1s ease-in-out forwards;
+    }
+    
+    .fly-away-offset-1 {
+        animation-delay: 0.1s;
+    }
+    
+    .fly-away-offset-2 {
+        animation-delay: 0.2s;
+    }
+    
+    .fade-out {
+        animation: fadeOut 1s ease-in-out forwards;
+        animation-delay: 0.8s;
+    }
+    
+    .no-scroll {
+        overflow: hidden;
+    }
+</style>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const cards = document.querySelectorAll('.card-link');
+        const container = document.getElementById('welcome-container');
+        const cardContainer = document.getElementById('card-container');
+        
+        cards.forEach((card, index) => {
+            card.addEventListener('click', function(e) {
+                e.preventDefault();
+                const href = this.getAttribute('data-href');
+                const selectedCard = this.querySelector('.flight-card');
+                
+                // Apply glow effect to selected card
+                selectedCard.classList.add('card-glowing');
+                
+                // After glow, start animations
+                setTimeout(() => {
+                    // Prevent scrolling during animation
+                    document.body.classList.add('no-scroll');
+                    
+                    // Get all cards
+                    const allCards = cardContainer.querySelectorAll('.flight-card');
+                    
+                    // Make only the selected card fly away
+                    selectedCard.classList.add('card-fly-away');
+                    
+                    // Fade out all other cards
+                    allCards.forEach((c) => {
+                        if (c !== selectedCard) {
+                            c.classList.add('card-fade-out');
+                        }
+                    });
+                    
+                    // Fade out the rest of the content
+                    container.classList.add('fade-out');
+                    
+                    // Navigate after animations complete
+                    setTimeout(() => {
+                        window.location.href = href;
+                    }, 1800);
+                }, 800);
+            });
+        });
+    });
+</script>
+{% endblock %}

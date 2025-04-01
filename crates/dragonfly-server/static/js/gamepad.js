@@ -1,419 +1,378 @@
-// Dragonfly Gamepad Navigation Controller
-// Provides support for Xbox controllers and generic gamepad input
-document.addEventListener('DOMContentLoaded', function() {
-    // State management
-    const gamepadState = {
-        connected: false,
-        activeGamepad: null,
-        focusedElement: null,
-        focusableElements: [],
-        focusIndex: 0,
-        // Button mappings based on Xbox controller layout
-        buttons: {
-            A: 0,       // Primary/Select
-            B: 1,       // Back/Cancel
-            X: 2,       // Secondary action
-            Y: 3,       // Tertiary action
-            LB: 4,      // Left bumper - previous section
-            RB: 5,      // Right bumper - next section
-            LT: 6,      // Left trigger - zoom out
-            RT: 7,      // Right trigger - zoom in
-            BACK: 8,    // Back button
-            START: 9,   // Start button - open menu
-            LS: 10,     // Left stick press
-            RS: 11,     // Right stick press
-            UP: 12,     // D-pad up
-            DOWN: 13,   // D-pad down
-            LEFT: 14,   // D-pad left
-            RIGHT: 15   // D-pad right
-        },
-        // Axis mappings
-        axes: {
-            LS_X: 0,    // Left stick X axis
-            LS_Y: 1,    // Left stick Y axis
-            RS_X: 2,    // Right stick X axis
-            RS_Y: 3     // Right stick Y axis
-        },
-        // Deadzone for analog sticks
-        deadzone: 0.25
-    };
+/**
+ * Dragonfly Gamepad Support
+ * Provides Xbox, PlayStation, and other gamepad controller support
+ * with a No Man's Sky-inspired cursor that snaps to UI elements
+ */
 
-    // Visual indicator for currently focused element
-    function createFocusIndicator() {
-        let indicator = document.getElementById('gamepad-focus-indicator');
-        if (!indicator) {
-            indicator = document.createElement('div');
-            indicator.id = 'gamepad-focus-indicator';
-            indicator.className = 'fixed pointer-events-none border-2 border-yellow-400 dark:border-yellow-300 rounded-lg shadow-lg opacity-0 transition-all duration-100 z-50';
-            document.body.appendChild(indicator);
-        }
-        return indicator;
+class GamepadController {
+    constructor() {
+        // Controller state
+        this.gamepads = [];
+        this.gamepadConnected = false;
+        this.activeElement = null;
+        this.focusableElements = [];
+        this.currentElementIndex = 0;
+        this.gamepadCursorVisible = false;
+        this.buttonStates = {};
+        this.analogMoved = false;
+        this.gamepadPollingInterval = null;
+        
+        // Initialize
+        this.init();
     }
-
-    const focusIndicator = createFocusIndicator();
-
-    // Find all focusable elements
-    function refreshFocusableElements() {
-        // Get all interactive elements that could receive focus
-        const selector = 'a, button, [role="button"], [tabindex]:not([tabindex="-1"])';
-        gamepadState.focusableElements = Array.from(document.querySelectorAll(selector))
-            .filter(el => {
-                // Filter out hidden elements
-                const style = window.getComputedStyle(el);
-                return style.display !== 'none' && 
-                       style.visibility !== 'hidden' && 
-                       style.opacity !== '0' &&
-                       el.offsetWidth > 0 && 
-                       el.offsetHeight > 0;
+    
+    init() {
+        // Setup gamepad event listeners
+        window.addEventListener('gamepadconnected', this.handleGamepadConnected.bind(this));
+        window.addEventListener('gamepaddisconnected', this.handleGamepadDisconnected.bind(this));
+        
+        // Initialize focusable elements on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            this.updateFocusableElements();
+        });
+    }
+    
+    handleGamepadConnected(e) {
+        console.log('Gamepad connected:', e.gamepad.id);
+        this.gamepads[e.gamepad.index] = e.gamepad;
+        this.gamepadConnected = true;
+        this.showGamepadUI();
+        this.startGamepadPolling();
+    }
+    
+    handleGamepadDisconnected(e) {
+        console.log('Gamepad disconnected:', e.gamepad.id);
+        delete this.gamepads[e.gamepad.index];
+        this.gamepadConnected = Object.keys(this.gamepads).length > 0;
+        
+        if (!this.gamepadConnected) {
+            this.hideGamepadUI();
+            this.stopGamepadPolling();
+        }
+    }
+    
+    showGamepadUI() {
+        this.gamepadCursorVisible = true;
+        
+        // Add styles if not already present
+        if (!document.getElementById('gamepad-styles')) {
+            const styleEl = document.createElement('style');
+            styleEl.id = 'gamepad-styles';
+            styleEl.textContent = `
+                .gamepad-focus {
+                    outline: 3px solid rgba(99, 102, 241, 0.8) !important;
+                    outline-offset: 4px !important;
+                    position: relative;
+                    z-index: 40;
+                    box-shadow: 0 0 15px rgba(99, 102, 241, 0.5);
+                    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+                }
+                
+                @keyframes pulse {
+                    0%, 100% { opacity: 1; }
+                    50% { opacity: 0.7; }
+                }
+                
+                #gamepad-cursor {
+                    pointer-events: none;
+                    position: fixed;
+                    width: 20px;
+                    height: 20px;
+                    z-index: 9999;
+                    transition: transform 0.1s ease-out;
+                }
+                
+                #gamepad-hint {
+                    transition: opacity 0.5s ease;
+                }
+            `;
+            document.head.appendChild(styleEl);
+        }
+        
+        // Add gamepad cursor
+        const cursor = document.createElement('div');
+        cursor.id = 'gamepad-cursor';
+        cursor.className = 'fixed w-8 h-8 pointer-events-none transition-all duration-100 z-50';
+        cursor.innerHTML = `
+          <div class="animate-ping absolute h-4 w-4 rounded-full bg-indigo-400 opacity-75"></div>
+          <div class="relative rounded-full h-3 w-3 bg-indigo-500"></div>
+        `;
+        document.body.appendChild(cursor);
+        
+        // Focus the first element
+        this.focusElementAtIndex(0);
+        
+        // Show gamepad controls hint
+        const hint = document.createElement('div');
+        hint.id = 'gamepad-hint';
+        hint.className = 'fixed bottom-4 left-4 bg-black bg-opacity-70 text-white p-3 rounded-lg text-sm';
+        hint.innerHTML = `
+          <div class="flex items-center space-x-2">
+            <span>🎮</span>
+            <span>Use D-pad/sticks to navigate, A/X to select, B/Circle to back</span>
+          </div>
+        `;
+        document.body.appendChild(hint);
+        setTimeout(() => {
+          if (hint) hint.classList.add('opacity-50');
+        }, 5000);
+    }
+    
+    hideGamepadUI() {
+        this.gamepadCursorVisible = false;
+        const cursor = document.getElementById('gamepad-cursor');
+        if (cursor) cursor.remove();
+        
+        const hint = document.getElementById('gamepad-hint');
+        if (hint) hint.remove();
+        
+        this.clearFocusStyles();
+    }
+    
+    updateFocusableElements() {
+        // Get all focusable elements (links, buttons, form elements)
+        this.focusableElements = Array.from(document.querySelectorAll('a, button, select, input, textarea, [tabindex]:not([tabindex="-1"])'))
+          .filter(el => {
+            // Ensure element is visible and not disabled
+            const style = window.getComputedStyle(el);
+            return style.display !== 'none' && 
+                   style.visibility !== 'hidden' && 
+                   !el.hasAttribute('disabled');
+          });
+        
+        // Include the mode cards in the welcome page specifically
+        const modeCards = document.querySelectorAll('.grid-cols-1.md\\:grid-cols-3 > div');
+        if (modeCards.length) {
+            modeCards.forEach(card => {
+                if (!this.focusableElements.includes(card)) {
+                    this.focusableElements.push(card);
+                }
             });
-
-        // If we had a focused element, try to find it again in the new list
-        if (gamepadState.focusedElement) {
-            const idx = gamepadState.focusableElements.indexOf(gamepadState.focusedElement);
-            gamepadState.focusIndex = idx >= 0 ? idx : 0;
         }
     }
-
-    // Update which element is focused
-    function updateFocus(direction) {
-        if (gamepadState.focusableElements.length === 0) {
-            refreshFocusableElements();
-            if (gamepadState.focusableElements.length === 0) return;
+    
+    focusElementAtIndex(index) {
+        if (this.focusableElements.length === 0) return;
+        
+        this.updateFocusableElements(); // Refresh elements to ensure we have the latest
+        
+        if (index < 0) index = 0;
+        if (index >= this.focusableElements.length) index = this.focusableElements.length - 1;
+        
+        this.currentElementIndex = index;
+        this.activeElement = this.focusableElements[index];
+        
+        // Scroll element into view if needed
+        this.activeElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        
+        // Clear any existing focus styles first
+        this.clearFocusStyles();
+        
+        // Add focus styles
+        this.activeElement.classList.add('gamepad-focus');
+        
+        // Position the cursor near the element
+        const cursor = document.getElementById('gamepad-cursor');
+        if (cursor && this.activeElement) {
+            const rect = this.activeElement.getBoundingClientRect();
+            const left = rect.left + rect.width / 2 - 10;
+            const top = rect.top - 20;
+            cursor.style.transform = `translate(${left}px, ${top}px)`;
         }
-
-        // Calculate new index based on direction
-        let newIndex = gamepadState.focusIndex;
-        if (direction === 'next') {
-            newIndex = (gamepadState.focusIndex + 1) % gamepadState.focusableElements.length;
-        } else if (direction === 'prev') {
-            newIndex = (gamepadState.focusIndex - 1 + gamepadState.focusableElements.length) % gamepadState.focusableElements.length;
-        } else if (typeof direction === 'number') {
-            newIndex = direction;
+    }
+    
+    startGamepadPolling() {
+        if (this.gamepadPollingInterval) return;
+        
+        this.gamepadPollingInterval = setInterval(() => {
+            // Get all connected gamepads
+            const gamepads = navigator.getGamepads();
+            
+            for (const gamepad of gamepads) {
+                if (!gamepad) continue;
+                
+                // Handle buttons (check for pressed state changes)
+                this.handleGamepadInput(gamepad);
+            }
+        }, 100); // Poll at 10Hz
+    }
+    
+    stopGamepadPolling() {
+        if (this.gamepadPollingInterval) {
+            clearInterval(this.gamepadPollingInterval);
+            this.gamepadPollingInterval = null;
         }
-
-        // Update the focus
-        gamepadState.focusIndex = newIndex;
-        gamepadState.focusedElement = gamepadState.focusableElements[newIndex];
-        
-        // Focus the element
-        gamepadState.focusedElement.focus();
-        
-        // Update the visual indicator
-        updateFocusIndicator();
     }
-
-    // Update the visual focus indicator
-    function updateFocusIndicator() {
-        if (!gamepadState.focusedElement) return;
+    
+    handleGamepadInput(gamepad) {
+        // Process buttons
+        // A button (Xbox) or X button (PlayStation)
+        if (gamepad.buttons[0].pressed && !this.buttonStates?.a) {
+            this.buttonStates = {...this.buttonStates, a: true};
+            
+            // Simulate a click on the active element
+            if (this.activeElement) {
+                this.activeElement.click();
+            }
+        } else if (!gamepad.buttons[0].pressed && this.buttonStates?.a) {
+            this.buttonStates = {...this.buttonStates, a: false};
+        }
         
-        const rect = gamepadState.focusedElement.getBoundingClientRect();
-        focusIndicator.style.left = `${rect.left - 4}px`;
-        focusIndicator.style.top = `${rect.top - 4}px`;
-        focusIndicator.style.width = `${rect.width + 8}px`;
-        focusIndicator.style.height = `${rect.height + 8}px`;
-        focusIndicator.style.opacity = '1';
+        // B button (Xbox) or Circle button (PlayStation) - go back
+        if (gamepad.buttons[1].pressed && !this.buttonStates?.b) {
+            this.buttonStates = {...this.buttonStates, b: true};
+            window.history.back();
+        } else if (!gamepad.buttons[1].pressed && this.buttonStates?.b) {
+            this.buttonStates = {...this.buttonStates, b: false};
+        }
+        
+        // Process D-pad (digital)
+        // D-pad Up
+        if (gamepad.buttons[12]?.pressed && !this.buttonStates?.up) {
+            this.buttonStates = {...this.buttonStates, up: true};
+            this.navigateUp();
+        } else if (!gamepad.buttons[12]?.pressed && this.buttonStates?.up) {
+            this.buttonStates = {...this.buttonStates, up: false};
+        }
+        
+        // D-pad Down
+        if (gamepad.buttons[13]?.pressed && !this.buttonStates?.down) {
+            this.buttonStates = {...this.buttonStates, down: true};
+            this.navigateDown();
+        } else if (!gamepad.buttons[13]?.pressed && this.buttonStates?.down) {
+            this.buttonStates = {...this.buttonStates, down: false};
+        }
+        
+        // D-pad Left
+        if (gamepad.buttons[14]?.pressed && !this.buttonStates?.left) {
+            this.buttonStates = {...this.buttonStates, left: true};
+            this.navigateLeft();
+        } else if (!gamepad.buttons[14]?.pressed && this.buttonStates?.left) {
+            this.buttonStates = {...this.buttonStates, left: false};
+        }
+        
+        // D-pad Right
+        if (gamepad.buttons[15]?.pressed && !this.buttonStates?.right) {
+            this.buttonStates = {...this.buttonStates, right: true};
+            this.navigateRight();
+        } else if (!gamepad.buttons[15]?.pressed && this.buttonStates?.right) {
+            this.buttonStates = {...this.buttonStates, right: false};
+        }
+        
+        // Process analog sticks
+        // Left analog stick
+        const leftX = gamepad.axes[0];
+        const leftY = gamepad.axes[1];
+        
+        if (Math.abs(leftX) > 0.5 || Math.abs(leftY) > 0.5) {
+            // Only trigger once per stick movement
+            if (!this.analogMoved) {
+                this.analogMoved = true;
+                
+                if (leftX < -0.5) this.navigateLeft();
+                else if (leftX > 0.5) this.navigateRight();
+                
+                if (leftY < -0.5) this.navigateUp();
+                else if (leftY > 0.5) this.navigateDown();
+            }
+        } else {
+            this.analogMoved = false;
+        }
     }
-
-    // Find the closest element in a particular direction
-    function findClosestInDirection(direction) {
-        if (!gamepadState.focusedElement || gamepadState.focusableElements.length <= 1) return;
+    
+    navigateUp() {
+        const prevIndex = this.findAdjacentElement('up');
+        if (prevIndex !== -1 && prevIndex !== this.currentElementIndex) {
+            this.focusElementAtIndex(prevIndex);
+        }
+    }
+    
+    navigateDown() {
+        const nextIndex = this.findAdjacentElement('down');
+        if (nextIndex !== -1 && nextIndex !== this.currentElementIndex) {
+            this.focusElementAtIndex(nextIndex);
+        }
+    }
+    
+    navigateLeft() {
+        const leftIndex = this.findAdjacentElement('left');
+        if (leftIndex !== -1 && leftIndex !== this.currentElementIndex) {
+            this.focusElementAtIndex(leftIndex);
+        }
+    }
+    
+    navigateRight() {
+        const rightIndex = this.findAdjacentElement('right');
+        if (rightIndex !== -1 && rightIndex !== this.currentElementIndex) {
+            this.focusElementAtIndex(rightIndex);
+        }
+    }
+    
+    findAdjacentElement(direction) {
+        if (!this.activeElement || this.focusableElements.length === 0) return -1;
         
-        const currentRect = gamepadState.focusedElement.getBoundingClientRect();
-        const currentCenter = {
-            x: currentRect.left + currentRect.width / 2,
-            y: currentRect.top + currentRect.height / 2
-        };
+        const currentRect = this.activeElement.getBoundingClientRect();
+        const currentCenterX = currentRect.left + currentRect.width / 2;
+        const currentCenterY = currentRect.top + currentRect.height / 2;
         
-        // Calculate scores for each focusable element based on direction
-        let bestScore = Number.MAX_SAFE_INTEGER;
-        let bestIdx = -1;
-
-        gamepadState.focusableElements.forEach((el, idx) => {
-            if (el === gamepadState.focusedElement) return;
+        let bestIndex = -1;
+        let bestDistance = Number.POSITIVE_INFINITY;
+        
+        // Check all focusable elements
+        this.focusableElements.forEach((element, index) => {
+            if (element === this.activeElement) return;
             
-            const rect = el.getBoundingClientRect();
-            const center = {
-                x: rect.left + rect.width / 2,
-                y: rect.top + rect.height / 2
-            };
+            const rect = element.getBoundingClientRect();
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
             
-            const dx = center.x - currentCenter.x;
-            const dy = center.y - currentCenter.y;
-            const distance = Math.sqrt(dx * dx + dy * dy);
-            
-            // Score based on direction and distance
-            let score = distance;
-            
-            // Heavily favor the correct direction
+            // Check if element is in the right direction
+            let inRightDirection = false;
             switch (direction) {
                 case 'up':
-                    // For up direction, element must be above
-                    if (dy >= -10) score = Number.MAX_SAFE_INTEGER;
-                    else score = distance - dy * 2; // Prioritize elements more directly above
+                    inRightDirection = centerY < currentCenterY;
                     break;
                 case 'down':
-                    // For down direction, element must be below
-                    if (dy <= 10) score = Number.MAX_SAFE_INTEGER;
-                    else score = distance - dy * 2; // Prioritize elements more directly below
+                    inRightDirection = centerY > currentCenterY;
                     break;
                 case 'left':
-                    // For left direction, element must be to the left
-                    if (dx >= -10) score = Number.MAX_SAFE_INTEGER;
-                    else score = distance - dx * 2; // Prioritize elements more directly to the left
+                    inRightDirection = centerX < currentCenterX;
                     break;
                 case 'right':
-                    // For right direction, element must be to the right
-                    if (dx <= 10) score = Number.MAX_SAFE_INTEGER;
-                    else score = distance - dx * 2; // Prioritize elements more directly to the right
+                    inRightDirection = centerX > currentCenterX;
                     break;
             }
             
-            // Update best score
-            if (score < bestScore) {
-                bestScore = score;
-                bestIdx = idx;
-            }
-        });
-        
-        // If we found a good candidate, update focus
-        if (bestIdx !== -1) {
-            updateFocus(bestIdx);
-        }
-    }
-
-    // Handle button press
-    function handleButtonPress(buttonIndex) {
-        if (!gamepadState.focusedElement) return;
-        
-        switch (buttonIndex) {
-            case gamepadState.buttons.A:
-                // Press the currently focused element
-                gamepadState.focusedElement.click();
-                break;
+            if (inRightDirection) {
+                // Calculate distance based on direction priority
+                let distance;
                 
-            case gamepadState.buttons.B:
-                // Go back to previous page
-                history.back();
-                break;
-                
-            case gamepadState.buttons.UP:
-                findClosestInDirection('up');
-                break;
-                
-            case gamepadState.buttons.DOWN:
-                findClosestInDirection('down');
-                break;
-                
-            case gamepadState.buttons.LEFT:
-                findClosestInDirection('left');
-                break;
-                
-            case gamepadState.buttons.RIGHT:
-                findClosestInDirection('right');
-                break;
-                
-            case gamepadState.buttons.LB:
-                // Previous tab/section
-                break;
-                
-            case gamepadState.buttons.RB:
-                // Next tab/section
-                break;
-                
-            case gamepadState.buttons.START:
-                // Toggle menu
-                break;
-        }
-    }
-
-    // Handle stick movement
-    function handleStickMovement(sticks) {
-        // Left stick directional navigation with deadzone
-        if (Math.abs(sticks.LS_Y) > gamepadState.deadzone || Math.abs(sticks.LS_X) > gamepadState.deadzone) {
-            // Determine primary direction
-            if (Math.abs(sticks.LS_Y) > Math.abs(sticks.LS_X)) {
-                // Vertical movement
-                if (sticks.LS_Y < -gamepadState.deadzone) {
-                    findClosestInDirection('up');
-                } else if (sticks.LS_Y > gamepadState.deadzone) {
-                    findClosestInDirection('down');
+                if (direction === 'up' || direction === 'down') {
+                    // For up/down prioritize vertical distance
+                    distance = Math.abs(centerY - currentCenterY) * 3 + Math.abs(centerX - currentCenterX);
+                } else {
+                    // For left/right prioritize horizontal distance
+                    distance = Math.abs(centerX - currentCenterX) * 3 + Math.abs(centerY - currentCenterY);
                 }
-            } else {
-                // Horizontal movement
-                if (sticks.LS_X < -gamepadState.deadzone) {
-                    findClosestInDirection('left');
-                } else if (sticks.LS_X > gamepadState.deadzone) {
-                    findClosestInDirection('right');
+                
+                if (distance < bestDistance) {
+                    bestDistance = distance;
+                    bestIndex = index;
                 }
             }
-        }
+        });
         
-        // Right stick for scrolling
-        if (Math.abs(sticks.RS_Y) > gamepadState.deadzone) {
-            window.scrollBy(0, sticks.RS_Y * 15);
-        }
+        return bestIndex;
     }
-
-    // Check for gamepad input
-    let lastButtonStates = [];
-    let lastAxisValues = [];
-    let lastMovementTime = 0;
-
-    function checkGamepadInput() {
-        const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
-        let gamepad = null;
-        
-        // Find the first connected gamepad
-        for (let i = 0; i < gamepads.length; i++) {
-            if (gamepads[i] && gamepads[i].connected) {
-                gamepad = gamepads[i];
-                gamepadState.activeGamepad = gamepad;
-                gamepadState.connected = true;
-                break;
-            }
-        }
-        
-        if (!gamepad) {
-            gamepadState.connected = false;
-            gamepadState.activeGamepad = null;
-            requestAnimationFrame(checkGamepadInput);
-            return;
-        }
-        
-        // Initialize button states if needed
-        if (lastButtonStates.length === 0) {
-            lastButtonStates = gamepad.buttons.map(b => b.pressed);
-        }
-        
-        // Initialize axis values if needed
-        if (lastAxisValues.length === 0) {
-            lastAxisValues = gamepad.axes.map(a => a);
-        }
-        
-        // Check buttons
-        gamepad.buttons.forEach((button, index) => {
-            if (button.pressed && !lastButtonStates[index]) {
-                // Button just pressed
-                handleButtonPress(index);
-            }
-            lastButtonStates[index] = button.pressed;
+    
+    clearFocusStyles() {
+        document.querySelectorAll('.gamepad-focus').forEach(el => {
+            el.classList.remove('gamepad-focus');
         });
-        
-        // Handle stick movement (throttled to prevent too fast navigation)
-        const now = Date.now();
-        if (now - lastMovementTime > 250) { // Throttle to every 250ms
-            const sticks = {
-                LS_X: gamepad.axes[gamepadState.axes.LS_X],
-                LS_Y: gamepad.axes[gamepadState.axes.LS_Y],
-                RS_X: gamepad.axes[gamepadState.axes.RS_X],
-                RS_Y: gamepad.axes[gamepadState.axes.RS_Y]
-            };
-            
-            // Check if any stick has moved significantly
-            const significantMovement = Object.values(sticks).some(value => 
-                Math.abs(value) > gamepadState.deadzone
-            );
-            
-            if (significantMovement) {
-                handleStickMovement(sticks);
-                lastMovementTime = now;
-            }
-            
-            // Update last axis values
-            lastAxisValues = gamepad.axes.map(a => a);
-        }
-        
-        // Continue checking for gamepad input
-        requestAnimationFrame(checkGamepadInput);
     }
+}
 
-    // Initialize gamepad detection
-    function initGamepadControl() {
-        // Set up the focus indicator style
-        const style = document.createElement('style');
-        style.textContent = `
-            @keyframes pulse {
-                0% { opacity: 0.7; }
-                50% { opacity: 0.9; }
-                100% { opacity: 0.7; }
-            }
-            #gamepad-focus-indicator {
-                animation: pulse 1.5s infinite;
-            }
-        `;
-        document.head.appendChild(style);
-
-        // Listen for gamepad connections
-        window.addEventListener('gamepadconnected', (e) => {
-            console.log(`Gamepad connected: ${e.gamepad.id}`);
-            gamepadState.connected = true;
-            gamepadState.activeGamepad = e.gamepad;
-            document.body.classList.add('gamepad-active');
-            
-            // Initialize focus if not already set
-            if (!gamepadState.focusedElement) {
-                refreshFocusableElements();
-                if (gamepadState.focusableElements.length > 0) {
-                    updateFocus(0);
-                }
-            }
-            
-            // Start checking for gamepad input
-            requestAnimationFrame(checkGamepadInput);
-        });
-
-        // Listen for gamepad disconnections
-        window.addEventListener('gamepaddisconnected', (e) => {
-            console.log(`Gamepad disconnected: ${e.gamepad.id}`);
-            // If this was our active gamepad
-            if (gamepadState.activeGamepad && gamepadState.activeGamepad.index === e.gamepad.index) {
-                gamepadState.connected = false;
-                gamepadState.activeGamepad = null;
-                document.body.classList.remove('gamepad-active');
-                
-                // Hide the focus indicator
-                focusIndicator.style.opacity = '0';
-            }
-        });
-        
-        // Listen for DOM changes to refresh focusable elements
-        const observer = new MutationObserver(mutations => {
-            refreshFocusableElements();
-        });
-        
-        observer.observe(document.body, {
-            childList: true,
-            subtree: true,
-            attributes: true,
-            attributeFilter: ['class', 'style', 'hidden']
-        });
-        
-        // Initial check for already-connected gamepads
-        if (navigator.getGamepads) {
-            const gamepads = navigator.getGamepads();
-            for (let i = 0; i < gamepads.length; i++) {
-                if (gamepads[i] && gamepads[i].connected) {
-                    gamepadState.connected = true;
-                    gamepadState.activeGamepad = gamepads[i];
-                    document.body.classList.add('gamepad-active');
-                    
-                    // Initialize focus
-                    refreshFocusableElements();
-                    if (gamepadState.focusableElements.length > 0) {
-                        updateFocus(0);
-                    }
-                    
-                    // Start checking for gamepad input
-                    requestAnimationFrame(checkGamepadInput);
-                    break;
-                }
-            }
-        }
-        
-        // Initial refresh of focusable elements
-        refreshFocusableElements();
-    }
-
-    // Initialize the gamepad control system
-    initGamepadControl();
+// Initialize the gamepad controller when the script loads
+document.addEventListener('DOMContentLoaded', () => {
+    window.gamepadController = new GamepadController();
 }); 
