@@ -126,50 +126,209 @@
     .no-scroll {
         overflow: hidden;
     }
+    
+    /* Xbox controller focus styles */
+    .card-focused {
+        outline: 3px solid white;
+        box-shadow: 0 0 15px 5px rgba(255, 255, 255, 0.5);
+        transform: scale(1.05);
+    }
+    
+    /* Controller button guide */
+    .controller-guide {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        background-color: rgba(0, 0, 0, 0.7);
+        color: white;
+        padding: 10px 15px;
+        border-radius: 8px;
+        font-size: 0.9rem;
+        z-index: 100;
+        display: none;
+    }
+    
+    .controller-guide.active {
+        display: block;
+    }
 </style>
+
+<div class="controller-guide" id="xbox-guide">
+    <div><span class="mr-2">◀ ▶</span> Navigate cards</div>
+    <div><span class="mr-2">A</span> Select card</div>
+</div>
 
 <script>
     document.addEventListener('DOMContentLoaded', function() {
         const cards = document.querySelectorAll('.card-link');
         const container = document.getElementById('welcome-container');
         const cardContainer = document.getElementById('card-container');
+        const controllerGuide = document.getElementById('xbox-guide');
+        let currentCardIndex = 0;
+        let isGamepadConnected = false;
+        let animationInProgress = false;
         
+        // Function to handle card selection and animation
+        function selectCard(card) {
+            if (animationInProgress) return;
+            animationInProgress = true;
+            
+            const href = card.getAttribute('data-href');
+            const selectedCard = card.querySelector('.flight-card');
+            
+            // Apply glow effect to selected card
+            selectedCard.classList.add('card-glowing');
+            
+            // After glow, start animations
+            setTimeout(() => {
+                // Prevent scrolling during animation
+                document.body.classList.add('no-scroll');
+                
+                // Get all cards
+                const allCards = cardContainer.querySelectorAll('.flight-card');
+                
+                // Make only the selected card fly away
+                selectedCard.classList.add('card-fly-away');
+                
+                // Fade out all other cards
+                allCards.forEach((c) => {
+                    if (c !== selectedCard) {
+                        c.classList.add('card-fade-out');
+                    }
+                });
+                
+                // Fade out the rest of the content
+                container.classList.add('fade-out');
+                
+                // Navigate after animations complete
+                setTimeout(() => {
+                    window.location.href = href;
+                }, 1800);
+            }, 800);
+        }
+        
+        // Mouse/touch click event handling
         cards.forEach((card, index) => {
             card.addEventListener('click', function(e) {
                 e.preventDefault();
-                const href = this.getAttribute('data-href');
-                const selectedCard = this.querySelector('.flight-card');
-                
-                // Apply glow effect to selected card
-                selectedCard.classList.add('card-glowing');
-                
-                // After glow, start animations
-                setTimeout(() => {
-                    // Prevent scrolling during animation
-                    document.body.classList.add('no-scroll');
-                    
-                    // Get all cards
-                    const allCards = cardContainer.querySelectorAll('.flight-card');
-                    
-                    // Make only the selected card fly away
-                    selectedCard.classList.add('card-fly-away');
-                    
-                    // Fade out all other cards
-                    allCards.forEach((c) => {
-                        if (c !== selectedCard) {
-                            c.classList.add('card-fade-out');
-                        }
-                    });
-                    
-                    // Fade out the rest of the content
-                    container.classList.add('fade-out');
-                    
-                    // Navigate after animations complete
-                    setTimeout(() => {
-                        window.location.href = href;
-                    }, 1800);
-                }, 800);
+                selectCard(this);
             });
+        });
+        
+        // Xbox controller support
+        function updateCardFocus() {
+            cards.forEach((card, index) => {
+                const flightCard = card.querySelector('.flight-card');
+                if (index === currentCardIndex) {
+                    flightCard.classList.add('card-focused');
+                } else {
+                    flightCard.classList.remove('card-focused');
+                }
+            });
+        }
+        
+        // Initialize with first card focused
+        updateCardFocus();
+        
+        let buttonPressed = false;
+        let pollInterval;
+        
+        // Gamepad connection handler
+        window.addEventListener("gamepadconnected", (e) => {
+            console.log("Xbox controller connected");
+            isGamepadConnected = true;
+            controllerGuide.classList.add('active');
+            
+            // Start polling for gamepad input
+            if (!pollInterval) {
+                pollInterval = setInterval(pollGamepad, 100);
+            }
+        });
+        
+        window.addEventListener("gamepaddisconnected", (e) => {
+            console.log("Xbox controller disconnected");
+            isGamepadConnected = false;
+            controllerGuide.classList.remove('active');
+            
+            // Stop polling if no gamepads connected
+            if (pollInterval) {
+                clearInterval(pollInterval);
+                pollInterval = null;
+            }
+        });
+        
+        // Check if gamepad already connected (page refresh case)
+        function checkGamepad() {
+            const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+            for (let i = 0; i < gamepads.length; i++) {
+                if (gamepads[i]) {
+                    isGamepadConnected = true;
+                    controllerGuide.classList.add('active');
+                    
+                    if (!pollInterval) {
+                        pollInterval = setInterval(pollGamepad, 100);
+                    }
+                    break;
+                }
+            }
+        }
+        
+        // Poll for gamepad input
+        function pollGamepad() {
+            if (animationInProgress) return;
+            
+            const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+            if (!gamepads[0]) return;
+            
+            const gamepad = gamepads[0]; // Using first connected gamepad
+            
+            // D-pad right or analog stick right
+            if ((gamepad.buttons[15] && gamepad.buttons[15].pressed) || 
+                (gamepad.axes[0] > 0.5 && !buttonPressed)) {
+                buttonPressed = true;
+                currentCardIndex = (currentCardIndex + 1) % cards.length;
+                updateCardFocus();
+            }
+            // D-pad left or analog stick left
+            else if ((gamepad.buttons[14] && gamepad.buttons[14].pressed) || 
+                    (gamepad.axes[0] < -0.5 && !buttonPressed)) {
+                buttonPressed = true;
+                currentCardIndex = (currentCardIndex - 1 + cards.length) % cards.length;
+                updateCardFocus();
+            }
+            // A button for selection
+            else if (gamepad.buttons[0] && gamepad.buttons[0].pressed && !buttonPressed) {
+                buttonPressed = true;
+                selectCard(cards[currentCardIndex]);
+            }
+            // Reset button pressed state when buttons are released
+            else if (!(gamepad.buttons[14] && gamepad.buttons[14].pressed) && 
+                    !(gamepad.buttons[15] && gamepad.buttons[15].pressed) &&
+                    !(gamepad.buttons[0] && gamepad.buttons[0].pressed) &&
+                    Math.abs(gamepad.axes[0]) < 0.5) {
+                buttonPressed = false;
+            }
+        }
+        
+        // Check for already connected gamepads
+        checkGamepad();
+        
+        // Also support keyboard navigation
+        document.addEventListener('keydown', function(e) {
+            if (animationInProgress) return;
+            
+            // Arrow keys for navigation
+            if (e.key === 'ArrowRight') {
+                currentCardIndex = (currentCardIndex + 1) % cards.length;
+                updateCardFocus();
+            } else if (e.key === 'ArrowLeft') {
+                currentCardIndex = (currentCardIndex - 1 + cards.length) % cards.length;
+                updateCardFocus();
+            } 
+            // Enter/Space for selection
+            else if (e.key === 'Enter' || e.key === ' ') {
+                selectCard(cards[currentCardIndex]);
+            }
         });
     });
 </script>
