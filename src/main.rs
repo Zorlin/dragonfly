@@ -6,8 +6,10 @@ static ALLOC: dhat::Alloc = dhat::Alloc;
 // Main binary that starts the server
 use clap::{Parser, Subcommand};
 use color_eyre::eyre::Result;
-use tracing::{error, info, Level, warn};
-use tracing_subscriber::{fmt, EnvFilter, prelude::*};
+use tracing::{error, info, Level};
+// Updated imports: Add EnvFilter
+use tracing_subscriber::{fmt, prelude::*, registry, EnvFilter};
+use tokio::sync::watch; // For shutdown signal
 
 // Reference the cmd module where subcommands live
 mod cmd;
@@ -61,157 +63,88 @@ async fn main() -> Result<()> {
     color_eyre::install()?; // Install better error handling
 
     let cli = Cli::parse();
-    
-    // --- Logging initialization is now deferred to command handlers ---
+    let log_level = if cli.verbose { Level::DEBUG } else { Level::INFO };
 
+    // Create shutdown channel (used only by install command for now)
+    let (shutdown_tx, shutdown_rx) = watch::channel(());
+
+    // Setup Ctrl+C handler to send shutdown signal
+    let shutdown_tx_clone = shutdown_tx.clone();
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c().await.expect("Failed to install Ctrl+C handler");
+        info!("Ctrl+C received, sending shutdown signal...");
+        // Send shutdown signal. Ignore result if receiver already dropped.
+        let _ = shutdown_tx_clone.send(());
+    });
+
+    // Initialize logging ONLY if we are the main installer process
+    if let Some(Commands::Install(_)) = &cli.command {
+        // Define EnvFilter directives for install mode:
+        // - Default level based on verbosity for the installer itself (crate root)
+        // - Silence server-related crates
+        let directives = format!(
+            "dragonfly={level},dragonfly_server=off,tower=warn,hyper=warn,sqlx=warn,kube=warn,rustls=warn,h2=warn,reqwest=warn,tokio_reactor=warn,mio=warn,want=warn",
+            level = log_level
+        );
+        let filter = EnvFilter::new(directives);
+        let fmt_layer = fmt::layer().with_writer(stderr).with_target(false);
+        registry().with(filter).with(fmt_layer).init();
+        info!("Installer process starting with logging enabled...");
+    }
+    // NOTE: No logging init here for other modes. Server/Setup/Demo rely on RUST_LOG.
+    
+    // Set RUST_LOG env var based on verbosity *only if not installing*.
+    // This allows tracing's default EnvFilter to pick it up if server is run directly.
+    if !matches!(cli.command, Some(Commands::Install(_))) {
+        if cli.verbose && std::env::var("RUST_LOG").is_err() {
+            std::env::set_var("RUST_LOG", "debug");
+        }
+    }
+
+    // Process commands
     match cli.command {
         Some(Commands::Install(args)) => {
-            // Set env vars for install mode BEFORE initializing logger
-            std::env::set_var("RUST_LOG", "error,dragonfly_server=error");
-            std::env::set_var("DRAGONFLY_QUIET", "true");
-
-            // Initialize QUIET logger for install command
-            let env_filter = EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("error")); // Default to error if RUST_LOG not set
-
-            fmt()
-                .with_env_filter(env_filter)
-                .with_writer(std::io::sink) // Discard all output
-                .with_target(false)
-                .init();
-            
-            // info!("Running Install command..."); // No logging in quiet mode
-            
-            // Call the actual installation function
-            if let Err(e) = cmd::install::run_install(args).await {
-                // Still print critical errors directly to stderr
-                eprintln!("Error during installation: {:#}", e);
+            info!("Running install command...");
+            // Pass the shutdown receiver to the install function
+            if let Err(e) = cmd::install::run_install(args, shutdown_rx).await {
+                error!("Installation failed: {:#}", e);
+                eprintln!("Error during installation: {}", e);
+                // Ensure shutdown signal is sent on error too
+                let _ = shutdown_tx.send(());
                 std::process::exit(1);
-            }
-            // info!("Installation process finished."); // No logging
-        }
-        Some(Commands::Setup(_)) => {
-            // Initialize NORMAL logger for setup command
-            let log_level = if cli.verbose { Level::DEBUG } else { Level::INFO };
-             let default_log_level_directive = if cli.verbose { 
-                "debug".parse().unwrap() 
-            } else { 
-                "info".parse().unwrap() 
-            };
-            let env_filter = EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("").add_directive(default_log_level_directive));
-
-            fmt()
-                .with_env_filter(env_filter)
-                .with_writer(stderr)
-                .with_target(false)
-                .init();
-            info!("Logging initialized for Setup Wizard (stderr).");
-            info!("Running Dragonfly setup wizard...");
-            
-            std::env::set_var("DRAGONFLY_SETUP_MODE", "true");
-            
-            if let Err(e) = dragonfly_server::run().await {
-                error!("Setup wizard failed: {:#}", e);
-                eprintln!("Error running setup wizard: {}", e);
-                std::process::exit(1);
+            } else {
+                 info!("Installation process finished successfully.");
+                 // Signal successful completion if needed, or just let program exit
+                 // let _ = shutdown_tx.send(()); // Optional: Signal server to stop
             }
         }
-        Some(Commands::Server(_)) | None => {
-            // Initialize NORMAL logger for server command (or default)
-             let default_log_level_directive = if cli.verbose { 
-                "debug".parse().unwrap() 
-            } else { 
-                "info".parse().unwrap() 
-            };
-            let env_filter = EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("").add_directive(default_log_level_directive));
-            
-            let run_as_service = std::env::var("DRAGONFLY_SERVICE").is_ok();
-            
-            let make_writer = move || -> Box<dyn std::io::Write + Send + Sync> {
-                 if run_as_service {
-                    let log_dir_result = dragonfly_server::mode::ensure_log_directory();
-                    let log_path = match log_dir_result {
-                        Ok(dir) => format!("{}/dragonfly.log", dir),
-                        Err(e) => {
-                            eprintln!("Error ensuring log directory: {}, falling back to /tmp/dragonfly.log", e);
-                            "/tmp/dragonfly.log".to_string()
-                        }
-                    };
-                    match OpenOptions::new().create(true).append(true).open(&log_path) {
-                        Ok(log_file) => Box::new(log_file),
-                        Err(e) => {
-                            eprintln!("CRITICAL: Failed to open log file '{}': {}. Logging to stderr.", log_path, e);
-                            Box::new(stderr()) // Fallback to stderr
-                        }
-                    }
-                } else {
-                    Box::new(stderr()) // Default to stderr for foreground
-                }
-            };
-            
-            fmt()
-                .with_env_filter(env_filter)
-                .with_writer(make_writer)
-                .with_target(false)
-                .init();
-                
-             if run_as_service {
-                 let log_dir_result = dragonfly_server::mode::ensure_log_directory();
-                 if log_dir_result.is_ok() {
-                     let log_path = format!("{}/dragonfly.log", log_dir_result.unwrap());
-                     if OpenOptions::new().append(true).open(&log_path).is_ok() {
-                          info!("Logging initialized to file: {}", log_path);
-                     } else {
-                         warn!("Falling back to stderr for logging due to file open failure.");
-                     }
-                 } else {
-                      warn!("Falling back to stderr for logging due to log directory failure.");
-                 }
-            } else {
-                info!("Logging initialized to stderr (foreground mode).");
-            }
+        Some(Commands::Setup(_)) | Some(Commands::Server(_)) | None => {
+            // Check for demo mode
+            // Must check before run() as run() doesn't have access to cli args easily
+            let db_exists = dragonfly_server::database_exists().await;
+             if !db_exists && !matches!(cli.command, Some(Commands::Setup(_))) {
+                 std::env::set_var("DRAGONFLY_DEMO_MODE", "true");
+                 println!("🐉 Dragonfly has launched in demo mode.");
+                 println!();
+                 println!("🌐 Web UI available at: http://localhost:3000");
+                 println!("🔍 This is a simulated environment — no machines will be affected.");
+                 println!();
+                 println!("💡 When you're ready to install Dragonfly for real, run:");
+                 println!("    dragonfly install");
+                 println!();
+             }
+             
+             if matches!(cli.command, Some(Commands::Setup(_))){
+                std::env::set_var("DRAGONFLY_SETUP_MODE", "true");
+             }
 
-            // --- Server specific logic (checking mode, starting service, etc.) ---
-            if run_as_service {
-                info!("Starting Dragonfly server in service mode with PID {}...", std::process::id());
-            } else {
-                info!("Starting Dragonfly server...");
-                match dragonfly_server::mode::get_current_mode().await {
-                    Ok(Some(mode)) => {
-                        info!("Deployment mode {} detected, starting service...", mode.as_str());
-                        if cfg!(unix) {
-                            if let Err(e) = dragonfly_server::mode::start_service() {
-                                error!("Failed to start service: {:#}", e);
-                                eprintln!("Error starting service: {}", e);
-                                std::process::exit(1);
-                            }
-                            warn!("Continuing as fallback");
-                        } else {
-                            info!("Service management is not supported on this platform");
-                        }
-                    },
-                    Ok(None) => {
-                        info!("No deployment mode configured");
-                    },
-                    Err(e) => {
-                        warn!("Failed to check deployment mode: {}", e);
-                    }
-                }
-            }
-
-            // Run the actual server
-            match dragonfly_server::run().await {
-                Ok(_) => {
-                    info!("Server shut down gracefully");
-                }
-                Err(e) => {
-                    error!("Server error: {:#}", e);
-                    eprintln!("Error running server: {}", e);
-                    std::process::exit(1);
-                }
-            }
+             // Run the server. It will NOT initialize logging.
+             // It *might* pick up RUST_LOG if set above or by user.
+             if let Err(e) = dragonfly_server::run().await {
+                 eprintln!("Error running server/setup: {}", e);
+                 // error! macro might not work if no subscriber is set.
+                 std::process::exit(1);
+             }
         }
     }
 

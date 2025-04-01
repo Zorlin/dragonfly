@@ -1689,4 +1689,10 @@ pub async fn is_setup_completed() -> Result<bool> {
         // No settings found, setup is not completed
         Ok(false)
     }
+}
+
+// Check if the database exists
+pub async fn database_exists() -> bool {
+    let db_path = "sqlite.db";
+    Path::new(db_path).exists()
 } 

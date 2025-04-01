@@ -4,17 +4,17 @@ use tower_sessions::{SessionManagerLayer};
 use tower_sessions_sqlx_store::SqliteStore;
 use std::sync::{Arc};
 use tokio::sync::Mutex;
-use tower_http::trace;
 use tower_http::trace::TraceLayer;
-use tracing::{info, Level, error, warn};
+use tracing::{info, error, warn};
 use std::net::SocketAddr;
 use tower_cookies::CookieManagerLayer;
 use tower_http::services::ServeDir;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::watch;
-use std::process::Command;
 use anyhow::Context;
 use listenfd::ListenFd;
+use axum::body::Body;
+use axum::http::Request;
 
 use crate::auth::{AdminBackend, auth_router, load_credentials, generate_default_credentials, load_settings, Settings};
 use crate::db::init_db;
@@ -24,10 +24,14 @@ use crate::event_manager::EventManager;
 use minijinja::path_loader;
 use minijinja::{Environment};
 use minijinja_autoreload::AutoReloader;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 // Add Serialize for the enum
 use serde::Serialize;
+// Add back AtomicBool and Ordering imports
+use std::sync::atomic::{AtomicBool, Ordering};
+
+// Ensure prelude is still imported if needed elsewhere
+// use tracing_subscriber::prelude::*;
 
 mod auth;
 mod api;
@@ -66,6 +70,7 @@ pub enum TemplateEnv {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum InstallationState {
     WaitingSudo,
+    DetectingNetwork,
     InstallingK3s,
     WaitingK3s,
     DeployingTinkerbell,
@@ -78,6 +83,7 @@ impl InstallationState {
     pub fn get_message(&self) -> &str {
         match self {
             InstallationState::WaitingSudo => "Dragonfly is ready to install. Enter your password in your install window — let's do this.",
+            InstallationState::DetectingNetwork => "Dragonfly is detecting network configuration...",
             InstallationState::InstallingK3s => "Dragonfly is installing k3s.",
             InstallationState::WaitingK3s => "Dragonfly is waiting for k3s to be ready.",
             InstallationState::DeployingTinkerbell => "Dragonfly is deploying Tinkerbell.",
@@ -89,6 +95,7 @@ impl InstallationState {
     pub fn get_animation_class(&self) -> &str {
         match self {
             InstallationState::WaitingSudo => "rocket-idle",
+            InstallationState::DetectingNetwork => "rocket-scanning",
             InstallationState::InstallingK3s => "rocket-sparks",
             InstallationState::WaitingK3s => "rocket-glowing",
             InstallationState::DeployingTinkerbell => "rocket-smoke",
@@ -109,8 +116,6 @@ pub struct AppState {
     pub shutdown_tx: watch::Sender<()>,  // Channel to signal shutdown
     // Use the new enum for the environment
     pub template_env: TemplateEnv,
-    // Add shared installation state, wrapped in Option
-    pub install_state: Option<Arc<Mutex<InstallationState>>>,
 }
 
 // Clean up any existing processes
@@ -119,151 +124,151 @@ async fn cleanup_existing_processes() {
 }
 
 pub async fn run() -> anyhow::Result<()> {
-    let is_install_mode = std::env::var("DRAGONFLY_QUIET").is_ok();
-    
-    let install_state = if is_install_mode {
+    // Determine modes FIRST
+    let is_installation_server = std::env::var("DRAGONFLY_INSTALL_SERVER_MODE").is_ok(); 
+    let demo_mode = std::env::var("DRAGONFLY_DEMO_MODE").is_ok();
+    let setup_mode = std::env::var("DRAGONFLY_SETUP_MODE").is_ok();
+
+    // --- Populate Install State IMMEDIATELY if needed --- 
+    if is_installation_server { // Use the flag directly
         let state = Arc::new(Mutex::new(InstallationState::WaitingSudo));
-        // Store the initial state in the global static
-        if let Ok(mut global_ref) = INSTALL_STATE_REF.write() {
-            *global_ref = Some(state.clone());
+        match INSTALL_STATE_REF.write() { // Use match for explicit error handling
+            Ok(mut global_ref) => {
+                *global_ref = Some(state.clone());
+                // eprintln!("[DEBUG lib.rs] INSTALL_STATE_REF populated at start."); 
+            },
+            Err(e) => {
+                // Use eprintln! as tracing might not be set up
+                eprintln!("CRITICAL: Failed to acquire write lock for INSTALL_STATE_REF at start: {}. Installation UI may not update.", e);
+            }
         }
-        Some(state)
-    } else {
-        None
-    };
-    
+    }
+    // ----------------------------------------------------
+
+    // --- COMPLETELY REMOVED LOGGING INITIALIZATION FROM LIB.RS --- 
+    // Calls like info!() etc. will use whatever global dispatcher exists (or none).
+
+    // --- Start Server Setup --- 
+    // Conditional info!() calls throughout the rest of the function are fine.
+    // They will either be logged (if main.rs init or RUST_LOG) or dropped (if Dispatch::none).
+
+    let is_install_mode = is_installation_server;
+
     // Initialize the database 
-    let db_pool = init_db().await?;
-    
+    let db_pool = init_db().await?; // DB init is essential
+
     // Initialize timing database tables
-    db::init_timing_tables().await?;
-    
+    db::init_timing_tables().await?; // Essential
+
     // Load historical timing data
-    tinkerbell::load_historical_timings().await?;
-    
-    // --- Start OS Templates Initialization in Background ---
-    info!("Starting OS templates initialization in background...");
-    tokio::spawn(async move {
-        match os_templates::init_os_templates().await {
-            Ok(_) => info!("OS templates initialized successfully"),
-            Err(e) => warn!("Failed to initialize OS templates: {}", e),
-        }
-    });
-    
-    // --- Graceful Shutdown Setup ---
+    tinkerbell::load_historical_timings().await?; // Essential
+
+    // --- Start OS Templates Initialization --- 
+    if !is_installation_server { // Only run if NOT server-during-install
+        info!("Starting OS templates initialization in background...");
+        tokio::spawn(async move { // Logs inside here will only appear if not server-during-install
+            match os_templates::init_os_templates().await {
+                Ok(_) => { info!("OS templates initialized successfully"); },
+                Err(e) => { warn!("Failed to initialize OS templates: {}", e); }
+            }
+        });
+    } // End conditional OS template init
+
+    // --- Graceful Shutdown Setup --- 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
 
-    // Start the timing cleanup task with shutdown signal
-    tinkerbell::start_timing_cleanup_task(shutdown_rx.clone()).await;
-    
+    // Start the timing cleanup task
+    tinkerbell::start_timing_cleanup_task(shutdown_rx.clone()).await; // Essential
+
     // Create event manager
-    let event_manager = Arc::new(EventManager::new());
-    
+    let event_manager = Arc::new(EventManager::new()); // Essential
+
     // Store the event manager in the global static
-    if let Ok(mut global_ref) = EVENT_MANAGER_REF.write() {
+    if let Ok(mut global_ref) = EVENT_MANAGER_REF.write() { // Essential
         *global_ref = Some(event_manager.clone());
     }
-    
-    // Start the workflow polling task with shutdown signal
-    tinkerbell::start_workflow_polling_task(event_manager.clone(), shutdown_rx.clone()).await;
-    
+
+    // Start the workflow polling task
+    if !is_installation_server { // Conditional Logging
+        info!("Starting workflow polling task with interval of 1s");
+    }
+    tinkerbell::start_workflow_polling_task(event_manager.clone(), shutdown_rx.clone()).await; // Essential
+
     // Load or generate admin credentials
-    let credentials = match load_credentials().await {
+    let credentials = match load_credentials().await { // Essential logic
         Ok(creds) => {
-            info!("Loaded existing admin credentials");
+             if !is_installation_server { info!("Loaded existing admin credentials"); } // Conditional Log
             creds
         },
         Err(_) => {
-            info!("No admin credentials found, generating default credentials");
-            match generate_default_credentials().await {
+            if !is_installation_server { info!("No admin credentials found, generating default credentials"); } // Cond Log
+            match generate_default_credentials().await { // Essential logic
                 Ok(creds) => creds,
                 Err(e) => {
+                    eprintln!("CRITICAL: Failed to generate default credentials: {}", e);
                     return Err(anyhow::anyhow!("Failed to generate default credentials: {}", e));
                 }
             }
         }
     };
-    
-    // Load settings
-    let settings = match load_settings().await {
+
+     // Load settings
+    let settings = match load_settings().await { // Essential
         Ok(s) => s,
         Err(e) => {
-            info!("Failed to load settings: {}, using defaults", e);
+            if !is_installation_server { info!("Failed to load settings: {}, using defaults", e); } // Cond Log
             Settings::default()
         }
     };
-    
-    // Check if setup mode is enabled via environment variable (set by CLI)
-    let setup_mode = std::env::var("DRAGONFLY_SETUP_MODE").is_ok();
-    
-    // If setup mode is enabled, reset the setup flag
+
+    // Reset setup flag if in setup mode
     if setup_mode {
-        info!("Setup mode enabled, resetting setup completion status");
+        if !is_installation_server { info!("Setup mode enabled, resetting setup completion status"); } // Cond Log
         let mut settings_copy = settings.clone();
         settings_copy.setup_completed = false;
-        if let Err(e) = auth::save_settings(&settings_copy).await {
-            warn!("Failed to reset setup status: {}", e);
+        if let Err(e) = auth::save_settings(&settings_copy).await { // Essential
+             if !is_installation_server { warn!("Failed to reset setup status: {}", e); } // Cond Log
         }
     }
-    
-    // Check if this is the first run by looking at the setup_completed flag
-    let first_run = !settings.setup_completed || setup_mode;
-    
-    // --- MiniJinja Environment Setup ---
-    // Determine template path
+
+    // Determine first run status
+    let first_run = !settings.setup_completed || setup_mode; // Essential
+
+    // --- MiniJinja Setup --- 
     let preferred_template_path = "/opt/dragonfly/templates";
     let fallback_template_path = "crates/dragonfly-server/templates";
-    // Clone path for potential use in reloader closure
     let template_path = if std::path::Path::new(preferred_template_path).exists() {
         preferred_template_path
     } else {
         fallback_template_path
-    }.to_string(); 
+    }.to_string();
 
-    let template_env = {
-        // Enable debug auto-reloading if in development mode
+    let template_env = { // Logs inside handled by tracing setup
         #[cfg(debug_assertions)]
         {
             info!("Setting up MiniJinja with auto-reload for development");
-            
-            // Flag to signal when templates are reloaded
             let templates_reloaded_flag = Arc::new(AtomicBool::new(false));
             let flag_clone_for_closure = templates_reloaded_flag.clone();
-            
             let reloader = AutoReloader::new(move |notifier| {
                 info!("MiniJinja environment is being (re)created...");
                 let mut env = Environment::new();
                 let path_for_closure = template_path.clone();
                 env.set_loader(path_loader(&path_for_closure));
-                // TODO: Add custom filters
-                // Add filters::json_pretty to the environment
-                // env.add_filter("json_pretty", filters::json_pretty_filter);
-                
-                // Signal that the environment was created/reloaded
                 flag_clone_for_closure.store(true, Ordering::SeqCst);
-                
-                // Watch the template directory
                 notifier.watch_path(path_for_closure.as_str(), true);
-                
                 Ok(env)
             });
-            
-            // Spawn the watcher loop
             let reloader_arc = Arc::new(reloader);
             let reloader_clone = reloader_arc.clone();
-            let flag_clone_for_loop = templates_reloaded_flag.clone(); // Clone flag for the loop
-            // Get a weak reference to the event manager for the watcher loop
+            let flag_clone_for_loop = templates_reloaded_flag.clone();
             let event_manager_weak = Arc::downgrade(&event_manager);
-            tokio::spawn(async move { 
+            tokio::spawn(async move {
                 info!("Starting MiniJinja watcher loop...");
                 loop {
-                    // Acquire the environment guard. This checks for changes.
                     match reloader_clone.acquire_env() {
                         Ok(_) => {
-                            // Check the flag set by the closure
                             if flag_clone_for_loop.swap(false, Ordering::SeqCst) {
                                 info!("Templates reloaded - sending refresh event");
-                                // Use the weak reference to the event manager
                                 if let Some(event_manager) = event_manager_weak.upgrade() {
                                     if let Err(e) = event_manager.send("template_changed:refresh".to_string()) {
                                         warn!("Failed to send template refresh event: {}", e);
@@ -279,51 +284,44 @@ pub async fn run() -> anyhow::Result<()> {
                             error!("MiniJinja watcher refresh failed: {}", e);
                         }
                     }
-                    
-                    // Check more frequently in development mode
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                 }
             });
             TemplateEnv::Reloading(reloader_arc)
         }
-        
-        // Static environment for release builds
         #[cfg(not(debug_assertions))]
         {
             info!("Using static MiniJinja environment for release build");
             let mut env = Environment::new();
             env.set_loader(path_loader(&template_path));
-            // TODO: Add custom filters here too
             TemplateEnv::Static(Arc::new(env))
         }
     };
-    // --- End MiniJinja Setup ---
-    
+    // --- End MiniJinja Setup --- 
+
     // Create application state
     let app_state = AppState {
         settings: Arc::new(Mutex::new(settings)),
-        event_manager: event_manager,
+        event_manager: event_manager.clone(), // Use cloned event_manager
         setup_mode,
         first_run,
         shutdown_tx: shutdown_tx.clone(),
-        // Add the environment enum to the state
         template_env,
-        install_state: install_state.clone(), // Pass the install state
     };
-    
-    // Set up the persistent session store using the sqlx store
-    let session_store = SqliteStore::new(db_pool.clone());
-    session_store.migrate().await?; // Create the sessions table
 
-    // Configure the session layer with the SqliteStore
-    let session_layer = SessionManagerLayer::new(session_store)
+    // Session store setup
+    let session_store = SqliteStore::new(db_pool.clone()); // Essential
+    session_store.migrate().await?;
+
+    // Session layer setup
+    let session_layer = SessionManagerLayer::new(session_store) // Essential
         .with_secure(false);
-    
-    // Create session-based authentication
-    let backend = AdminBackend::new(credentials);
+
+    // Auth backend/layer setup
+    let backend = AdminBackend::new(credentials); // Essential
     let auth_layer = AuthManagerLayerBuilder::new(backend, session_layer).build();
-    
-    // Build the app router with shared state
+
+    // --- Build Router --- 
     let app = Router::new()
         .merge(auth_router())
         .merge(ui::ui_router())
@@ -334,32 +332,25 @@ pub async fn run() -> anyhow::Result<()> {
         .nest_service("/static", {
             let preferred_path = "/opt/dragonfly/static";
             let fallback_path = "crates/dragonfly-server/static";
-            
             let static_path = if std::path::Path::new(preferred_path).exists() {
                 preferred_path
             } else {
                 fallback_path
             };
-            
             ServeDir::new(static_path)
         })
         .layer(CookieManagerLayer::new())
         .layer(auth_layer)
-        .layer(Extension(db_pool.clone())) // Pass the pool clone
-        .layer(
-            TraceLayer::new_for_http()
-                .make_span_with(trace::DefaultMakeSpan::new()
-                    .level(tracing::level_filters::LevelFilter::current().into_level().unwrap_or(Level::INFO)))
-                .on_response(trace::DefaultOnResponse::new()
-                    .level(tracing::level_filters::LevelFilter::current().into_level().unwrap_or(Level::INFO))),
-        )
+        .layer(Extension(db_pool.clone()))
+        // Add back a STANDARD TraceLayer if desired for non-install runs (will respect RUST_LOG)
+        .layer(TraceLayer::new_for_http()) // Standard layer respects RUST_LOG
         .with_state(app_state);
-    
-    // Check if we need to start the handoff listener
+
+    // Handoff listener setup 
     let current_mode = mode::get_current_mode().await.unwrap_or(None);
     if let Some(mode) = current_mode {
         if mode == mode::DeploymentMode::Flight {
-            info!("Running in Flight mode - starting handoff listener");
+            if !is_installation_server { info!("Running in Flight mode - starting handoff listener"); }
             tokio::spawn(async move {
                 if let Err(e) = mode::start_handoff_listener(shutdown_rx.clone()).await {
                     error!("Handoff listener failed: {}", e);
@@ -367,57 +358,37 @@ pub async fn run() -> anyhow::Result<()> {
             });
         }
     }
-    
-    // --- Start Server with Socket Activation Support ---
-    
+
+    // --- Start Server --- 
     let server_port = 3000;
     let addr = SocketAddr::from(([0, 0, 0, 0], server_port));
-    
-    // Try to get listener socket from environment (systemfd/socket activation)
     let mut listenfd = ListenFd::from_env();
-    
-    // Look for LISTEN_FDS environment variable (set by systemd/launchd socket activation)
     let socket_activation = std::env::var("LISTEN_FDS").is_ok();
-    
-    if socket_activation {
-        info!("Socket activation detected via LISTEN_FDS={}",
-            std::env::var("LISTEN_FDS").unwrap_or_else(|_| "1".to_string()));
+    if socket_activation && !is_installation_server { // Conditional Log
+        info!("Socket activation detected via LISTEN_FDS={}", std::env::var("LISTEN_FDS").unwrap_or_else(|_| "?".to_string()));
     }
-    
-    let listener = match listenfd.take_tcp_listener(0).context("Failed to take TCP listener from environment") {
+    let listener = match listenfd.take_tcp_listener(0).context("Failed to take TCP listener from env") {
         Ok(Some(listener)) => {
-            // Convert the std::net TCP listener to a tokio one
-            info!("Successfully acquired socket from socket activation");
+            if !is_installation_server { info!("Acquired socket via socket activation"); }
             tokio::net::TcpListener::from_std(listener).context("Failed to convert TCP listener")?
         },
         Ok(None) => {
-            // No socket from environment, create our own
-            if socket_activation {
-                warn!("Socket activation was detected (LISTEN_FDS), but no socket was found at fd 3");
-            }
-            info!("Binding to port {} directly", server_port);
-            
+            if socket_activation && !is_installation_server { warn!("Socket activation detected but no socket found"); }
+            if !is_installation_server { info!("Binding to port {} directly", server_port); }
             match tokio::net::TcpListener::bind(addr).await {
                 Ok(listener) => listener,
                 Err(e) => {
-                    // Handle address in use error specifically
                     if e.kind() == std::io::ErrorKind::AddrInUse {
                         error!("Failed to start server: Port {} is already in use", server_port);
-                        error!("Another instance of Dragonfly may be running. Try the following:");
-                        error!("1. Check if Dragonfly is already running in the status bar");
-                        error!("2. Run 'lsof -i:{}' to identify the process", server_port);
-                        error!("3. Kill the process with 'kill -9 <PID>'");
-                        return Err(anyhow::anyhow!("Port {} is already in use by another process. See above for resolution steps.", server_port));
+                        error!("Another instance of Dragonfly may be running...");
+                        return Err(anyhow::anyhow!("Port {} is already in use...", server_port));
                     }
-                    
-                    // Handle other kinds of socket binding errors
                     return Err(anyhow::anyhow!("Failed to bind to address: {}", e));
                 }
             }
         },
         Err(e) => {
-            warn!("Failed to check for socket activation: {}", e);
-            // Fall back to normal binding
+            if !is_installation_server { warn!("Failed to check for socket activation: {}", e); }
             match tokio::net::TcpListener::bind(addr).await {
                 Ok(listener) => listener,
                 Err(e) => {
@@ -426,82 +397,58 @@ pub async fn run() -> anyhow::Result<()> {
             }
         }
     };
-    
-    info!("Dragonfly server listening on http://{}", listener.local_addr().context("Failed to get local address")?);
+    if !is_installation_server { // Conditional Log
+        info!("Dragonfly server listening on http://{}", listener.local_addr().context("Failed to get local address")?);
+    }
 
-    // Define the shutdown signal future - simplified
+    // --- Shutdown Signal Handling --- 
     let shutdown_signal = async move {
-        let ctrl_c = async {
-            tokio::signal::ctrl_c().await
-                .expect("Failed to install Ctrl+C handler");
-        };
-
+        let ctrl_c = async { tokio::signal::ctrl_c().await.expect("Failed Ctrl+C handler"); };
         #[cfg(unix)]
-        let terminate = async {
-            signal(SignalKind::terminate())
-                .expect("Failed to install signal handler")
-                .recv()
-                .await;
-        };
-
-        #[cfg(not(unix))] // Fallback for non-Unix systems
-        let terminate = std::future::pending::<()>();
-
+        let terminate = async { signal(SignalKind::terminate()).expect("Failed signal handler").recv().await; };
+        #[cfg(not(unix))] let terminate = std::future::pending::<()>();
         tokio::select! {
-            _ = ctrl_c => {
-                 info!("Received SIGINT (Ctrl+C), exiting immediately");
-                 std::process::exit(0);
-            },
-            _ = terminate => {
-                 info!("Received SIGTERM, exiting immediately");
-                 std::process::exit(0);
-            },
-            // Add a case for SIGUSR1 (handoff signal)
+            _ = ctrl_c => { info!("Received SIGINT (Ctrl+C), exiting..."); },
+            _ = terminate => { info!("Received SIGTERM, exiting..."); },
             _ = async {
-                // Set up a signal handler for SIGUSR1
                 if let Ok(mut sigusr1) = signal(SignalKind::user_defined1()) {
                     sigusr1.recv().await;
-                    info!("Received SIGUSR1 signal for handoff");
+                    info!("Received SIGUSR1 for handoff");
                     true
                 } else {
-                    // If the signal handler can't be set up, this should never complete
                     std::future::pending::<bool>().await
                 }
-            } => {
-                info!("Initiating handoff based on SIGUSR1 signal");
-                std::process::exit(0);
-            }
+            } => { info!("Initiating handoff based on SIGUSR1"); }
         }
+        // Send shutdown signal via the watch channel
+        shutdown_tx.send(()).ok(); // Ignore error if receiver dropped
+        info!("Shutdown signal sent");
     };
 
-    // Start the server with graceful shutdown
-    axum::serve(listener, app)
+    // Start serving
+    axum::serve(listener, app) // Essential
         .with_graceful_shutdown(shutdown_signal)
         .await
         .context("Server error")?;
 
-    // Remove cleanup at exit
-    
-    // Final cleanup message
-    info!("Shutdown complete");
-    
+    if !is_installation_server { info!("Shutdown complete"); } // Cond Log
+
     Ok(())
-} 
+}
 
 async fn handle_favicon() -> impl IntoResponse {
-    // Serve the favicon from the static directory instead of returning 404
     let path = if std::path::Path::new("/opt/dragonfly/static/favicon/favicon.ico").exists() {
         "/opt/dragonfly/static/favicon/favicon.ico"
     } else {
         "crates/dragonfly-server/static/favicon/favicon.ico"
     };
-    
     match tokio::fs::read(path).await {
-        Ok(contents) => (
-            StatusCode::OK,
-            [(axum::http::header::CONTENT_TYPE, "image/x-icon")],
-            contents
-        ).into_response(),
+        Ok(contents) => (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "image/x-icon")], contents).into_response(),
         Err(_) => (StatusCode::NOT_FOUND, "Favicon not found").into_response()
     }
+}
+
+// Access functions for main.rs to use
+pub async fn database_exists() -> bool {
+    db::database_exists().await
 }

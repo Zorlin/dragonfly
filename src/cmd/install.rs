@@ -11,6 +11,9 @@ use ipnetwork::Ipv4Network;
 use network_interface::{NetworkInterface, NetworkInterfaceConfig};
 use network_interface::Addr;
 use std::sync::{Arc, Mutex};
+use tokio::task_local; // Import task_local
+use tokio::signal; // Import signal for Ctrl+C
+use tokio::sync::watch; // Import watch
 
 // Import state and globals from server crate
 use dragonfly_server::{
@@ -48,7 +51,8 @@ async fn update_install_state(new_state: InstallationState) {
         let mut state = state_ref.lock().await; // Lock the tokio Mutex
         *state = new_state.clone();
     } else {
-        warn!("Install state ref not found, cannot update state");
+        // No warning needed if state ref isn't found
+        // warn!("Install state ref not found, cannot update state");
         // Don't return early, still try to send event if possible
     }
     
@@ -67,134 +71,154 @@ async fn update_install_state(new_state: InstallationState) {
         // Use the cloned state's value for the event, not the potentially updated one
         let event_data = format!("install_status:{}", payload.to_string()); 
         
-        // Send the event (handle the result)
-        if let Err(e) = event_manager.send(event_data) {
-            warn!("Failed to send install status update event: {}", e);
+        // Send the event (handle the result silently)
+        if let Err(_e) = event_manager.send(event_data) {
+            // No warning needed if send fails (e.g., channel closed)
+            // warn!("Failed to send install status update event: {}", e);
         }
     } else {
+         // Keep this warning for now, as missing event manager might be an issue
          warn!("Event manager ref not found, cannot send install status update event");
     }
 }
 
 // The main function for the install command
-pub async fn run_install(args: InstallArgs) -> Result<()> {
-    // Start the webserver immediately with minimal output
-    let server_thread = tokio::spawn(async move {
+pub async fn run_install(args: InstallArgs, mut shutdown_rx: watch::Receiver<()>) -> Result<()> {
+    // Start the webserver immediately
+    let server_handle = tokio::spawn(async move {
+        // Server task inherits environment.
+        // Logging is controlled by global subscriber set in main.rs.
+        
         // Use in-memory SQLite for the initial phase
         std::env::set_var("DATABASE_URL", "sqlite::memory:");
+
+        // Set flag indicating server is running as part of install
+        std::env::set_var("DRAGONFLY_INSTALL_SERVER_MODE", "true");
         
-        // Set logging level to quiet/error only for the server
-        std::env::set_var("RUST_LOG", "error");
+        // Ensure INSTALLER_MODE is NOT set (this was correct)
+        if std::env::var("DRAGONFLY_INSTALLER_MODE").is_ok() {
+            std::env::remove_var("DRAGONFLY_INSTALLER_MODE");
+        }
         
-        // Start the server without much logging
+        // Start the server - logging is controlled by global subscriber or RUST_LOG
         let _ = dragonfly_server::run().await;
     });
-    
-    // Detect passwordless sudo capability
-    let passwordless_sudo = check_passwordless_sudo().await;
-    
-    // Print the welcome message immediately
+
+    // --- Start Background Installation Task --- 
+    // Clone the receiver *before* spawning the task that moves it
+    let mut shutdown_rx_clone = shutdown_rx.clone(); 
+
+    // !!! RE-ADD WELCOME MESSAGES HERE !!!
     println!("🐉 Welcome to Dragonfly.");
     println!("🚀 Open http://localhost:3000 to get started. We're ready for you to look around!");
     
-    // Set initial state (WaitingSudo) - already done in lib.rs, but send initial event
+    // Set initial state (WaitingSudo) - use the helper
     update_install_state(InstallationState::WaitingSudo).await;
     
     // Only show sudo message if passwordless sudo is not available
-    if !passwordless_sudo {
-        println!("🔐 Meanwhile, you'll need to enter your sudo password for the next stages of the installer.");
-    }
+    // Note: Need to check passwordless_sudo before this point
+    // let passwordless_sudo = check_passwordless_sudo().await; // Check needs to be moved up if uncommented
+    // if !passwordless_sudo {
+    //     println!("🔐 Meanwhile, you'll need to enter your sudo password for the next stages of the installer.");
+    // }
 
-    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    // tokio::time::sleep(tokio::time::Duration::from_secs(1)).await; // Remove potential delay before background task
     
-    // Continue with the actual installation in the background
     let install_handle = tokio::spawn(async move {
+        // Now `shutdown_rx` is moved into this task
         let start_time = Instant::now();
         
-        // --- Actual installation steps, run quietly ---
-        // Capture errors for final report, but also log them in realtime
-        // Stdout will be discarded.
-        
-        // --- 1. Determine Host IP and Network ---
-        let (host_ip, netmask, network) = match get_host_ip_and_mask(args.interface.as_deref()) {
-            Ok(result) => result,
-            Err(e) => {
-                // Return an Error instead of just unit type `()`
-                return Err(e.wrap_err("Failed to determine host IP (required for install)")); 
+        // --- Actual installation steps --- 
+        // Use tokio::select! to race steps against shutdown signal
+        tokio::select! {
+            // Branch 1: Actual Installation Steps
+            result = async { 
+                // --- 1. Determine Host IP and Network --- 
+                update_install_state(InstallationState::DetectingNetwork).await;
+                let (host_ip, _netmask, network) = get_host_ip_and_mask(args.interface.as_deref())
+                    .wrap_err("Failed to determine host IP (required for install)")?;
+                
+                // --- 2. Find Available Floating IP --- 
+                let bootstrap_ip = find_available_ip(host_ip, network, args.start_offset, args.max_ip_search)
+                    .await
+                    .wrap_err("Failed to find an available IP address for the bootstrap node")?;
+                
+                // --- 3. Install k3s --- 
+                update_install_state(InstallationState::InstallingK3s).await;
+                install_k3s().await.wrap_err("Failed to set up k3s")?;
+
+                // --- 4. Configure kubectl --- 
+                let kubeconfig_path = configure_kubectl().await.wrap_err("Failed to configure kubectl")?;
+                std::env::set_var("KUBECONFIG", kubeconfig_path.to_string_lossy().to_string());
+
+                // --- 5. Wait for Node Ready --- 
+                update_install_state(InstallationState::WaitingK3s).await;
+                wait_for_node_ready(&kubeconfig_path).await.wrap_err("Timed out waiting for Kubernetes node")?;
+
+                // --- 6. Install Helm --- 
+                install_helm().await.wrap_err("Failed to set up Helm")?;
+
+                // --- 7. Install Tinkerbell Stack --- 
+                update_install_state(InstallationState::DeployingTinkerbell).await;
+                install_tinkerbell_stack(bootstrap_ip, network, &kubeconfig_path).await.wrap_err("Failed to install Tinkerbell stack")?;
+
+                // --- 8. Install Dragonfly Helm Chart (if applicable) --- 
+                // TEMPORARILY COMMENTED OUT as requested
+                // update_install_state(InstallationState::DeployingDragonfly).await;
+                // install_dragonfly_chart(bootstrap_ip, &kubeconfig_path).await.wrap_err("Failed to install Dragonfly chart")?;
+
+                // --- 9. Mark as Ready --- 
+                update_install_state(InstallationState::Ready).await;
+                
+                let elapsed = start_time.elapsed();
+                info!("✅ Dragonfly installation completed in {:.1?}!", elapsed);
+                
+                Ok::<(), color_eyre::Report>(()) // Explicit type for Ok needed inside async block
+            } => { result } // If installation finishes first, return its result
+            
+            // Branch 2: Shutdown Signal Received
+             // Use the original shutdown_rx (which was moved into this async block)
+             _ = shutdown_rx.changed() => {
+                info!("Shutdown signal received during installation, aborting...");
+                // Return an error indicating cancellation
+                Err(color_eyre::eyre::eyre!("Installation cancelled by user (Ctrl+C)"))
             }
-        };
-        
-        // --- 2. Find Available Floating IP ---
-        let bootstrap_ip = find_available_ip(host_ip, network, args.start_offset, args.max_ip_search)
-            .await
-            .wrap_err("Failed to find an available IP address for the bootstrap node")?; // Now `?` is allowed
-        
-        // --- 3. Install k3s ---
-        update_install_state(InstallationState::InstallingK3s).await;
-        install_k3s().await.wrap_err("Failed to set up k3s")?; // `?` allowed
-
-        // --- 4. Configure kubectl ---
-        let kubeconfig_path = configure_kubectl().await.wrap_err("Failed to configure kubectl")?; // `?` allowed
-        std::env::set_var("KUBECONFIG", kubeconfig_path.to_string_lossy().to_string());
-
-        // --- 5. Wait for Node Ready ---
-        update_install_state(InstallationState::WaitingK3s).await;
-        wait_for_node_ready(&kubeconfig_path).await.wrap_err("Timed out waiting for Kubernetes node")?; // `?` allowed
-
-        // --- 6. Install Helm ---
-        install_helm().await.wrap_err("Failed to set up Helm")?; // `?` allowed
-
-        // --- 7. Install Tinkerbell Stack ---
-        update_install_state(InstallationState::DeployingTinkerbell).await;
-        install_tinkerbell_stack(bootstrap_ip, network, &kubeconfig_path).await.wrap_err("Failed to install Tinkerbell stack")?; // `?` allowed
-
-        // --- 8. Install Dragonfly Helm Chart ---
-        // If Dragonfly is deployed via Helm in the future, add state update here
-        // update_install_state(InstallationState::DeployingDragonfly).await;
-        // install_dragonfly_chart(bootstrap_ip, &kubeconfig_path).await.wrap_err("Failed to install Dragonfly helm chart")?;
-
-        // --- 9. Mark as Ready ---
-        update_install_state(InstallationState::Ready).await;
-        
-        let elapsed = start_time.elapsed();
-        // info! is silenced, but keep calculation
-        let _ = elapsed; 
-        // info!("✅ Dragonfly Flight mode installation completed in {:.1?}!", elapsed);
-        
-        Ok(()) // Explicitly return Ok(()) for success
+        }
     });
     
-    // Handle the result of the spawned task
+    // Handle the result of the installation task
     match install_handle.await {
         Ok(Ok(_)) => {
-            // Installation completed successfully in the background
-            // We might want to wait for the server thread indefinitely here
-            // or signal completion somehow if the main process should exit.
-            // For now, just wait for the server.
-             info!("Background installation finished successfully (in theory)."); // This log won't show due to level
+            info!("Background installation task finished successfully.");
+            // Wait for server indefinitely *unless* shutdown is signaled from main
+            // server_handle.await?; // Don't await here, let main handle exit
         }
         Ok(Err(e)) => {
-            // Installation failed in the background
-            error!("Background installation failed: {:#}", e);
-            // Optionally update state to Failed via SSE if needed
-            update_install_state(InstallationState::Failed(e.to_string())).await; // Assuming Failed state exists
+            error!("Background installation task failed: {:#}", e);
+            update_install_state(InstallationState::Failed(e.to_string())).await;
             eprintln!("Installation failed in background: {}", e);
-            // Decide if we should exit the main process or keep the server running
-             // std::process::exit(1);
+             // Propagate error to main
+             return Err(e);
         }
-        Err(e) => {
-            // The spawned task itself panicked or was cancelled
-             error!("Installation task failed to complete: {:#}", e);
-             eprintln!("Installation task failed: {}", e);
-             // Decide if we should exit
-             // std::process::exit(1);
+        Err(e) => { // JoinError (panic or cancellation)
+            error!("Installation task panicked or was cancelled: {:#}", e);
+            update_install_state(InstallationState::Failed("Installer task panicked or was cancelled".to_string())).await;
+            eprintln!("Installation task failed: {}", e);
+             // Return a new error
+            return Err(color_eyre::eyre::eyre!("Installation task did not complete: {}", e));
         }
     }
 
-    // Let the web server thread continue running
-    // The main thread will wait for this to complete (which it won't until shutdown)
-    server_thread.await?;
+    // Main thread now waits for the shutdown signal using the CLONE
+    info!("Installation complete. Server running. Press Ctrl+C to exit.");
+    shutdown_rx_clone.changed().await.ok(); // Wait for signal using the clone
+
+    info!("Shutdown signal received by main install thread. Aborting server task...");
+    server_handle.abort(); // Forcefully stop the server task
+    // Optionally wait a very short time for abort, but don't hang
+    let _ = tokio::time::timeout(std::time::Duration::from_millis(100), server_handle).await;
     
+    info!("Installer exiting cleanly.");
     Ok(())
 }
 
