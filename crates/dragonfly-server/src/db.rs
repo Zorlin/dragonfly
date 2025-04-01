@@ -20,7 +20,7 @@ static DB_POOL: OnceCell<Pool<Sqlite>> = OnceCell::const_new();
 // Initialize the database connection pool
 pub async fn init_db() -> Result<SqlitePool> {
     // Create or open the SQLite database file
-    let db_path = "/var/lib/dragonfly/sqlite.db";
+    let db_path = "sqlite.db";
     
     // Check if the database file exists and create it if not
     if !Path::new(db_path).exists() {
