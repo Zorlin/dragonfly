@@ -41,44 +41,44 @@ pub struct InstallArgs {
 
 // Helper function to update the global installation state and send SSE event
 async fn update_install_state(new_state: InstallationState) {
+    info!("[update_install_state] Called with state: {:?}", new_state);
     // --- Update State --- 
     let state_arc_mutex: Option<Arc<tokio::sync::Mutex<InstallationState>>> = {
-        // Acquire read lock, clone the Arc if it exists, then drop the lock immediately
         INSTALL_STATE_REF.read().unwrap().as_ref().cloned()
     };
 
     if let Some(state_ref) = state_arc_mutex {
-        let mut state = state_ref.lock().await; // Lock the tokio Mutex
+        let mut state = state_ref.lock().await; 
         *state = new_state.clone();
+        info!("[update_install_state] Global state updated.");
     } else {
-        // No warning needed if state ref isn't found
-        // warn!("Install state ref not found, cannot update state");
-        // Don't return early, still try to send event if possible
+         info!("[update_install_state] Install state ref NOT found (UI state won't update globally).");
     }
     
     // --- Send Event --- 
+    info!("[update_install_state] Attempting to get EventManager...");
     let event_manager_arc: Option<Arc<dragonfly_server::event_manager::EventManager>> = {
-         // Acquire read lock, clone the Arc if it exists, then drop the lock immediately
         EVENT_MANAGER_REF.read().unwrap().as_ref().cloned()
     };
 
     if let Some(event_manager) = event_manager_arc {
-        // Prepare the JSON payload for the event
+        info!("[update_install_state] EventManager found. Preparing payload...");
         let payload = serde_json::json!({
             "message": new_state.get_message(),
             "animation": new_state.get_animation_class(),
         });
-        // Use the cloned state's value for the event, not the potentially updated one
         let event_data = format!("install_status:{}", payload.to_string()); 
+        info!("[update_install_state] Sending event data: {}", event_data);
         
-        // Send the event (handle the result silently)
-        if let Err(_e) = event_manager.send(event_data) {
-            // No warning needed if send fails (e.g., channel closed)
-            // warn!("Failed to send install status update event: {}", e);
+        if let Err(e) = event_manager.send(event_data) {
+            // Log error instead of warn, might be more visible
+            error!("[update_install_state] Failed to send event: {}", e);
+        } else {
+            info!("[update_install_state] Event sent successfully.");
         }
     } else {
-         // Keep this warning for now, as missing event manager might be an issue
-         warn!("Event manager ref not found, cannot send install status update event");
+         // Use info! level, consistent with other debug messages here
+         info!("[update_install_state] Event manager ref not found, cannot send install status update event.");
     }
 }
 

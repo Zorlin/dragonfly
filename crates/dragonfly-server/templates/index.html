@@ -20,7 +20,7 @@
                  <div class="text-center">
                      <div id="installer-rocket" class="mb-6 {{ initial_animation_class }}">
                          <svg class="mx-auto h-16 w-16 text-gray-500 rocket-svg" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.59 14.37a6 6 0 01-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 006.16-12.12A14.98 14.98 0 009.631 8.41m5.96 5.96a14.926 14.926 0 01-5.841 2.58m-.119-8.54a6 6 0 00-7.381 5.84h4.8m2.581-5.84a14.927 14.927 0 00-2.58 5.84m2.699 2.7c-.103.021-.207.041-.311.06a15.09 15.09 0 01-2.448-2.448 14.9 14.9 0 01.06-.312m-2.24 2.39a4.493 4.493 0 00-1.757 4.306 4.493 4.493 0 004.306-1.758M16.5 9a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z"></path>
+                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.59 14.37a6 6 0 01-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 006.16-12.12A14.98 14.98 0 009.631 8.41m5.96 5.96a14.926 14.926 0 01-5.841 2.58m-.119-8.54a6 6 0 00-7.381 5.84h4.8m2.581-5.84a14.927 14.927 0 00-2.58 5.84m2.699 2.7c-.103.021-.207.041-.311.06a15.09 15.09 0 01-2.448-2.448 14.9 14.9 0 01.06-.312M16.5 9a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z"></path>
                          </svg>
                      </div>
                      <p id="installer-message" class="mt-4 text-gray-500 dark:text-gray-300">{{ initial_install_message }}</p>
@@ -101,7 +101,7 @@
                     <div class="text-center">
                         <div class="mb-6">
                             <svg class="mx-auto h-16 w-16 text-gray-500 rocket-svg" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.59 14.37a6 6 0 01-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 006.16-12.12A14.98 14.98 0 009.631 8.41m5.96 5.96a14.926 14.926 0 01-5.841 2.58m-.119-8.54a6 6 0 00-7.381 5.84h4.8m2.581-5.84a14.927 14.927 0 00-2.58 5.84m2.699 2.7c-.103.021-.207.041-.311.06a15.09 15.09 0 01-2.448-2.448 14.9 14.9 0 01.06-.312m-2.24 2.39a4.493 4.493 0 00-1.757 4.306 4.493 4.493 0 004.306-1.758M16.5 9a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z"></path>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.59 14.37a6 6 0 01-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 006.16-12.12A14.98 14.98 0 009.631 8.41m5.96 5.96a14.926 14.926 0 01-5.841 2.58m-.119-8.54a6 6 0 00-7.381 5.84h4.8m2.581-5.84a14.927 14.927 0 00-2.58 5.84m2.699 2.7c-.103.021-.207.041-.311.06a15.09 15.09 0 01-2.448-2.448 14.9 14.9 0 01.06-.312M16.5 9a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z"></path>
                             </svg>
                         </div>
                         <p class="mt-4 text-gray-500 dark:text-gray-400">No machines discovered yet.</p>
@@ -120,8 +120,24 @@
 <style>
     .rocket-svg {
         /* Base styles if needed */
-        transition: transform 0.3s ease-out, filter 0.3s ease-out; /* Smooth transitions */
+        /* Remove base transition to avoid potential conflict with animation */
+        /* transition: transform 0.3s ease-out, filter 0.3s ease-out; */ 
     }
+
+    @keyframes scanning { /* Animation for DetectingNetwork */
+        0%, 100% { 
+            transform: scale(1); 
+            filter: drop-shadow(0 0 3px #a855f7); /* Purple glow */
+        }
+        50% { 
+            transform: scale(1.03);
+            filter: drop-shadow(0 0 6px #ec4899); /* Pinkish glow */
+        }
+    }
+    .rocket-scanning .rocket-svg {
+        animation: scanning 2s infinite ease-in-out;
+    }
+
     @keyframes sparks {
         0% { box-shadow: 0 0 0px gold, 0 5px 0px gold; opacity: 1; transform: scale(1); }
         50% { box-shadow: 5px -5px 2px orange, -5px 5px 2px yellow, 0 10px 5px gold; opacity: 0.8; transform: scale(1.05) rotate(2deg); }
@@ -140,16 +156,16 @@
         animation: glow 1.5s infinite ease-in-out;
     }
 
-    @keyframes smokePuff {
+    @keyframes smokePuff { /* Renamed from smoke for clarity */
         0% { transform: translate(-50%, 0) scale(0.5); opacity: 0; }
         50% { opacity: 0.3; }
         100% { transform: translate(-50%, -50px) scale(2); opacity: 0; }
     }
-    /* Add a container for smoke puffs */
+    /* Add a container for smoke puffs - TARGET THE DIV DIRECTLY */
     #installer-rocket.rocket-smoke {
         position: relative; /* Needed for ::after positioning */
     }
-     /* Add multiple smoke puffs with delays */
+     /* Add multiple smoke puffs with delays - TARGET THE DIV DIRECTLY */
     #installer-rocket.rocket-smoke::before, 
     #installer-rocket.rocket-smoke::after {
         content: '';
@@ -162,6 +178,7 @@
         border-radius: 50%;
         filter: blur(8px);
         opacity: 0;
+        /* Use the renamed keyframes */
         animation: smokePuff 2.5s infinite ease-out;
     }
     #installer-rocket.rocket-smoke::after {
@@ -171,7 +188,6 @@
         bottom: -8px;
         left: 55%; /* Slightly offset */
     }
-
 
     @keyframes flicker { /* Engine flicker */
         0%, 100% { filter: drop-shadow(0 3px 3px orange); }
@@ -222,30 +238,63 @@
     // --- INSTALLER SCRIPT --- 
     (function() { // IIFE to scope variables
         console.log("Installation in progress, starting SSE listener...");
+        const rocketClasses = ['rocket-idle', 'rocket-scanning', 'rocket-sparks', 'rocket-glowing', 'rocket-smoke', 'rocket-flicker', 'rocket-fire', 'rocket-shift', 'rocket-error'];
         let evtSource = null;
         let reconnectAttempts = 0;
-        const MAX_RECONNECT_ATTEMPTS = 10;
+        const maxReconnectAttempts = 5;
+        const reconnectDelay = 2000; // ms
 
-        const installerTitleEl = document.getElementById('installer-title');
-        const installerMessageEl = document.getElementById('installer-message');
-        const installerRocketEl = document.getElementById('installer-rocket');
-        const rocketClasses = ['rocket-idle', 'rocket-sparks', 'rocket-glowing', 'rocket-smoke', 'rocket-flicker', 'rocket-fire', 'rocket-shift', 'rocket-error'];
+        // Function to update UI elements
+        function updateUI(status) {
+            if (!status) return;
+
+            // Get element references *inside* the update function
+            const installerMessageEl = document.getElementById('installer-message');
+            const installerRocketEl = document.getElementById('installer-rocket');
+            const installerTitleEl = document.getElementById('installer-title');
+
+            // Check if elements exist before trying to update
+            if (installerMessageEl && status.message) {
+                installerMessageEl.textContent = status.message;
+            }
+            if (installerRocketEl && status.animation) {
+                // Remove all known animation classes first
+                installerRocketEl.classList.remove(...rocketClasses);
+                // Ensure mb-6 is present if it got removed (it shouldn't be if only removing rocketClasses)
+                if (!installerRocketEl.classList.contains('mb-6')) {
+                    installerRocketEl.classList.add('mb-6');
+                }
+                // Add the new animation class(es)
+                status.animation.split(' ').forEach(cls => { 
+                    if (cls) installerRocketEl.classList.add(cls); 
+                });
+            }
+            if (status.animation?.includes('rocket-fire')) {
+                if(installerTitleEl) installerTitleEl.textContent = "Installation Complete!";
+                console.log("Installation complete. Reloading...");
+                if (evtSource) evtSource.close();
+                setTimeout(() => { window.location.reload(); }, 3000);
+            }
+        }
 
         function connectInstallEvents() {
-            if (evtSource) evtSource.close();
-            evtSource = new EventSource('/api/events');
+            if (evtSource) { evtSource.close(); }
+            console.log("Connecting to install SSE...");
+            // ENSURE THIS IS THE CORRECT ENDPOINT
+            evtSource = new EventSource('/api/install-events'); 
+            reconnectAttempts = 0; // Reset attempts on successful connection try
 
-            evtSource.addEventListener('open', () => {
+            evtSource.onopen = function() {
                 console.log("Install SSE connection opened.");
                 reconnectAttempts = 0;
-            });
+            };
 
             evtSource.addEventListener('error', (e) => {
                 console.error("Install SSE error:", e);
                 evtSource.close();
                 reconnectAttempts++;
-                if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-                    const delay = Math.min(1000 * Math.pow(1.5, reconnectAttempts), 30000);
+                if (reconnectAttempts < maxReconnectAttempts) {
+                    const delay = Math.min(reconnectDelay, 30000);
                     console.log(`Attempting SSE reconnect in ${Math.round(delay / 1000)}s`);
                     setTimeout(connectInstallEvents, delay);
                 } else {
@@ -255,27 +304,17 @@
                 }
             });
 
-            evtSource.onmessage = function(event) {
-                if (event.data && event.data.startsWith('install_status:')) {
-                    try {
-                        const statusUpdate = JSON.parse(event.data.substring('install_status:'.length));
-                        if (installerMessageEl && statusUpdate.message) installerMessageEl.textContent = statusUpdate.message;
-                        if (installerRocketEl && statusUpdate.animation) {
-                            installerRocketEl.classList.remove(...rocketClasses);
-                            statusUpdate.animation.split(' ').forEach(cls => { if (cls) installerRocketEl.classList.add(cls); });
-                        }
-                        if (statusUpdate.animation?.includes('rocket-fire')) {
-                            if(installerTitleEl) installerTitleEl.textContent = "Installation Complete!";
-                            console.log("Installation complete. Reloading...");
-                            evtSource.close();
-                            setTimeout(() => { window.location.reload(); }, 3000);
-                        }
-                    } catch (e) { console.error("SSE JSON parse error:", e, "Data:", event.data); }
-                }
-            };
+            evtSource.addEventListener('install_status', function(event) {
+                try {
+                    const statusUpdate = JSON.parse(event.data);
+                    console.log("Received 'install_status' SSE event:", statusUpdate);
+                    updateUI(statusUpdate);
+                } catch (e) { console.error("SSE JSON parse error:", e, "Raw data:", event.data); }
+            });
         }
-        // Connect on DOMContentLoaded
-        document.addEventListener('DOMContentLoaded', connectInstallEvents);
+        
+        // Connect immediately, don't wait for DOMContentLoaded
+        connectInstallEvents();
         window.addEventListener('beforeunload', () => { if (evtSource) evtSource.close(); });
     })(); // End IIFE
     </script>

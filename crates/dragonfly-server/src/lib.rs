@@ -82,26 +82,42 @@ pub enum InstallationState {
 impl InstallationState {
     pub fn get_message(&self) -> &str {
         match self {
+            // Phase 1
             InstallationState::WaitingSudo => "Dragonfly is ready to install. Enter your password in your install window — let's do this.",
+            // Phase (Implied, added previously)
             InstallationState::DetectingNetwork => "Dragonfly is detecting network configuration...",
+            // Phase 2
             InstallationState::InstallingK3s => "Dragonfly is installing k3s.",
+            // Phase 3
             InstallationState::WaitingK3s => "Dragonfly is waiting for k3s to be ready.",
+            // Phase 4
             InstallationState::DeployingTinkerbell => "Dragonfly is deploying Tinkerbell.",
+            // Phase 5
             InstallationState::DeployingDragonfly => "Dragonfly is deploying... Dragonfly.",
+            // Phase 6
             InstallationState::Ready => "Dragonfly is ready.",
-            InstallationState::Failed(_) => "Installation failed. Check installer logs for details.", // Message for failed state
+            // Error
+            InstallationState::Failed(_) => "Installation failed. Check installer logs for details.",
         }
     }
     pub fn get_animation_class(&self) -> &str {
         match self {
+            // Phase 1 (Waiting) -> Idle (no specific animation)
             InstallationState::WaitingSudo => "rocket-idle",
+            // Phase (Implied, added previously) -> Scanning (pulse/glow)
             InstallationState::DetectingNetwork => "rocket-scanning",
+            // Phase 2 (Installing K3s) -> Sparks
             InstallationState::InstallingK3s => "rocket-sparks",
+            // Phase 3 (Waiting K3s) -> Glowing
             InstallationState::WaitingK3s => "rocket-glowing",
+            // Phase 4 (Deploying Tinkerbell) -> Smoke
             InstallationState::DeployingTinkerbell => "rocket-smoke",
+            // Phase 5 (Deploying Dragonfly) -> Flicker
             InstallationState::DeployingDragonfly => "rocket-flicker",
+            // Phase 6 (Ready) -> Fire + Shift (lift-off)
             InstallationState::Ready => "rocket-fire rocket-shift",
-            InstallationState::Failed(_) => "rocket-error", // CSS class for failed state
+            // Error -> Error state
+            InstallationState::Failed(_) => "rocket-error",
         }
     }
 }
@@ -130,20 +146,29 @@ pub async fn run() -> anyhow::Result<()> {
     let setup_mode = std::env::var("DRAGONFLY_SETUP_MODE").is_ok();
 
     // --- Populate Install State IMMEDIATELY if needed --- 
-    if is_installation_server { // Use the flag directly
+    if is_installation_server { 
         let state = Arc::new(Mutex::new(InstallationState::WaitingSudo));
-        match INSTALL_STATE_REF.write() { // Use match for explicit error handling
-            Ok(mut global_ref) => {
-                *global_ref = Some(state.clone());
-                // eprintln!("[DEBUG lib.rs] INSTALL_STATE_REF populated at start."); 
-            },
-            Err(e) => {
-                // Use eprintln! as tracing might not be set up
-                eprintln!("CRITICAL: Failed to acquire write lock for INSTALL_STATE_REF at start: {}. Installation UI may not update.", e);
-            }
+        match INSTALL_STATE_REF.write() { 
+            Ok(mut global_ref) => { *global_ref = Some(state.clone()); },
+            Err(e) => { eprintln!("CRITICAL: Failed ... INSTALL_STATE_REF ...: {}", e); }
         }
     }
-    // ----------------------------------------------------
+    
+    // --- Create and Store Event Manager EARLY --- 
+    // Create event manager (needed even if installing for SSE updates)
+    let event_manager = Arc::new(EventManager::new());
+    // Store the event manager in the global static ASAP
+    match EVENT_MANAGER_REF.write() { 
+        Ok(mut global_ref) => { 
+            *global_ref = Some(event_manager.clone());
+            // eprintln!("[DEBUG lib.rs] EVENT_MANAGER_REF populated.");
+        }, 
+        Err(e) => { 
+            // Use eprintln! as tracing might not be set up
+            eprintln!("CRITICAL: Failed to acquire write lock for EVENT_MANAGER_REF: {}. SSE events may not send.", e);
+        }
+    }
+    // -------------------------------------------
 
     // --- COMPLETELY REMOVED LOGGING INITIALIZATION FROM LIB.RS --- 
     // Calls like info!() etc. will use whatever global dispatcher exists (or none).
@@ -166,27 +191,24 @@ pub async fn run() -> anyhow::Result<()> {
     // --- Start OS Templates Initialization --- 
     if !is_installation_server { // Only run if NOT server-during-install
         info!("Starting OS templates initialization in background...");
-        tokio::spawn(async move { // Logs inside here will only appear if not server-during-install
+        let event_manager_clone = event_manager.clone(); // Clone for the task
+        tokio::spawn(async move { 
             match os_templates::init_os_templates().await {
                 Ok(_) => { info!("OS templates initialized successfully"); },
                 Err(e) => { warn!("Failed to initialize OS templates: {}", e); }
             }
+            // Send event if needed, maybe?
+            let _ = event_manager_clone.send("templates_ready".to_string());
         });
     } // End conditional OS template init
 
     // --- Graceful Shutdown Setup --- 
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
+    let (shutdown_tx, shutdown_rx) = watch::channel(());
 
     // Start the timing cleanup task
     tinkerbell::start_timing_cleanup_task(shutdown_rx.clone()).await; // Essential
-
-    // Create event manager
-    let event_manager = Arc::new(EventManager::new()); // Essential
-
-    // Store the event manager in the global static
-    if let Ok(mut global_ref) = EVENT_MANAGER_REF.write() { // Essential
-        *global_ref = Some(event_manager.clone());
-    }
+    
+    // Event Manager already created and stored above
 
     // Start the workflow polling task
     if !is_installation_server { // Conditional Logging
@@ -302,7 +324,7 @@ pub async fn run() -> anyhow::Result<()> {
     // Create application state
     let app_state = AppState {
         settings: Arc::new(Mutex::new(settings)),
-        event_manager: event_manager.clone(), // Use cloned event_manager
+        event_manager: event_manager.clone(), // Use the one created earlier
         setup_mode,
         first_run,
         shutdown_tx: shutdown_tx.clone(),

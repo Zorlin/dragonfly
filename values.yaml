@@ -2,7 +2,7 @@ global:
   trustedProxies:
     - "10.42.0.0/24"
     - "10.7.1.200/24"
-  publicIP: 10.7.1.208
+  publicIP: 10.7.1.211
 smee:
   dhcp:
     allowUnknownHosts: true
@@ -10,7 +10,7 @@ smee:
     httpIPXE:
       scriptUrl:
         scheme: "http"
-        host: "10.7.1.208"
+        host: "10.7.1.211"
         port: 3000
         path: "/"
   additionalArgs:

@@ -26,6 +26,9 @@ use crate::{
     InstallationState
 };
 use std::sync::Arc;
+use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::StreamExt;
+use tokio::sync::broadcast::error::RecvError;
 
 pub fn api_router() -> Router<crate::AppState> {
     Router::new()
@@ -49,6 +52,7 @@ pub fn api_router() -> Router<crate::AppState> {
         .route("/machines/{id}/workflow-progress", get(get_workflow_progress))
         .route("/heartbeat", get(heartbeat))
         .route("/sse-events", get(sse_events))
+        .route("/install-events", get(install_events_sse))
         .route("/install/status", get(get_install_status))
 }
 
@@ -1390,4 +1394,41 @@ async fn get_install_status() -> Response {
             (StatusCode::OK, Json(payload)).into_response()
         }
     }
+}
+
+// Rename the SSE handler function to match the route
+async fn install_events_sse(
+    State(state): State<AppState>,
+) -> Sse<impl Stream<Item = std::result::Result<Event, Infallible>>> {
+    info!("SSE client connected for install events");
+    let rx = state.event_manager.subscribe();
+
+    // Use the same stream::unfold pattern as the working sse_events handler
+    let stream = stream::unfold(rx, |mut rx| async move {
+        eprintln!("[SSE unfold] Waiting for event...");
+        match rx.recv().await {
+            Ok(event_string) => {
+                eprintln!("[SSE unfold] Received event string: {}", event_string);
+                // Installer sends events like "install_status:{...json...}"
+                // We should pass the raw data part to the client, setting the event type.
+                let event_type = event_string.split(':').next().unwrap_or("message");
+                let event_data = event_string.split_once(':').map_or("", |(_type, data)| data);
+                eprintln!("[SSE unfold] Parsed type: {}, data: {}", event_type, event_data);
+
+                let sse_event = Event::default()
+                    .event(event_type) // e.g., "install_status"
+                    .data(event_data); // The JSON string payload
+                
+                eprintln!("[SSE unfold] Yielding Ok(event)...");
+                Some((Ok(sse_event), rx))
+            },
+            Err(e) => { // Use e to log the specific error
+                eprintln!("[SSE unfold] Received error: {:?}. Ending stream.", e);
+                None // End stream on recv error (e.g., channel closed)
+            }
+        }
+    });
+
+    Sse::new(stream)
+        .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)).text("ping"))
 }
