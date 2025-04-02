@@ -2,10 +2,11 @@ use std::fs;
 use std::io;
 use std::path::Path;
 use std::sync::Arc;
+use std::collections::HashMap;
 
 use argon2::{password_hash::SaltString, Argon2, PasswordHasher, PasswordVerifier};
 use axum::{
-    extract::{Form, Extension, Request, State},
+    extract::{Form, Extension, Request, State, Query},
     http::{StatusCode},
     middleware::Next,
     response::{Html, IntoResponse, Redirect, Response},
@@ -227,14 +228,33 @@ pub fn auth_router() -> Router<crate::AppState> {
         .route("/login", get(login_page))
         .route("/login", post(login_handler))
         .route("/logout", post(logout))
+        .route("/login-test", get(login_test_handler))
 }
 
 // Remove Askama derives, add Serialize
 #[derive(Serialize)]
-struct LoginTemplate {}
+struct LoginTemplate {
+    is_demo_mode: bool,
+    error: Option<String>,
+}
 
-async fn login_page(State(app_state): State<crate::AppState>) -> impl IntoResponse {
-    let template = LoginTemplate {};
+async fn login_page(
+    State(app_state): State<crate::AppState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    // Check if we're in demo mode
+    let is_demo_mode = std::env::var("DRAGONFLY_DEMO_MODE").is_ok();
+    
+    // Check for error parameter
+    let error = params.get("error").cloned();
+    if let Some(err) = &error {
+        info!("Login page loaded with error: {}", err);
+    }
+    
+    let template = LoginTemplate {
+        is_demo_mode,
+        error,
+    };
     
     // Get the environment based on the mode (static or reloading)
     let render_result = match &app_state.template_env {
@@ -273,27 +293,70 @@ async fn login_handler(
     mut auth_session: AuthSession,
     Form(form): Form<LoginForm>,
 ) -> Response {
-    let credentials = Credentials {
-        username: form.username,
-        password: Some(form.password),
-        password_hash: String::new(), // This will be ignored during authentication
-    };
-
-    let user = match auth_session.authenticate(credentials).await {
-        Ok(Some(user)) => user,
-        Ok(None) => {
-            return Redirect::to("/login?error=invalid_credentials").into_response();
+    // Check if we're in demo mode
+    let is_demo_mode = std::env::var("DRAGONFLY_DEMO_MODE").is_ok();
+    
+    if is_demo_mode {
+        // In demo mode, simply create a demo user and force-login without authentication
+        info!("Demo mode: accepting any credentials for login");
+        
+        // Create a simple admin user 
+        let username = if form.username.trim().is_empty() { "demo_user".to_string() } else { form.username.clone() };
+        
+        // Create a demo admin user - use the same hash as lib.rs creates for demo credentials
+        let demo_user = Admin {
+            id: 1,
+            username,
+            password_hash: "$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHRzb21lc2FsdA$WrTpFYXQY6pZu0K+uskWZwl8fOk0W4Dj/pXGXJ9qPXc".to_string(),
+        };
+        
+        // Hard-set the user session
+        info!("Demo mode: Setting session for user '{}'", demo_user.username);
+        match auth_session.login(&demo_user).await {
+            Ok(_) => {
+                info!("Demo mode: Login successful for user '{}'", demo_user.username);
+                return Redirect::to("/").into_response();
+            },
+            Err(e) => {
+                error!("Demo mode: Failed to set user session: {}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR, 
+                    "Internal error setting demo session"
+                ).into_response();
+            }
         }
-        Err(_) => {
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
-
-    if auth_session.login(&user).await.is_err() {
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
-
-    Redirect::to("/").into_response()
+    
+    // Regular authentication flow for non-demo mode
+    info!("Processing login request for user '{}'", form.username);
+    
+    let credentials = Credentials {
+        username: form.username.clone(),
+        password: Some(form.password),
+        password_hash: String::new(),
+    };
+    
+    // Try to authenticate the user
+    match auth_session.authenticate(credentials).await {
+        Ok(Some(user)) => {
+            // Successfully authenticated, set up the session
+            if let Err(e) = auth_session.login(&user).await {
+                error!("Failed to create session after successful auth: {}", e);
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+            
+            info!("Login successful for user '{}'", user.username);
+            Redirect::to("/").into_response()
+        }
+        Ok(None) => {
+            info!("Authentication failed for user '{}'", form.username);
+            Redirect::to("/login?error=invalid_credentials").into_response()
+        }
+        Err(e) => {
+            error!("Error during authentication: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
 
 async fn logout(mut auth_session: AuthSession) -> Response {
@@ -312,36 +375,40 @@ pub async fn auth_middleware(
 ) -> Response {
     let path = req.uri().path();
     
-    // Always allow access to static files and authentication-related routes
-    // regardless of settings
-    if path.starts_with("/js/") || 
+    // Always allow these paths regardless of authentication
+    if path.starts_with("/static/") || 
        path.starts_with("/css/") || 
+       path.starts_with("/js/") || 
        path.starts_with("/images/") || 
        path == "/login" || 
-       path == "/logout" {
+       path == "/logout" ||
+       path == "/favicon.ico" ||
+       path == "/login-test" {  // Explicitly allow login-test
         return next.run(req).await;
     }
     
-    // Always allow access to API endpoints (they have their own auth checks)
+    // Always allow API endpoints (they have their own auth)
     if path.starts_with("/api/") {
         return next.run(req).await;
     }
     
-    // Check if login is required site-wide
-    let require_login = {
-        let settings_guard = settings.lock().await;
-        settings_guard.require_login
-    };
+    // Get authentication status
+    let is_authenticated = auth_session.user.is_some();
+    let is_demo_mode = std::env::var("DRAGONFLY_DEMO_MODE").is_ok();
     
-    if require_login {
-        // When login is required, check authentication for ALL other paths
-        if auth_session.user.is_none() {
-            info!("Auth required for path: {}, redirecting to login", path);
-            return Redirect::to("/login").into_response();
-        }
+    // Always log authentication status and path in demo mode
+    if is_demo_mode {
+        info!("Demo mode request: path={}, authenticated={}", path, is_authenticated);
     }
     
-    // User is authenticated or login not required, proceed
+    // Check if login is required 
+    if !is_authenticated {
+        // In all cases, redirect to login if not authenticated
+        info!("User not authenticated, redirecting to login page");
+        return Redirect::to("/login").into_response();
+    }
+    
+    // User is authenticated, proceed
     next.run(req).await
 }
 
@@ -457,10 +524,75 @@ pub async fn save_settings(settings: &Settings) -> io::Result<()> {
 
 // Add pub to make require_admin public
 pub fn require_admin(auth_session: &AuthSession) -> Result<(), Response> {
+    // Check if we're in demo mode
+    let is_demo_mode = std::env::var("DRAGONFLY_DEMO_MODE").is_ok();
+    
+    // In demo mode, allow access to admin actions even if not authenticated
+    // (should not happen since we force login, but just in case)
+    if is_demo_mode && auth_session.user.is_some() {
+        return Ok(());
+    }
+    
     if auth_session.user.is_none() {
         let body = serde_json::json!({ "error": "Unauthorized", "message": "Admin authentication required" });
         Err((StatusCode::UNAUTHORIZED, Json(body)).into_response())
     } else {
         Ok(())
     }
+}
+
+// Debug endpoint to verify login status
+async fn login_test_handler(auth_session: AuthSession) -> impl IntoResponse {
+    let is_demo_mode = std::env::var("DRAGONFLY_DEMO_MODE").is_ok();
+    let is_authenticated = auth_session.user.is_some();
+    
+    let username = auth_session.user
+        .as_ref()
+        .map(|user| user.username.clone())
+        .unwrap_or_else(|| "Not logged in".to_string());
+    
+    let html = format!(
+        r#"<!DOCTYPE html>
+        <html>
+        <head>
+            <title>Login Test</title>
+            <style>
+                body {{ font-family: Arial, sans-serif; padding: 2rem; }}
+                .container {{ max-width: 800px; margin: 0 auto; }}
+                .panel {{ background-color: #f5f5f5; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem; }}
+                .demo {{ background-color: #fff3cd; }}
+                h1 {{ color: #333; }}
+                .label {{ font-weight: bold; margin-right: 0.5rem; }}
+                .success {{ color: green; }}
+                .error {{ color: red; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>Login Test Page</h1>
+                
+                <div class="panel {demo_class}">
+                    <div><span class="label">Demo Mode:</span> {is_demo}</div>
+                    <div><span class="label">Session Status:</span> 
+                         <span class="{auth_class}">{is_auth}</span>
+                    </div>
+                    <div><span class="label">Username:</span> {username}</div>
+                </div>
+                
+                <div>
+                    <a href="/">Go to Dashboard</a> | 
+                    <a href="/login">Go to Login</a>
+                </div>
+            </div>
+        </body>
+        </html>
+        "#,
+        demo_class = if is_demo_mode { "demo" } else { "" },
+        is_demo = if is_demo_mode { "Enabled" } else { "Disabled" },
+        is_auth = if is_authenticated { "Authenticated" } else { "Not Authenticated" },
+        auth_class = if is_authenticated { "success" } else { "error" },
+        username = username
+    );
+    
+    Html(html)
 }

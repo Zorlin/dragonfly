@@ -23,6 +23,26 @@
             letter-spacing: 0.05em;
             opacity: 0.9;
         }
+        .demo-banner {
+            background-color: rgba(254, 240, 138, 0.9); /* Yellow-100 with opacity */
+            border-left: 4px solid #eab308; /* Yellow-500 */
+            color: #854d0e; /* Yellow-800 */
+            padding: 1rem;
+            margin-bottom: 1rem;
+            border-radius: 0.375rem;
+            font-size: 0.875rem;
+            line-height: 1.25rem;
+        }
+        .error-banner {
+            background-color: rgba(254, 202, 202, 0.9); /* Red-100 with opacity */
+            border-left: 4px solid #ef4444; /* Red-500 */
+            color: #b91c1c; /* Red-700 */
+            padding: 1rem;
+            margin-bottom: 1rem;
+            border-radius: 0.375rem;
+            font-size: 0.875rem;
+            line-height: 1.25rem;
+        }
     </style>
 </head>
 <body class="h-full">
@@ -36,6 +56,26 @@
 
         <div class="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
             <div class="login-container py-8 px-4 sm:rounded-lg sm:px-10">
+                {% if is_demo_mode %}
+                <div class="demo-banner">
+                    <p><strong>Dragonfly is running in demo mode.</strong></p>
+                    <p class="mt-1">You can login with any credentials, as this is a simulated environment and no actions affect real machines.</p>
+                </div>
+                {% endif %}
+
+                <!-- Error message display -->
+                {% if error %}
+                <div class="error-banner mb-4">
+                    <p><strong>Login Error:</strong> 
+                    {% if error == "invalid_credentials" %}
+                        Invalid credentials. Please try again.
+                    {% else %}
+                        {{ error }}
+                    {% endif %}
+                    </p>
+                </div>
+                {% endif %}
+
                 <form class="space-y-6" action="/login" method="POST">
                     <div>
                         <label for="username" class="block text-sm font-medium text-gray-700">

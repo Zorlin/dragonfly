@@ -14,7 +14,7 @@ use tokio::sync::watch;
 use anyhow::Context;
 use listenfd::ListenFd;
 
-use crate::auth::{AdminBackend, auth_router, load_credentials, generate_default_credentials, load_settings, Settings};
+use crate::auth::{AdminBackend, auth_router, load_credentials, generate_default_credentials, load_settings, Settings, Credentials};
 use crate::db::init_db;
 use crate::event_manager::EventManager;
 
@@ -176,6 +176,11 @@ pub async fn run() -> anyhow::Result<()> {
     // They will either be logged (if main.rs init or RUST_LOG) or dropped (if Dispatch::none).
 
     let _is_install_mode = is_installation_server;
+    let is_demo_mode = std::env::var("DRAGONFLY_DEMO_MODE").is_ok();
+    
+    if is_demo_mode {
+        info!("Starting server in DEMO MODE - no hardware will be touched");
+    }
 
     // Initialize the database 
     let db_pool = init_db().await?; // DB init is essential
@@ -215,18 +220,28 @@ pub async fn run() -> anyhow::Result<()> {
     tinkerbell::start_workflow_polling_task(event_manager.clone(), shutdown_rx.clone()).await; // Essential
 
     // Load or generate admin credentials
-    let credentials = match load_credentials().await { // Essential logic
-        Ok(creds) => {
-             if !is_installation_server { info!("Loaded existing admin credentials"); } // Conditional Log
-            creds
-        },
-        Err(_) => {
-            if !is_installation_server { info!("No admin credentials found, generating default credentials"); } // Cond Log
-            match generate_default_credentials().await { // Essential logic
-                Ok(creds) => creds,
-                Err(e) => {
-                    eprintln!("CRITICAL: Failed to generate default credentials: {}", e);
-                    return Err(anyhow::anyhow!("Failed to generate default credentials: {}", e));
+    let credentials = if is_demo_mode {
+        // In demo mode, use a special credentials object
+        info!("Demo mode: Using simplified admin credentials");
+        Credentials {
+            username: "admin".to_string(),
+            password: None,
+            password_hash: "$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHRzb21lc2FsdA$WrTpFYXQY6pZu0K+uskWZwl8fOk0W4Dj/pXGXJ9qPXc".to_string(), // demo hash
+        }
+    } else {
+        match load_credentials().await { // Essential logic
+            Ok(creds) => {
+                 if !is_installation_server { info!("Loaded existing admin credentials"); } // Conditional Log
+                creds
+            },
+            Err(_) => {
+                if !is_installation_server { info!("No admin credentials found, generating default credentials"); } // Cond Log
+                match generate_default_credentials().await { // Essential logic
+                    Ok(creds) => creds,
+                    Err(e) => {
+                        eprintln!("CRITICAL: Failed to generate default credentials: {}", e);
+                        return Err(anyhow::anyhow!("Failed to generate default credentials: {}", e));
+                    }
                 }
             }
         }
@@ -333,13 +348,18 @@ pub async fn run() -> anyhow::Result<()> {
     let session_store = SqliteStore::new(db_pool.clone()); // Essential
     session_store.migrate().await?;
 
-    // Session layer setup
-    let session_layer = SessionManagerLayer::new(session_store) // Essential
-        .with_secure(false);
+    // Session layer setup - use very permissive settings to ensure consistent behavior
+    let session_layer = SessionManagerLayer::new(session_store)
+        .with_secure(false)
+        .with_same_site(tower_sessions::cookie::SameSite::Lax)
+        .with_http_only(false);  // Allow JavaScript access to cookies
 
-    // Auth backend/layer setup
-    let backend = AdminBackend::new(credentials); // Essential
-    let auth_layer = AuthManagerLayerBuilder::new(backend, session_layer).build();
+    // Auth backend setup
+    let backend = AdminBackend::new(credentials);
+    
+    // Build the auth layer
+    let auth_layer = AuthManagerLayerBuilder::new(backend, session_layer)
+        .build();
 
     // --- Build Router --- 
     let app = Router::new()
