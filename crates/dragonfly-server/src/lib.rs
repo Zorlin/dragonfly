@@ -443,29 +443,47 @@ pub async fn run() -> anyhow::Result<()> {
 
     // --- Shutdown Signal Handling --- 
     let shutdown_signal = async move {
-        let ctrl_c = async { tokio::signal::ctrl_c().await.expect("Failed Ctrl+C handler"); };
+        // Set up a simple future for Ctrl+C
+        let ctrl_c = async { 
+            tokio::signal::ctrl_c().await.unwrap_or_else(|e| {
+                error!("Failed to listen for Ctrl+C: {}", e);
+            });
+            info!("Received Ctrl+C");
+            println!("\nShutting down...");
+        };
+        
         #[cfg(unix)]
-        let terminate = async { signal(SignalKind::terminate()).expect("Failed signal handler").recv().await; };
-        #[cfg(not(unix))] let terminate = std::future::pending::<()>();
+        let terminate = async { 
+            if let Ok(mut signal) = signal(SignalKind::terminate()) {
+                signal.recv().await;
+                info!("Received SIGTERM");
+                println!("\nReceived SIGTERM, shutting down...");
+            }
+        };
+        
+        #[cfg(not(unix))] 
+        let terminate = std::future::pending::<()>();
+        
+        // Wait for any signal
         tokio::select! {
-            _ = ctrl_c => { info!("Received SIGINT (Ctrl+C), exiting..."); },
-            _ = terminate => { info!("Received SIGTERM, exiting..."); },
-            _ = async {
-                if let Ok(mut sigusr1) = signal(SignalKind::user_defined1()) {
-                    sigusr1.recv().await;
-                    info!("Received SIGUSR1 for handoff");
-                    true
-                } else {
-                    std::future::pending::<bool>().await
-                }
-            } => { info!("Initiating handoff based on SIGUSR1"); }
+            _ = ctrl_c => {},
+            _ = terminate => {},
         }
-        // Send shutdown signal via the watch channel
-        shutdown_tx.send(()).ok(); // Ignore error if receiver dropped
-        info!("Shutdown signal sent");
+        
+        // Send the shutdown signal
+        let _ = shutdown_tx.send(());
+        info!("Sending shutdown signal to all components");
+        
+        // Force exit after 5 seconds if graceful shutdown hasn't completed
+        tokio::spawn(async {
+            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+            println!("Forcing exit after timeout");
+            std::process::exit(0);
+        });
     };
 
-    // Start serving
+    // Start serving with graceful shutdown
+    println!("Server started, press Ctrl+C to stop");
     axum::serve(listener, app) // Essential
         .with_graceful_shutdown(shutdown_signal)
         .await

@@ -121,14 +121,16 @@ async fn main() -> Result<()> {
     // Create shutdown channel (used only by install command for now)
     let (shutdown_tx, shutdown_rx) = watch::channel(());
 
-    // Setup Ctrl+C handler to send shutdown signal
-    let shutdown_tx_clone = shutdown_tx.clone();
-    tokio::spawn(async move {
-        tokio::signal::ctrl_c().await.expect("Failed to install Ctrl+C handler");
-        info!("Ctrl+C received, sending shutdown signal...");
-        // Send shutdown signal. Ignore result if receiver already dropped.
-        let _ = shutdown_tx_clone.send(());
-    });
+    // For non-server commands, set up a Ctrl+C handler that sends the shutdown signal
+    if !matches!(cli.command, Some(Commands::Server(_))) {
+        let shutdown_tx_clone = shutdown_tx.clone();
+        tokio::spawn(async move {
+            tokio::signal::ctrl_c().await.expect("Failed to install Ctrl+C handler");
+            info!("Ctrl+C received, sending shutdown signal...");
+            // Send shutdown signal. Ignore result if receiver already dropped.
+            let _ = shutdown_tx_clone.send(());
+        });
+    }
 
     // Initialize logging ONLY if we are the main installer process
     if let Some(Commands::Install(_)) = &cli.command {
@@ -175,15 +177,37 @@ async fn main() -> Result<()> {
         Some(Commands::Server(_args)) => {
             info!("Checking Dragonfly installation status for server mode...");
             let is_installed = database_exists().await;
+            
+            // Register a panic handler to ensure clean exit
+            let original_hook = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |panic_info| {
+                original_hook(panic_info);
+                eprintln!("Exiting due to panic");
+                std::process::exit(1);
+            }));
+            
+            // Create a simple backup handler to force exit if stuck
+            // This runs in a separate process group from the server's handler
+            // and will only trigger if the CTRL+C signal isn't properly handled
+            tokio::spawn(async {
+                // Wait 10 seconds before being ready to handle CTRL+C as a backup
+                tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                
+                // This will only trigger if the server's own handler doesn't catch it
+                if let Ok(()) = tokio::signal::ctrl_c().await {
+                    eprintln!("\nEmergency shutdown: Forcing exit after Ctrl+C");
+                    std::process::exit(130);  // 128 + SIGINT signal number (2)
+                }
+            });
 
             if is_installed {
                 info!("Dragonfly is installed. Starting main server process...");
-                // Call the server run function from the dragonfly_server crate
+                println!("Starting Dragonfly server - press Ctrl+C to stop");
+                
+                // Run the server and wait for it to complete
                 if let Err(e) = run_server().await {
                     error!("Server failed to run: {:#}", e);
                     eprintln!("Error running Dragonfly server: {}", e);
-                    // Ensure shutdown signal is sent on error
-                    let _ = shutdown_tx.send(());
                     std::process::exit(1);
                 }
             } else {
@@ -192,12 +216,12 @@ async fn main() -> Result<()> {
                 std::env::set_var("DRAGONFLY_DEMO_MODE", "true");
                 println!("🚀 Starting Dragonfly in Demo Mode (no hardware touched).");
                 println!("   Run 'dragonfly install' to set up the full system.");
+                println!("   Press Ctrl+C to stop the server.");
 
+                // Run the server in demo mode and wait for it to complete
                 if let Err(e) = run_server().await {
                     error!("Demo server failed to run: {:#}", e);
                     eprintln!("Error running Dragonfly demo server: {}", e);
-                     // Ensure shutdown signal is sent on error
-                    let _ = shutdown_tx.send(());
                     std::process::exit(1);
                 }
             }

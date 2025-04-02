@@ -311,8 +311,10 @@ fn create_demo_machine(
     let mut mac = base_mac;
     mac[5] = mac_suffix;
     
-    // Use new_v4 instead of nonexistent new_v5 - since these are demo machines, we don't need deterministic UUIDs
-    let uuid = Uuid::new_v4();
+    // Use UUID v5 to create a deterministic UUID from the hostname
+    // This allows machine details to be found consistently in demo mode
+    let namespace = uuid::Uuid::NAMESPACE_DNS;
+    let uuid = uuid::Uuid::new_v5(&namespace, hostname.as_bytes());
     let created_at = base_time + chrono::Duration::minutes(mac_suffix as i64);
     let updated_at = created_at + chrono::Duration::hours(1);
     
@@ -553,7 +555,8 @@ pub async fn machine_details(
             // If in demo mode, find the machine in our demo dataset
             if is_demo_mode {
                 let demo_machines = generate_demo_machines();
-                if let Some(machine) = demo_machines.iter().find(|m| m.id == uuid) {
+                // Use string comparison for more reliable matching in templates
+                if let Some(machine) = demo_machines.iter().find(|m| m.id.to_string() == uuid.to_string()) {
                     let created_at_formatted = machine.created_at.format("%Y-%m-%d %H:%M:%S UTC").to_string();
                     let updated_at_formatted = machine.updated_at.format("%Y-%m-%d %H:%M:%S UTC").to_string();
                     

@@ -12,8 +12,8 @@
     <div class="bg-white dark:bg-[#1e293b] shadow overflow-hidden sm:rounded-lg mb-6 border border-transparent dark:border-white dark:border-opacity-5 dark:shadow-lg">
         <div class="px-4 py-5 sm:px-6 flex justify-between items-center">
             <h3 class="text-lg leading-6 font-medium text-gray-900 dark:text-white">
-                {% if machine.hostname.is_some() %}
-                    {{ machine.hostname.as_ref().unwrap() }}
+                {% if machine.hostname %}
+                    {{ machine.hostname }}
                 {% else %}
                     {{ machine.ip_address }}
                 {% endif %}
@@ -45,7 +45,7 @@
 
         <!-- Deployment Progress Section - Only shown when machine is installing OS -->
         {% if machine.status == "InstallingOS" %}
-          {% if workflow_info.is_some() %}
+          {% if workflow_info %}
             <div class="border-t border-gray-200 dark:border-gray-700 p-4 sm:p-6 bg-yellow-50 dark:bg-yellow-900/10"
                  id="workflow-progress-container"
                  hx-sse="connect:/api/events"
@@ -53,10 +53,10 @@
                 <div class="mb-4">
                     <h3 class="text-lg font-medium leading-6 text-gray-900 dark:text-yellow-100">Deployment Progress</h3>
                     <p class="mt-1 text-sm text-gray-500 dark:text-gray-300">
-                        Template: <span class="font-semibold">{{ workflow_info.as_ref().unwrap().template_name }}</span> 
-                        {% if workflow_info.as_ref().unwrap().current_action.is_some() %}
-                            • Current action: {{ workflow_info.as_ref().unwrap().current_action.as_ref().unwrap() }}
-                            {% if workflow_info.as_ref().unwrap().current_action.as_ref().unwrap() == "Completed via kexec detection" %}
+                        Template: <span class="font-semibold">{{ workflow_info.template_name }}</span> 
+                        {% if workflow_info.current_action %}
+                            • Current action: {{ workflow_info.current_action }}
+                            {% if workflow_info.current_action == "Completed via kexec detection" %}
                                 <span class="ml-2 italic">(Auto-detected successful deployment)</span>
                             {% endif %}
                         {% endif %}
@@ -67,12 +67,12 @@
                     <div class="flex mb-2 items-center justify-between">
                         <div>
                             <span class="text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full 
-                                {% if workflow_info.as_ref().unwrap().state == "STATE_FAILED" %}
+                                {% if workflow_info.state == "STATE_FAILED" %}
                                     text-red-600 bg-red-200 dark:text-red-200 dark:bg-red-800/30
                                 {% else %}
                                     text-yellow-600 bg-yellow-200 dark:text-yellow-200 dark:bg-yellow-800/30
                                 {% endif %}">
-                                {% if workflow_info.as_ref().unwrap().state == "STATE_FAILED" %}
+                                {% if workflow_info.state == "STATE_FAILED" %}
                                     Failed
                                 {% else %}
                                     In Progress
@@ -81,13 +81,13 @@
                         </div>
                         <div class="text-right">
                             <span class="text-xs font-semibold inline-block text-yellow-600 dark:text-yellow-200">
-                                {{ workflow_info.as_ref().unwrap().progress }}% Complete
+                                {{ workflow_info.progress }}% Complete
                             </span>
                         </div>
                     </div>
                     <div class="overflow-hidden h-2 mb-4 text-xs flex rounded bg-yellow-200 dark:bg-yellow-700/30">
-                        <div class="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center {% if workflow_info.as_ref().unwrap().state == "STATE_FAILED" %}bg-red-500 dark:bg-red-600{% else %}bg-yellow-500 dark:bg-yellow-600{% endif %}" 
-                             style="width:{{ workflow_info.as_ref().unwrap().progress }}%">
+                        <div class="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center {% if workflow_info.state == "STATE_FAILED" %}bg-red-500 dark:bg-red-600{% else %}bg-yellow-500 dark:bg-yellow-600{% endif %}" 
+                             style="width:{{ workflow_info.progress }}%">
                         </div>
                     </div>
                 </div>
@@ -106,7 +106,7 @@
                                 </tr>
                             </thead>
                             <tbody class="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-                                {% for task in workflow_info.as_ref().unwrap().tasks %}
+                                {% for task in workflow_info.tasks %}
                                     <tr>
                                         <td class="px-3 py-2 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-white">{{ task.name }}</td>
                                         <td class="px-3 py-2 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{{ task.started_at }}</td>
@@ -151,9 +151,9 @@
                         </table>
                     </div>
                     
-                    {% if workflow_info.as_ref().unwrap().estimated_completion.is_some() %}
+                    {% if workflow_info.estimated_completion %}
                     <div class="mt-4 text-sm text-gray-600 dark:text-gray-300">
-                        <p>Estimated completion: {{ workflow_info.as_ref().unwrap().estimated_completion.as_ref().unwrap() }}</p>
+                        <p>Estimated completion: {{ workflow_info.estimated_completion }}</p>
                     </div>
                     {% endif %}
                 </div>
@@ -461,8 +461,8 @@
                             <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
                                 <dt class="text-sm font-medium text-gray-500 dark:text-gray-300">Hostname</dt>
                                 <dd class="mt-1 text-sm text-gray-900 dark:text-gray-100 sm:mt-0 sm:col-span-2">
-                                    {% if machine.hostname.is_some() %}
-                                        {{ machine.hostname.as_ref().unwrap() }}
+                                    {% if machine.hostname %}
+                                        {{ machine.hostname }}
                                     {% else %}
                                         Not set
                                     {% endif %}
@@ -471,8 +471,8 @@
                             <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
                                 <dt class="text-sm font-medium text-gray-500 dark:text-gray-300">Machine Name</dt>
                                 <dd class="mt-1 text-sm text-gray-900 dark:text-gray-100 sm:mt-0 sm:col-span-2">
-                                    {% if machine.memorable_name.is_some() %}
-                                        {{ machine.memorable_name.as_ref().unwrap() }}
+                                    {% if machine.memorable_name %}
+                                        {{ machine.memorable_name }}
                                     {% else %}
                                         Not set
                                     {% endif %}
@@ -488,17 +488,16 @@
                                 <dt class="text-sm font-medium text-gray-500 dark:text-gray-300">Last updated</dt>
                                 <dd class="mt-1 text-sm text-gray-900 dark:text-gray-100 sm:mt-0 sm:col-span-2">{{ updated_at_formatted }}</dd>
                             </div>
-                            {% if machine.last_deployment_duration.is_some() %}
+                            {% if machine.last_deployment_duration %}
                             <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
                                 <dt class="text-sm font-medium text-gray-500 dark:text-gray-300">Last deployment duration</dt>
                                 <dd class="mt-1 text-sm text-gray-900 dark:text-gray-100 sm:mt-0 sm:col-span-2">
-                                    {% let duration = machine.last_deployment_duration.unwrap() %}
-                                    {% if duration < 60 %}
-                                        {{ duration }} seconds
-                                    {% elif duration < 3600 %}
-                                        {{ duration / 60 }} minutes
+                                    {% if machine.last_deployment_duration < 60 %}
+                                        {{ machine.last_deployment_duration }} seconds
+                                    {% elif machine.last_deployment_duration < 3600 %}
+                                        {{ machine.last_deployment_duration / 60 }} minutes
                                     {% else %}
-                                        {{ duration / 3600 }} hours {{ (duration % 3600) / 60 }} minutes
+                                        {{ machine.last_deployment_duration / 3600 }} hours {{ (machine.last_deployment_duration % 3600) / 60 }} minutes
                                     {% endif %}
                                 </dd>
                             </div>
@@ -521,7 +520,7 @@
                             <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
                                 <dt class="text-sm font-medium text-gray-500 dark:text-gray-300">DNS Servers</dt>
                                 <dd class="mt-1 text-sm text-gray-900 dark:text-gray-100 sm:mt-0 sm:col-span-2">
-                                    {% if machine.nameservers.is_empty() %}
+                                    {% if machine.nameservers | length == 0 %}
                                         No DNS servers configured
                                     {% else %}
                                         {% for dns in machine.nameservers %}
@@ -533,8 +532,8 @@
                             <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
                                 <dt class="text-sm font-medium text-gray-500 dark:text-gray-300">BMC Type</dt>
                                 <dd class="mt-1 text-sm text-gray-900 dark:text-gray-100 sm:mt-0 sm:col-span-2 flex items-center">
-                                    {% if machine.bmc_credentials.is_some() %}
-                                        {{ machine.bmc_credentials.as_ref().unwrap().bmc_type }}
+                                    {% if machine.bmc_credentials %}
+                                        {{ machine.bmc_credentials.bmc_type }}
                                     {% else %}
                                         None
                                         <button class="ml-3 inline-flex items-center px-3 py-1 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-green-100 text-green-800">
@@ -572,15 +571,15 @@
                                                 <tr>
                                                     <td class="whitespace-nowrap py-4 pl-4 pr-3 text-sm font-medium text-gray-900 dark:text-white sm:pl-6">{{ disk.device }}</td>
                                                     <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500 dark:text-gray-400">
-                                                        {% if disk.calculated_size.is_some() %}
-                                                            {{ disk.calculated_size.as_ref().unwrap() }}
+                                                        {% if disk.calculated_size %}
+                                                            {{ disk.calculated_size }}
                                                         {% else %}
                                                             {{ disk.size_bytes }} bytes
                                                         {% endif %}
                                                     </td>
                                                     <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500 dark:text-gray-400">
-                                                        {% if disk.model.is_some() %}
-                                                            {{ disk.model.as_ref().unwrap() }}
+                                                        {% if disk.model %}
+                                                            {{ disk.model }}
                                                         {% else %}
                                                             Unknown
                                                         {% endif %}
