@@ -98,5 +98,6 @@ flate2 = "1.0"
 
 # Error handling (moved from root)
 color-eyre = "0.6" # Add color-eyre dependency
+lazy_static = "1.4.0"
 
 [dev-dependencies]

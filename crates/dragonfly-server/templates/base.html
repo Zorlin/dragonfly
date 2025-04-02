@@ -124,7 +124,7 @@
     <script>
         // Connect to SSE for real-time updates
         document.addEventListener("DOMContentLoaded", function() {
-            const evtSource = new EventSource("/api/sse-events");
+            const evtSource = new EventSource("/api/events");
             
             // Set up listeners for specific event types
             evtSource.addEventListener("machine_updated", function(event) {

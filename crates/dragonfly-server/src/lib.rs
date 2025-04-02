@@ -90,26 +90,7 @@ pub async fn is_dragonfly_installed() -> bool {
         return false;
     }
     debug!("Installation check: Directory '{}' found.", dir_path);
-
-    // 3. Check Kubernetes StatefulSet status
-    let statefulset_ready = match status::check_dragonfly_statefulset_status().await {
-        Ok(ready) => ready,
-        Err(e) => {
-            // Only log a warning here, as inability to check k8s might be temporary or expected
-            // if k3s isn't fully up yet during startup.
-            warn!("Installation check: Error checking Dragonfly StatefulSet status: {}. Assuming not installed.", e);
-            false // If we can't check k8s, assume not installed for safety
-        }
-    };
-
-    if !statefulset_ready {
-        debug!("Installation check: Dragonfly StatefulSet not found or not ready.");
-        return false;
-    }
-    debug!("Installation check: Dragonfly StatefulSet found and ready.");
-
-    // If both directory exists and StatefulSet is ready, mark as installed
-    info!("Installation check: Detected installed state (directory exists and StatefulSet ready).");
+    info!("Installation check: Detected installed state (directory exists).");
     true
 }
 

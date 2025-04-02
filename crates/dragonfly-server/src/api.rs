@@ -47,11 +47,9 @@ pub fn api_router() -> Router<crate::AppState> {
         .route("/machines/{id}/progress", post(update_installation_progress))
         .route("/machines/{id}/tags", get(api_get_machine_tags))
         .route("/machines/{id}/tags", put(api_update_machine_tags))
-        .route("/events", get(machine_events))
+        .route("/events", get(sse_events))
         .route("/machines/{id}/workflow-progress", get(get_workflow_progress))
         .route("/heartbeat", get(heartbeat))
-        .route("/sse-events", get(sse_events))
-        .route("/install-events", get(install_events_sse))
         .route("/install/status", get(get_install_status))
 }
 
@@ -1138,37 +1136,93 @@ pub async fn get_machine_status(Path(id): Path<Uuid>) -> impl IntoResponse {
     Html(html)
 }
 
-// Add this new handler function
-async fn machine_events(
+// Single SSE handler for all event types
+async fn sse_events(
     State(state): State<AppState>,
 ) -> Sse<impl Stream<Item = std::result::Result<Event, Infallible>>> {
+    info!("Client connected to SSE endpoint (/events)");
     let rx = state.event_manager.subscribe();
     
-    let stream = stream::unfold(rx, |mut rx| async move {
+    // Prepare the initial state event to send immediately
+    let initial_event: Option<Result<Event, Infallible>> = {
+        let state_ref_option = {
+            let guard = INSTALL_STATE_REF.read().unwrap();
+            guard.as_ref().cloned()
+        };
+        
+        if let Some(state_ref) = state_ref_option {
+            // Use tokio::task::block_in_place for the synchronous lock inside the async fn
+            // Or preferably, make INSTALL_STATE_REF use tokio::sync::Mutex if possible
+            // For now, let's assume it's okay or handle potential blocking
+            let current_state = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    state_ref.lock().await.clone()
+                })
+            });
+
+            info!("Preparing initial installation state to send: {:?}", current_state);
+            
+            let payload = serde_json::json!({
+                "message": current_state.get_message(),
+                "animation": current_state.get_animation_class(),
+            });
+            let event_data = payload.to_string(); // Just the data for install_status
+            
+            Some(Ok(Event::default()
+                .event("install_status")
+                .data(event_data)))
+        } else {
+            info!("No initial installation state found to send.");
+            None
+        }
+    };
+
+    // Create the stream, starting with the initial event if available
+    let stream = stream::unfold((rx, initial_event), |(mut rx, mut initial)| async move {
+        // If there's an initial event, yield it first
+        if let Some(event) = initial.take() {
+             info!("Yielding initial state event directly to client.");
+            return Some((event, (rx, None))); // Pass along rx and None for initial
+        }
+
+        // Otherwise, wait for the next event from the broadcast channel
         match rx.recv().await {
-            Ok(event) => {
-                // Parse the event to extract type and id
-                let mut parts = event.split(':');
-                let event_type = parts.next().unwrap_or("message");
-                let event_data = parts.next().unwrap_or("");
+            Ok(event_string) => {
+                // Parse the event string to extract type and data
+                let event_parts: Vec<&str> = event_string.splitn(2, ':').collect();
+                let event_type = event_parts[0];
+                let event_data = event_parts.get(1).unwrap_or(&"");
                 
-                // Create a proper JSON payload for the event
-                let json_data = serde_json::json!({ "id": event_data }).to_string();
+                // Different event types need different formatting
+                let sse_event = match event_type {
+                    // Machine events need the id wrapper JSON format
+                    "machine_discovered" | "machine_updated" | "machine_deleted" => {
+                        let json_data = serde_json::json!({ "id": event_data }).to_string();
+                        Event::default().event(event_type).data(json_data)
+                    },
+                    // Installation events pass the raw data through (already formatted)
+                    "install_status" | "browser_redirect" => {
+                        Event::default().event(event_type).data(*event_data)
+                    },
+                    // Default format for any other event types
+                    _ => {
+                        info!("Unknown SSE event type: {}, using default formatting", event_type);
+                        Event::default().event(event_type).data(*event_data)
+                    }
+                };
                 
-                // Create the SSE event with proper type
-                let sse_event = Event::default()
-                    .event(event_type)
-                    .data(json_data);
-                
-                Some((Ok(sse_event), rx))
+                Some((Ok(sse_event), (rx, None))) // Pass along rx and None for initial
             },
-            Err(_) => None,
+            Err(e) => {
+                error!("SSE stream recv error: {:?}. Closing stream.", e);
+                None // End stream on error
+            },
         }
     });
 
     Sse::new(stream).keep_alive(
         KeepAlive::new()
-            .interval(Duration::from_secs(1))
+            .interval(Duration::from_secs(15))
             .text("ping")
     )
 }
@@ -1194,42 +1248,6 @@ pub async fn get_workflow_progress(Path(id): Path<Uuid>) -> Response {
 pub async fn heartbeat() -> Response {
     (StatusCode::OK, "OK").into_response()
 }
-
-// Stub for SSE events (already existed, ensure it's correct and public)
-pub async fn sse_events(
-    State(state): State<AppState>,
-) -> Sse<impl Stream<Item = std::result::Result<Event, Infallible>>> {
-    let rx = state.event_manager.subscribe();
-
-    let stream = stream::unfold(rx, |mut rx| async move {
-        match rx.recv().await {
-            Ok(event) => {
-                // Parse the event to extract type and id
-                let mut parts = event.split(':');
-                let event_type = parts.next().unwrap_or("message");
-                let event_data = parts.next().unwrap_or("");
-                
-                // Create a proper JSON payload for the event
-                let json_data = serde_json::json!({ "id": event_data }).to_string();
-                
-                // Create the SSE event with proper type
-                let sse_event = Event::default()
-                    .event(event_type)
-                    .data(json_data);
-                
-                Some((Ok(sse_event), rx))
-            },
-            Err(_) => None, // End stream on error
-        }
-    });
-
-    Sse::new(stream).keep_alive(
-        KeepAlive::new()
-            .interval(Duration::from_secs(15)) // Standard 15s keep-alive
-            .text("ping"), // Standard ping text
-    )
-}
-
 
 // Add stubs for functions called from mode.rs
 pub async fn check_hookos_artifacts() -> bool {
@@ -1551,41 +1569,4 @@ async fn get_install_status() -> Response {
             (StatusCode::OK, Json(payload)).into_response()
         }
     }
-}
-
-// Rename the SSE handler function to match the route
-async fn install_events_sse(
-    State(state): State<AppState>,
-) -> Sse<impl Stream<Item = std::result::Result<Event, Infallible>>> {
-    info!("SSE client connected for install events");
-    let rx = state.event_manager.subscribe();
-
-    // Use the same stream::unfold pattern as the working sse_events handler
-    let stream = stream::unfold(rx, |mut rx| async move {
-        eprintln!("[SSE unfold] Waiting for event...");
-        match rx.recv().await {
-            Ok(event_string) => {
-                eprintln!("[SSE unfold] Received event string: {}", event_string);
-                // Installer sends events like "install_status:{...json...}"
-                // We should pass the raw data part to the client, setting the event type.
-                let event_type = event_string.split(':').next().unwrap_or("message");
-                let event_data = event_string.split_once(':').map_or("", |(_type, data)| data);
-                eprintln!("[SSE unfold] Parsed type: {}, data: {}", event_type, event_data);
-
-                let sse_event = Event::default()
-                    .event(event_type) // e.g., "install_status"
-                    .data(event_data); // The JSON string payload
-                
-                eprintln!("[SSE unfold] Yielding Ok(event)...");
-                Some((Ok(sse_event), rx))
-            },
-            Err(e) => { // Use e to log the specific error
-                eprintln!("[SSE unfold] Received error: {:?}. Ending stream.", e);
-                None // End stream on recv error (e.g., channel closed)
-            }
-        }
-    });
-
-    Sse::new(stream)
-        .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)).text("ping"))
 }

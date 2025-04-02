@@ -10,6 +10,9 @@ use tokio::fs; // For async file operations
 use ipnetwork::Ipv4Network;
 use network_interface::NetworkInterfaceConfig;
 use std::sync::Arc;
+use lazy_static::lazy_static;
+use std::sync::Mutex as StdMutex;
+use std::collections::VecDeque;
  // Import task_local
  // Import signal for Ctrl+C
 use tokio::sync::watch; // Import watch
@@ -41,6 +44,7 @@ pub struct InstallArgs {
 // Helper function to update the global installation state and send SSE event
 async fn update_install_state(new_state: InstallationState) {
     info!("[update_install_state] Called with state: {:?}", new_state);
+    eprintln!("[DEBUG] update_install_state called for state: {:?}", new_state);
     // --- Update State --- 
     let state_arc_mutex: Option<Arc<tokio::sync::Mutex<InstallationState>>> = {
         INSTALL_STATE_REF.read().unwrap().as_ref().cloned()
@@ -55,13 +59,13 @@ async fn update_install_state(new_state: InstallationState) {
     }
     
     // --- Send Event --- 
-    info!("[update_install_state] Attempting to get EventManager...");
+    // Attempt to get EventManager
     let event_manager_arc: Option<Arc<dragonfly_server::event_manager::EventManager>> = {
         EVENT_MANAGER_REF.read().unwrap().as_ref().cloned()
     };
 
     if let Some(event_manager) = event_manager_arc {
-        info!("[update_install_state] EventManager found. Preparing payload...");
+        // Event manager is available, send the current state update
         let payload = serde_json::json!({
             "message": new_state.get_message(),
             "animation": new_state.get_animation_class(),
@@ -70,14 +74,13 @@ async fn update_install_state(new_state: InstallationState) {
         info!("[update_install_state] Sending event data: {}", event_data);
         
         if let Err(e) = event_manager.send(event_data) {
-            // Log error instead of warn, might be more visible
             error!("[update_install_state] Failed to send event: {}", e);
         } else {
             info!("[update_install_state] Event sent successfully.");
         }
     } else {
-         // Use info! level, consistent with other debug messages here
-         info!("[update_install_state] Event manager ref not found, cannot send install status update event.");
+        // Event manager not available yet. The sse_events handler will send the current state upon connection.
+        info!("[update_install_state] Event manager ref not found. Event will be sent when UI connects.");
     }
 }
 
@@ -109,8 +112,33 @@ pub async fn run_install(args: InstallArgs, mut shutdown_rx: watch::Receiver<()>
         }
         
         // Start the server - logging is controlled by global subscriber or RUST_LOG
+        // This call initializes the global refs EVENT_MANAGER_REF and INSTALL_STATE_REF
         let _ = dragonfly_server::run().await;
     });
+
+    // --- Wait for Server Statics Readiness --- 
+    info!("Waiting for server components (state and event manager) to initialize...");
+    let max_wait_attempts = 20; // ~10 seconds total
+    for attempt in 0..max_wait_attempts {
+        // Check if both global references have been initialized by the server thread
+        let state_ready = INSTALL_STATE_REF.read().unwrap().is_some();
+        let events_ready = EVENT_MANAGER_REF.read().unwrap().is_some();
+        
+        if state_ready && events_ready {
+            info!("Server components initialized successfully.");
+            break; // Exit the loop once both are ready
+        }
+        
+        if attempt == max_wait_attempts - 1 {
+            // Log a warning if the timeout is reached, but proceed anyway
+            warn!("Server components did not initialize within the timeout. UI updates might be delayed or missed.");
+        } else {
+             // Wait briefly before the next check
+             debug!("Waiting for server components... (Attempt {}/{})", attempt + 1, max_wait_attempts);
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        }
+    }
+    // --- End Wait --- 
 
     // --- Start Background Installation Task --- 
     // Clone the receiver *before* spawning the task that moves it
@@ -130,6 +158,7 @@ pub async fn run_install(args: InstallArgs, mut shutdown_rx: watch::Receiver<()>
     }
 
     // Set initial state (WaitingSudo) - use the helper
+    // This should now reliably update the global state and send the event because we waited
     update_install_state(InstallationState::WaitingSudo).await;
     
     let install_handle = tokio::spawn(async move {
@@ -181,6 +210,16 @@ pub async fn run_install(args: InstallArgs, mut shutdown_rx: watch::Receiver<()>
                 let elapsed = start_time.elapsed();
                 info!("✅ Dragonfly installation completed in {:.1?}!", elapsed);
                 
+                // --- 10. Wait for 3 seconds to show the flame animation --- 
+                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                
+                // --- 11. Send browser redirect event ---
+                send_redirect_event(bootstrap_ip).await;
+                
+                // --- 12. Automatically shut down the installer after 2 more seconds ---
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                info!("🚀 Redirecting to k3s-hosted Dragonfly and shutting down installer");
+                
                 Ok::<(), color_eyre::Report>(()) // Explicit type for Ok needed inside async block
             } => { result } // If installation finishes first, return its result
             
@@ -198,8 +237,8 @@ pub async fn run_install(args: InstallArgs, mut shutdown_rx: watch::Receiver<()>
     match install_handle.await {
         Ok(Ok(_)) => {
             info!("Background installation task finished successfully.");
-            // Wait for server indefinitely *unless* shutdown is signaled from main
-            // server_handle.await?; // Don't await here, let main handle exit
+            // Send shutdown signal to main thread to exit gracefully
+            let _ = shutdown_rx_clone.changed().await;
         }
         Ok(Err(e)) => {
             error!("Background installation task failed: {:#}", e);
@@ -217,10 +256,7 @@ pub async fn run_install(args: InstallArgs, mut shutdown_rx: watch::Receiver<()>
         }
     }
 
-    // Main thread now waits for the shutdown signal using the CLONE
-    info!("Installation complete. Server running. Press Ctrl+C to exit.");
-    shutdown_rx_clone.changed().await.ok(); // Wait for signal using the clone
-
+    // Shutdown the server now
     info!("Shutdown signal received by main install thread. Aborting server task...");
     server_handle.abort(); // Forcefully stop the server task
     // Optionally wait a very short time for abort, but don't hang
@@ -228,6 +264,37 @@ pub async fn run_install(args: InstallArgs, mut shutdown_rx: watch::Receiver<()>
     
     info!("Installer exiting cleanly.");
     Ok(())
+}
+
+// Helper function to send browser redirect event
+async fn send_redirect_event(bootstrap_ip: Ipv4Addr) {
+    info!("Preparing to redirect browser to http://{}:3000", bootstrap_ip);
+    
+    // Get event manager reference
+    let event_manager_arc: Option<Arc<dragonfly_server::event_manager::EventManager>> = {
+        EVENT_MANAGER_REF.read().unwrap().as_ref().cloned()
+    };
+
+    if let Some(event_manager) = event_manager_arc {
+        // Create a payload with the redirect URL
+        let redirect_url = format!("http://{}:3000", bootstrap_ip);
+        let payload = serde_json::json!({
+            "url": redirect_url,
+            "countdown": 1  // 1 second countdown
+        });
+        
+        // Send a special "browser_redirect" event
+        let event_data = format!("browser_redirect:{}", payload.to_string());
+        info!("Sending redirect event: {}", event_data);
+        
+        if let Err(e) = event_manager.send(event_data) {
+            error!("Failed to send redirect event: {}", e);
+        } else {
+            info!("Redirect event sent successfully");
+        }
+    } else {
+        error!("Event manager not found, cannot send redirect event");
+    }
 }
 
 // --- Helper function implementations (from previous response) ---
