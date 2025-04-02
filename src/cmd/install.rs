@@ -134,9 +134,6 @@ pub async fn run_install(args: InstallArgs, mut shutdown_rx: watch::Receiver<()>
     // Set initial state (WaitingSudo) - use the helper
     update_install_state(InstallationState::WaitingSudo).await;
     
-
-    // tokio::time::sleep(tokio::time::Duration::from_secs(1)).await; // Remove potential delay before background task
-    
     let install_handle = tokio::spawn(async move {
         // Now `shutdown_rx` is moved into this task
         let start_time = Instant::now();
