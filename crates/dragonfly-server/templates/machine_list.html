@@ -30,33 +30,33 @@
     <div class="mt-8 flex flex-col">
         <div class="-my-2 -mx-4 overflow-x-auto sm:-mx-6 lg:-mx-8">
           <div class="inline-block min-w-full py-2 align-middle md:px-6 lg:px-8">
-            <div class="overflow-hidden rounded-xl border border-purple-500 dark:border-purple-900 shadow">
-              <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-300">
+            <div class="overflow-hidden rounded-xl border border-purple-500 dark:border-purple-700 shadow">
+              <table class="min-w-full divide-y divide-gray-300 dark:divide-purple-800/50">
                 <thead class="bg-gray-50 dark:bg-gray-950">      
                             <tr>
-                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-200 uppercase tracking-wider">
                                     Name
                                 </th>
-                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-200 uppercase tracking-wider">
                                     MAC Address
                                 </th>
-                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-200 uppercase tracking-wider">
                                     IP Address
                                 </th>
-                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-200 uppercase tracking-wider">
                                     Status
                                 </th>
-                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-200 uppercase tracking-wider">
                                     OS
                                 </th>
-                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-200 uppercase tracking-wider">
                                     Actions
                                 </th>
                             </tr>
                         </thead>
                         <tbody 
                             id="machine-list" 
-                            class="divide-y divide-gray-200 dark:divide-gray-600 bg-white dark:bg-gray-900" 
+                            class="divide-y divide-gray-200 dark:divide-gray-700/60 bg-white dark:bg-black" 
                             hx-get="/machines"
                             hx-select="#machine-list > tr"
                             hx-target="#machine-list"
@@ -65,7 +65,7 @@
                             hx-indicator=".htmx-indicator"
                         >
                             {% for machine in machines %}
-                            <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer" @click="window.location='/machines/{{ machine.id }}'">
+                            <tr class="hover:ring-1 hover:ring-purple-500 dark:hover:ring-purple-700/60 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer" @click="window.location='/machines/{{ machine.id }}'">
                                 <td class="px-6 py-4 whitespace-nowrap">
                                     <div class="flex items-center">
                                         {# Main identifier display #}
@@ -80,17 +80,17 @@
                                             </a>
                                             {# Display memorable_name below if it exists #}
                                             {% if machine.memorable_name %}
-                                            <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                            <div class="mt-1 text-xs text-gray-500 dark:text-gray-400 tracking-tight italic">
                                                 {{ machine.memorable_name }}
                                             </div>
                                             {% endif %}
                                         </div>
                                     </div>
                                 </td>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400 tech-mono">
                                     {{ machine.mac_address }}
                                 </td>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400 tech-mono">
                                     {{ machine.ip_address }}
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap">

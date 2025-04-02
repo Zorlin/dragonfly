@@ -22,15 +22,15 @@ pub fn mac_to_words(mac: &str) -> Result<String, ParseIntError> {
     // This is slightly less than the full 48 bits but still more than enough
     // for our use case of unique identification
     
-    // We're using the last 44 bits of the MAC address (skipping the first 4 bits)
+    // We're using the last 44 bits of the MAC address
     // This emphasizes the unique device-specific portion rather than the
     // manufacturer-specific OUI portion at the beginning
     
-    // Extract 11 bits for each word index, starting from bit 4
-    let word1_idx = ((mac_int >> 37) & 0x7FF) as usize; // bits 37-47 (4 bit shift + 11 bits)
-    let word2_idx = ((mac_int >> 26) & 0x7FF) as usize; // bits 26-36 (4 bit shift + 11 bits)
-    let word3_idx = ((mac_int >> 15) & 0x7FF) as usize; // bits 15-25 (4 bit shift + 11 bits)
-    let word4_idx = ((mac_int >> 4) & 0x7FF) as usize;  // bits 4-14 (4 bit shift + 11 bits)
+    // Extract 11 bits for each word index, focusing on the last 44 bits
+    let word1_idx = ((mac_int >> 33) & 0x7FF) as usize; // bits 33-43 (last 44 bits, first 11)
+    let word2_idx = ((mac_int >> 22) & 0x7FF) as usize; // bits 22-32 (last 44 bits, second 11)
+    let word3_idx = ((mac_int >> 11) & 0x7FF) as usize; // bits 11-21 (last 44 bits, third 11)
+    let word4_idx = (mac_int & 0x7FF) as usize;         // bits 0-10 (last 44 bits, fourth 11)
     
     // Get the words
     let word1 = WORDLIST[word1_idx % WORDLIST.len()];
@@ -95,15 +95,22 @@ mod tests {
         println!("MAC {} converted to: {}", mac, result);
         
         // Verify two different MACs give different names
-        let mac2 = "04:7c:16:eb:74:ee"; // Just one bit different
+        let mac2 = "04:7c:16:eb:74:ee"; // Just one bit different in the last byte
         let result2 = mac_to_words(mac2).unwrap();
         assert_ne!(result, result2);
         println!("MAC {} converted to: {}", mac2, result2);
         
-        // Verify that MACs with the same last 44 bits but different OUI get the same name
-        let mac3 = "06:7c:16:eb:74:ed"; // Different first byte (OUI modified)
+        // Verify that MACs with different OUIs but same device ID get the same name
+        let mac3 = "ae:bc:16:eb:74:ed"; // Different first bytes (different OUI)
         let result3 = mac_to_words(mac3).unwrap();
+        assert_eq!(result, result3); // Should be the same since we only use the last 44 bits
         println!("MAC {} (modified OUI) converted to: {}", mac3, result3);
+        
+        // Verify MACs with the same OUI but different device IDs get different names
+        let mac4 = "04:7c:16:eb:75:ed"; // Different middle byte
+        let result4 = mac_to_words(mac4).unwrap();
+        assert_ne!(result, result4);
+        println!("MAC {} (different device ID) converted to: {}", mac4, result4);
     }
     
     #[test]

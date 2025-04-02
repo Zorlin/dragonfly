@@ -2,7 +2,7 @@ use std::process::Command;
 use std::path::Path;
 use std::env;
 use std::fs;
-
+ 
 fn main() {
     // Rerun build script if build.rs, input CSS, or templates change
     println!("cargo:rerun-if-changed=build.rs");
