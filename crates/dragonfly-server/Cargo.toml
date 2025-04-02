@@ -94,6 +94,7 @@ sysinfo = "0.30"
 
 # Archive handling
 tar = "0.4"
+flate2 = "1.0"
 
 # Error handling (moved from root)
 color-eyre = "0.6" # Add color-eyre dependency

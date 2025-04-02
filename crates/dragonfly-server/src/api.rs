@@ -27,6 +27,7 @@ use std::sync::Arc;
 use std::path::Path as FilePath;
 use std::fs::File;
 use tar::Archive;
+use flate2::read::GzDecoder;
 
 pub fn api_router() -> Router<crate::AppState> {
     Router::new()
@@ -1272,7 +1273,7 @@ pub async fn download_hookos_artifacts(version: &str) -> anyhow::Result<()> {
     let checksum_content = checksum_response.text().await?;
     std::fs::write(checksum_path, checksum_content)?;
 
-    // Download the artifact tarballs
+    // Files to download
     let files = vec![
         "hook_x86_64.tar.gz",
         "hook_aarch64.tar.gz",
@@ -1280,30 +1281,105 @@ pub async fn download_hookos_artifacts(version: &str) -> anyhow::Result<()> {
         "hook_latest-lts-aarch64.tar.gz",
     ];
 
-    for file in &files {
-        let url = format!("https://github.com/tinkerbell/hook/releases/download/{}/{}", version, file);
-        let response = reqwest::get(url).await?;
-        let content = response.bytes().await?;
-        std::fs::write(hookos_dir.join(file), content)?;
-    }
-
-    // Extract the tarballs
-    for file in &files {
-        let path = hookos_dir.join(file);
-        let tar = File::open(path)?;
-        let mut archive = Archive::new(tar);
-        archive.unpack(hookos_dir)?;
-    }
-
-    // Remove the tarballs
-    for file in &files {
-        let path = hookos_dir.join(file);
-        if path.exists() {
-            std::fs::remove_file(path)?;
+    // Create a vector of download futures
+    let download_futures = files.iter().map(|file| {
+        let file = file.to_string();
+        let version = version.to_string();
+        let hookos_dir = hookos_dir.to_path_buf();
+        
+        // Return a future for each download
+        async move {
+            let url = format!("https://github.com/tinkerbell/hook/releases/download/{}/{}", version, file);
+            info!("Downloading {} in parallel", url);
+            let response = reqwest::get(&url).await?;
+            let content = response.bytes().await?;
+            let tarball_path = hookos_dir.join(&file);
+            std::fs::write(&tarball_path, content)?;
+            info!("Downloaded {} to {:?}", file, tarball_path);
+            Ok::<_, anyhow::Error>(tarball_path)
         }
-    }
+    }).collect::<Vec<_>>();
     
-    info!("HookOS artifacts downloaded successfully to {:?}", hookos_dir);
+    // Execute all downloads in parallel
+    let download_results = futures::future::try_join_all(download_futures).await?;
+    info!("All HookOS artifacts downloaded in parallel successfully");
+
+    // Create a vector of extraction futures
+    let extraction_futures = download_results.into_iter().map(|tarball_path| {
+        let hookos_dir = hookos_dir.to_path_buf();
+        
+        // Return a future for each extraction
+        async move {
+            let file_name = tarball_path.file_name().unwrap().to_string_lossy().to_string();
+            info!("Extracting {:?} in parallel", tarball_path);
+            
+            // Check if the file exists and has content before trying to extract
+            let metadata = match std::fs::metadata(&tarball_path) {
+                Ok(meta) => meta,
+                Err(e) => {
+                    warn!("Skipping extraction of {:?}: file not accessible: {}", tarball_path, e);
+                    return Ok::<_, anyhow::Error>(tarball_path);
+                }
+            };
+            
+            if metadata.len() == 0 {
+                warn!("Skipping extraction of {:?}: file is empty", tarball_path);
+                return Ok::<_, anyhow::Error>(tarball_path);
+            }
+            
+            // Open the file for reading
+            let tar_file = match File::open(&tarball_path) {
+                Ok(f) => f,
+                Err(e) => {
+                    warn!("Failed to open {:?} for extraction: {}", tarball_path, e);
+                    return Ok::<_, anyhow::Error>(tarball_path);
+                }
+            };
+            
+            // Create the archive and extract, handling any errors
+            // Check if the file is a .tar.gz file
+            if file_name.ends_with(".tar.gz") || file_name.ends_with(".tgz") {
+                // Use GzDecoder for gzipped files
+                let gz = GzDecoder::new(tar_file);
+                let mut archive = Archive::new(gz);
+                match archive.unpack(&hookos_dir) {
+                    Ok(_) => info!("Successfully extracted gzipped archive {:?}", tarball_path),
+                    Err(e) => warn!("Failed to extract gzipped archive {:?}: {}", tarball_path, e),
+                }
+            } else {
+                // For non-gzipped files, use directly
+                let mut archive = Archive::new(tar_file);
+                match archive.unpack(&hookos_dir) {
+                    Ok(_) => info!("Successfully extracted archive {:?}", tarball_path),
+                    Err(e) => warn!("Failed to extract archive {:?}: {}", tarball_path, e),
+                }
+            }
+            
+            Ok::<_, anyhow::Error>(tarball_path)
+        }
+    }).collect::<Vec<_>>();
+    
+    // Execute all extractions in parallel
+    let extraction_results = futures::future::try_join_all(extraction_futures).await?;
+    info!("All HookOS artifacts extracted in parallel successfully");
+    
+    // Remove all tarballs in parallel
+    let cleanup_futures = extraction_results.into_iter().map(|tarball_path| {
+        async move {
+            // Remove the tarball after extraction
+            if let Err(e) = std::fs::remove_file(&tarball_path) {
+                warn!("Failed to remove tarball {:?}: {}", tarball_path, e);
+            } else {
+                info!("Removed tarball {:?}", tarball_path);
+            }
+            Ok::<(), anyhow::Error>(())
+        }
+    }).collect::<Vec<_>>();
+    
+    // Execute all cleanup operations in parallel
+    futures::future::try_join_all(cleanup_futures).await?;
+    
+    info!("HookOS artifacts downloaded, extracted, and cleaned up successfully to {:?}", hookos_dir);
     Ok(())
 }
 
