@@ -1023,44 +1023,56 @@ pub async fn setup_simple(
     let theme = get_theme_from_cookie(&headers);
     let is_authenticated = auth_session.user.is_some();
     
-    // Configure the system for Simple mode
-    match mode::configure_simple_mode().await {
-        Ok(_) => {
-            info!("System configured for Simple mode");
-            
-            // Fix this: Mark setup as completed by passing bool instead of &AppState
-            if let Err(e) = mark_setup_completed(true).await {
-                error!("Failed to mark setup as completed: {}", e);
-            } else {
-                info!("Setup marked as completed");
-                
-                // Also update the in-memory settings
-                let mut settings = app_state.settings.lock().await;
-                settings.setup_completed = true;
-            }
-            
-            // Redirect to main page
-            Redirect::to("/").into_response()
-        },
-        Err(e) => {
-            error!("Failed to configure system for Simple mode: {}", e);
-            
-            // Replace Askama render with placeholder
-            let context = ErrorTemplate {
-                theme,
-                is_authenticated,
-                title: "Setup Failed".to_string(),
-                message: "There was a problem setting up Simple mode.".to_string(),
-                error_details: format!("{}", e),
-                back_url: "/".to_string(),
-                back_text: "Back to Dashboard".to_string(),
-                show_retry: true,
-                retry_url: "/setup/simple".to_string(),
-            };
-            // Pass AppState to render_minijinja
-            render_minijinja(&app_state, "error.html", context)
-        }
+    // Save mode to database immediately
+    if let Err(e) = mode::save_mode(mode::DeploymentMode::Simple, false).await {
+        error!("Failed to save Simple mode to database: {}", e);
+        
+        // Return error template
+        let context = ErrorTemplate {
+            theme,
+            is_authenticated,
+            title: "Setup Failed".to_string(),
+            message: "There was a problem setting up Simple mode.".to_string(),
+            error_details: format!("Failed to save mode: {}", e),
+            back_url: "/".to_string(),
+            back_text: "Back to Dashboard".to_string(),
+            show_retry: true,
+            retry_url: "/setup/simple".to_string(),
+        };
+        return render_minijinja(&app_state, "error.html", context);
     }
+    
+    // Mark setup as completed immediately
+    if let Err(e) = mark_setup_completed(true).await {
+        error!("Failed to mark setup as completed: {}", e);
+    } else {
+        info!("Setup marked as completed");
+        
+        // Also update the in-memory settings
+        let mut settings = app_state.settings.lock().await;
+        settings.setup_completed = true;
+    }
+    
+    // Configure the system for Simple mode in the background
+    let event_manager = app_state.event_manager.clone();
+    tokio::spawn(async move {
+        match mode::configure_simple_mode().await {
+            Ok(_) => {
+                info!("Simple mode configuration completed successfully in background");
+                // Send event for successful configuration
+                let _ = event_manager.send("mode_configured:simple".to_string());
+            },
+            Err(e) => {
+                error!("Background Simple mode configuration failed: {}", e);
+                // Send event for failed configuration
+                let _ = event_manager.send(format!("mode_configuration_failed:simple:{}", e));
+            }
+        }
+    });
+    
+    // Immediately redirect to home page
+    info!("Saved Simple mode and initiated background configuration, redirecting to home");
+    Redirect::to("/").into_response()
 }
 
 pub async fn setup_flight(
@@ -1072,42 +1084,56 @@ pub async fn setup_flight(
     let theme = get_theme_from_cookie(&headers);
     let is_authenticated = auth_session.user.is_some();
     
-    // Configure the system for Flight mode
-    match mode::configure_flight_mode().await {
-        Ok(_) => {
-            if let Err(e) = mark_setup_completed(true).await {
-                error!("Failed to mark setup as completed: {}", e);
-            } else {
-                info!("Setup marked as completed");
-                
-                // Also update the in-memory settings
-                let mut settings = app_state.settings.lock().await;
-                settings.setup_completed = true;
-            }
-
-            // Redirect to a flight status page that shows installation progress
-            // For now, just redirect to main page
-            Redirect::to("/").into_response()
-        },
-        Err(e) => {
-            error!("Failed to configure system for Flight mode: {}", e);
-            
-            // Replace Askama render with placeholder
-            let context = ErrorTemplate {
-                theme,
-                is_authenticated,
-                title: "Setup Failed".to_string(),
-                message: "There was a problem setting up Flight mode.".to_string(),
-                error_details: format!("{}", e),
-                back_url: "/".to_string(),
-                back_text: "Back to Dashboard".to_string(),
-                show_retry: true,
-                retry_url: "/setup/flight".to_string(),
-            };
-            // Pass AppState to render_minijinja
-            render_minijinja(&app_state, "error.html", context)
-        }
+    // Save mode to database immediately
+    if let Err(e) = mode::save_mode(mode::DeploymentMode::Flight, false).await {
+        error!("Failed to save Flight mode to database: {}", e);
+        
+        // Return error template
+        let context = ErrorTemplate {
+            theme,
+            is_authenticated,
+            title: "Setup Failed".to_string(),
+            message: "There was a problem setting up Flight mode.".to_string(),
+            error_details: format!("Failed to save mode: {}", e),
+            back_url: "/".to_string(),
+            back_text: "Back to Dashboard".to_string(),
+            show_retry: true,
+            retry_url: "/setup/flight".to_string(),
+        };
+        return render_minijinja(&app_state, "error.html", context);
     }
+    
+    // Mark setup as completed immediately
+    if let Err(e) = mark_setup_completed(true).await {
+        error!("Failed to mark setup as completed: {}", e);
+    } else {
+        info!("Setup marked as completed");
+        
+        // Also update the in-memory settings
+        let mut settings = app_state.settings.lock().await;
+        settings.setup_completed = true;
+    }
+    
+    // Configure the system for Flight mode in the background
+    let event_manager = app_state.event_manager.clone();
+    tokio::spawn(async move {
+        match mode::configure_flight_mode().await {
+            Ok(_) => {
+                info!("Flight mode configuration completed successfully in background");
+                // Send event for successful configuration
+                let _ = event_manager.send("mode_configured:flight".to_string());
+            },
+            Err(e) => {
+                error!("Background Flight mode configuration failed: {}", e);
+                // Send event for failed configuration
+                let _ = event_manager.send(format!("mode_configuration_failed:flight:{}", e));
+            }
+        }
+    });
+    
+    // Immediately redirect to home page
+    info!("Saved Flight mode and initiated background configuration, redirecting to home");
+    Redirect::to("/").into_response()
 }
 
 pub async fn setup_swarm(
@@ -1119,44 +1145,56 @@ pub async fn setup_swarm(
     let theme = get_theme_from_cookie(&headers);
     let is_authenticated = auth_session.user.is_some();
     
-    // Configure the system for Swarm mode
-    match mode::configure_swarm_mode().await {
-        Ok(_) => {
-            info!("System configured for Swarm mode");
-            
-            // Fix this: Mark setup as completed by passing bool instead of &AppState
-            if let Err(e) = mark_setup_completed(true).await {
-                error!("Failed to mark setup as completed: {}", e);
-            } else {
-                info!("Setup marked as completed");
-                
-                // Also update the in-memory settings
-                let mut settings = app_state.settings.lock().await;
-                settings.setup_completed = true;
-            }
-            
-            // Redirect to main page
-            Redirect::to("/").into_response()
-        },
-        Err(e) => {
-            error!("Failed to configure system for Swarm mode: {}", e);
-            
-            // Replace Askama render with placeholder
-            let context = ErrorTemplate {
-                theme,
-                is_authenticated,
-                title: "Setup Failed".to_string(),
-                message: "There was a problem setting up Swarm mode.".to_string(),
-                error_details: format!("{}", e),
-                back_url: "/".to_string(),
-                back_text: "Back to Dashboard".to_string(),
-                show_retry: true,
-                retry_url: "/setup/swarm".to_string(),
-            };
-            // Pass AppState to render_minijinja
-            render_minijinja(&app_state, "error.html", context)
-        }
+    // Save mode to database immediately
+    if let Err(e) = mode::save_mode(mode::DeploymentMode::Swarm, false).await {
+        error!("Failed to save Swarm mode to database: {}", e);
+        
+        // Return error template
+        let context = ErrorTemplate {
+            theme,
+            is_authenticated,
+            title: "Setup Failed".to_string(),
+            message: "There was a problem setting up Swarm mode.".to_string(),
+            error_details: format!("Failed to save mode: {}", e),
+            back_url: "/".to_string(),
+            back_text: "Back to Dashboard".to_string(),
+            show_retry: true,
+            retry_url: "/setup/swarm".to_string(),
+        };
+        return render_minijinja(&app_state, "error.html", context);
     }
+    
+    // Mark setup as completed immediately
+    if let Err(e) = mark_setup_completed(true).await {
+        error!("Failed to mark setup as completed: {}", e);
+    } else {
+        info!("Setup marked as completed");
+        
+        // Also update the in-memory settings
+        let mut settings = app_state.settings.lock().await;
+        settings.setup_completed = true;
+    }
+    
+    // Configure the system for Swarm mode in the background
+    let event_manager = app_state.event_manager.clone();
+    tokio::spawn(async move {
+        match mode::configure_swarm_mode().await {
+            Ok(_) => {
+                info!("Swarm mode configuration completed successfully in background");
+                // Send event for successful configuration
+                let _ = event_manager.send("mode_configured:swarm".to_string());
+            },
+            Err(e) => {
+                error!("Background Swarm mode configuration failed: {}", e);
+                // Send event for failed configuration
+                let _ = event_manager.send(format!("mode_configuration_failed:swarm:{}", e));
+            }
+        }
+    });
+    
+    // Immediately redirect to home page
+    info!("Saved Swarm mode and initiated background configuration, redirecting to home");
+    Redirect::to("/").into_response()
 }
 
 // Environment setup for MiniJinja

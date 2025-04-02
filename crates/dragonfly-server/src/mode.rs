@@ -14,6 +14,7 @@ use std::str;
 use crate::status::{check_kubernetes_connectivity, check_dragonfly_statefulset_status, get_webui_address};
 use tokio::fs;
 use sqlx::sqlite::SqlitePoolOptions;
+use sqlx::Row;
 
 // The different deployment modes
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,20 +53,61 @@ const HANDOFF_READY_FILE: &str = "/var/lib/dragonfly/handoff_ready";
 
 // Get the current mode (or None if not set)
 pub async fn get_current_mode() -> Result<Option<DeploymentMode>> {
-    // Check if the mode file exists
-    if !Path::new(MODE_FILE).exists() {
-        return Ok(None);
+    // First, try to get the mode from the database
+    const DB_PATH: &str = "/var/lib/dragonfly/sqlite.db";
+    
+    // Check if DB exists before attempting to connect
+    if Path::new(DB_PATH).exists() {
+        // Connect to the database
+        match SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                sqlx::sqlite::SqliteConnectOptions::new()
+                    .filename(DB_PATH)
+                    .create_if_missing(false),
+            )
+            .await {
+                Ok(pool) => {
+                    // Query the database for the deployment mode
+                    let mode_row = sqlx::query("SELECT value FROM settings WHERE key = 'deployment_mode'")
+                        .fetch_optional(&pool)
+                        .await;
+                    
+                    // Clean up pool connection
+                    pool.close().await;
+                    
+                    // Process query result
+                    if let Ok(Some(row)) = mode_row {
+                        let mode_str: String = row.try_get(0).unwrap_or_default();
+                        let mode = DeploymentMode::from_str(&mode_str);
+                        if mode.is_some() {
+                            debug!("Found deployment mode '{}' in database", mode_str);
+                            return Ok(mode);
+                        }
+                    }
+                    
+                    debug!("No deployment mode found in database");
+                },
+                Err(e) => {
+                    warn!("Failed to connect to SQLite database for mode check: {}", e);
+                }
+            }
     }
-
-    // Read the mode file
-    let content = tokio::fs::read_to_string(MODE_FILE)
-        .await
-        .context("Failed to read mode file")?;
     
-    // Parse the mode
-    let mode = DeploymentMode::from_str(content.trim());
+    // Fall back to checking the mode file if database check failed
+    if Path::new(MODE_FILE).exists() {
+        debug!("Checking mode file for deployment mode");
+        let content = tokio::fs::read_to_string(MODE_FILE)
+            .await
+            .context("Failed to read mode file")?;
+        
+        let mode = DeploymentMode::from_str(content.trim());
+        return Ok(mode);
+    }
     
-    Ok(mode)
+    // No mode found in database or file
+    debug!("No deployment mode found in database or file");
+    Ok(None)
 }
 
 // Save the current mode
@@ -926,45 +968,104 @@ pub async fn configure_flight_mode() -> Result<()> {
             info!("System is already configured for Flight mode");
             
             // Still check if HookOS artifacts are present, but only download if missing
-            info!("Checking HookOS artifacts...");
-            if !crate::api::check_hookos_artifacts().await {
-                info!("HookOS artifacts not found. Downloading HookOS artifacts...");
-                match crate::api::download_hookos_artifacts("v0.10.0").await {
-                    Ok(_) => info!("HookOS artifacts downloaded successfully"),
-                    Err(e) => warn!("Failed to download HookOS artifacts: {}", e),
+            // This runs in background to not block the server startup
+            let _ = tokio::spawn(async {
+                info!("Checking HookOS artifacts in background...");
+                if !crate::api::check_hookos_artifacts().await {
+                    info!("HookOS artifacts not found. Downloading HookOS artifacts...");
+                    match crate::api::download_hookos_artifacts("v0.10.0").await {
+                        Ok(_) => info!("HookOS artifacts downloaded successfully"),
+                        Err(e) => warn!("Failed to download HookOS artifacts: {}", e),
+                    }
+                } else {
+                    info!("HookOS artifacts already exist");
                 }
-            } else {
-                info!("HookOS artifacts already exist");
-            }
+            });
             
             return Ok(());
         }
     }
     
-    // Track if we've used elevated privileges
-    let _used_elevation = false;
-
-    // Check HookOS artifacts and download if needed
-    info!("Checking HookOS artifacts...");
-    let need_hookos_download = !crate::api::check_hookos_artifacts().await;
-    if need_hookos_download {
-        info!("HookOS artifacts not found. Downloading HookOS artifacts...");
-        match crate::api::download_hookos_artifacts("v0.10.0").await {
-            Ok(_) => info!("HookOS artifacts downloaded successfully"),
-            Err(e) => warn!("Failed to download HookOS artifacts: {}", e),
+    // Execute multiple tasks in parallel
+    let hooks_download_fut = async {
+        info!("Checking HookOS artifacts...");
+        let need_hookos_download = !crate::api::check_hookos_artifacts().await;
+        if need_hookos_download {
+            info!("HookOS artifacts not found. Downloading HookOS artifacts...");
+            match crate::api::download_hookos_artifacts("v0.10.0").await {
+                Ok(_) => info!("HookOS artifacts downloaded successfully"),
+                Err(e) => {
+                    warn!("Failed to download HookOS artifacts: {}", e);
+                    // Non-fatal, continue anyway
+                }
+            }
+        } else {
+            info!("HookOS artifacts already exist");
         }
-    } else {
-        info!("HookOS artifacts already exist");
+        Ok::<(), anyhow::Error>(()) // Return Result for try_join
+    };
+    
+    let k8s_check_fut = async {
+        // Check the Kubernetes API is available
+        match check_kubernetes_connectivity().await {
+            Ok(()) => {
+                info!("Kubernetes connectivity confirmed.");
+                Ok(())
+            },
+            Err(e) => {
+                error!("Error checking Kubernetes connectivity: {}. Cannot enter Flight mode.", e);
+                // Convert color_eyre error to anyhow
+                Err(anyhow!("Error checking Kubernetes connectivity: {}", e))
+            }
+        }
+    };
+    
+    let webui_check_fut = async {
+        // Check if the WebUI service is ready
+        match check_webui_service_status().await {
+            Ok(true) => {
+                info!("WebUI service status confirmed as ready.");
+                Ok(())
+            },
+            Ok(false) => {
+                error!("WebUI service is not ready. Cannot enter Flight mode.");
+                bail!("WebUI service is not ready")
+            },
+            Err(e) => {
+                error!("Error checking WebUI service status: {}. Cannot enter Flight mode.", e);
+                Err(anyhow!("Error checking WebUI service status: {}", e))
+            }
+        }
+    };
+    
+    // Run all prerequisite tasks in parallel
+    match tokio::try_join!(hooks_download_fut, k8s_check_fut, webui_check_fut) {
+        Ok(_) => {
+            // All prerequisite checks passed, continue with Tinkerbell stack update
+            info!("All prerequisite checks passed, updating Tinkerbell stack...");
+            
+            // Update the Tinkerbell stack
+            enter_flight_mode().await?;
+            
+            // Save the mode (if it's not already saved by the UI handler)
+            match get_current_mode().await {
+                Ok(Some(DeploymentMode::Flight)) => {
+                    info!("Flight mode already saved to database, skipping save_mode step");
+                },
+                _ => {
+                    info!("Saving Flight mode to database");
+                    save_mode(DeploymentMode::Flight, false).await?;
+                }
+            }
+            
+            info!("System configured for Flight mode. 🐉");
+            Ok(())
+        },
+        Err(e) => {
+            error!("Failed to configure Flight mode: {}", e);
+            Err(e)
+        }
     }
-    
-    // Enter Flight mode
-    enter_flight_mode().await?;
-    
-    // Use the regular save_mode function for Linux
-    save_mode(DeploymentMode::Flight, false).await?;
-    
-    info!("System configured for Flight mode. 🐉");
-    Ok(())
 }
 
 // Enter Flight Mode

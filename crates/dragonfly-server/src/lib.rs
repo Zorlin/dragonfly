@@ -279,11 +279,18 @@ pub async fn run() -> anyhow::Result<()> {
     tinkerbell::load_historical_timings().await?; // Essential
 
     // --- Start OS Templates Initialization --- 
-    // Only initialize OS templates if we're in Flight mode
-    let is_flight_mode = match mode::get_current_mode().await {
-        Ok(Some(mode::DeploymentMode::Flight)) => true,
-        _ => false,
-    };
+    // Get current deployment mode from database
+    let current_mode = mode::get_current_mode().await?;
+    
+    // Log the current deployment mode
+    match &current_mode {
+        Some(mode::DeploymentMode::Flight) => info!("Starting server in Flight mode"),
+        Some(mode::DeploymentMode::Simple) => info!("Starting server in Simple mode"),
+        Some(mode::DeploymentMode::Swarm) => info!("Starting server in Swarm mode"),
+        None => info!("No deployment mode set in database"),
+    }
+    
+    let is_flight_mode = matches!(current_mode, Some(mode::DeploymentMode::Flight));
     
     if is_flight_mode && !is_installation_server {
         info!("Starting OS templates initialization for Flight mode...");
@@ -500,9 +507,8 @@ pub async fn run() -> anyhow::Result<()> {
         .with_state(app_state);
 
     // Handoff listener setup 
-    let current_mode = mode::get_current_mode().await.unwrap_or(None);
-    if let Some(mode) = current_mode {
-        if mode == mode::DeploymentMode::Flight {
+    if let Some(mode) = &current_mode {
+        if *mode == mode::DeploymentMode::Flight {
             if !is_installation_server { info!("Running in Flight mode - starting handoff listener"); }
             tokio::spawn(async move {
                 if let Err(e) = mode::start_handoff_listener(shutdown_rx.clone()).await {
