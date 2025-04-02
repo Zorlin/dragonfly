@@ -102,6 +102,11 @@
             color: #f3f4f6;
         }
         
+        /* Special class to prevent SVG inversion in dark mode */
+        .no-invert {
+            filter: none !important;
+        }
+        
         /* Force dark mode for users with system preference */
         @media (prefers-color-scheme: dark) {
             html[data-theme="system"] {

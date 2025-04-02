@@ -135,6 +135,93 @@ When the user selects a mode from the Welcome screen:
 
 ---
 
+### Scenario E: Just Type
+
+The "just type" feature allows users to simply click a text field within the UI and type.
+
+- When the user clicks a text field, it activates the field so the user can immediately start typing.
+- The field will be empty with the previous text shown in half opacity until the user starts typing.
+- If the user types a new value and clicks away, the field will be ready to save upon pressing an Apply button that will replace the Reimage button on the Actions column for the machine.
+
+#### Field Types
+| Field Type | Field Editable? | Field Validation | On Change Result |
+|------------|-------------|-------------|-------------|
+| MAC Address | ⚠️ Yes (with confirm) | Regex for MAC (XX:XX:XX:XX:XX:XX) | Modal confirmation before saving |
+| Hostname | ✅ Yes | RFC-1123 / DNS-safe | Inline save, triggers Apply button |
+| Friendly Name | ✅ Yes | N/A | Read-only identity fingerprint, can be overridden |
+| Tags | ✅ Yes | Freeform or enum | Triggers Apply button |
+| IP Address | ⚠️ Only when configured as a static IP | N/A | Offers to apply the new IP address on the next reimaging run |
+| Status | ✅ Yes | Basic state transitions are validated | Displays a tooltip with the new status and the impact the change will have, triggers Apply button
+
+#### Example 1:
+A user opens the machine list and sees a list of machines.
+
+They click the MAC address field of a machine and type a new MAC address, but accidentally enter an invalid MAC format.
+
+The field will show a tooltip with a suggested valid format and refuse to save the new address.
+
+The user then corrects the MAC address and saves the new address.
+
+Since the MAC address is usually not changed unless you're dealing with a VM, we pop up a modal to confirm the change.
+
+"Changing the MAC address for this machine will cause issues if the machine is still using the old one. Definitely ready to change it?"
+
+The user clicks "Yes" and the new address is saved.
+
+#### Example 2
+
+A user opens the machine list and sees a list of machines.
+
+They click the hostname field of a machine and type a new hostname.
+
+The field will accept any DNS-valid hostname. The user changes the hostname from
+
+'jellyfin' to 'jellyfin01' and clicks save.
+
+The "Reimage" button on the right changes to a calm deep blue "Apply" button.
+
+Pressing "Apply" will change the hostname of that machine to 'jellyfin01' in future workflows and deployments. If the user clicks and holds Apply, a modal will appear asking if they want to apply the change straight away.
+
+#### Example 3
+
+A user opens the machine list and sees a list of machines.
+
+They click the friendly name field of a machine and type a new friendly name.
+
+The field will accept any friendly name. The user changes the friendly name from the BIP39-style
+
+four word name (`CensusAbleQualityParent`) to `topaz-control-master`.
+
+The friendly name will be saved and displayed in the machine list.
+
+Changing their mind, the user quickly clicks the friendly name field again and clears the text.
+
+The friendly name will be cleared and the original BIP39-style name will be shown again and saved.
+
+### Scenario F: Reimaging machines
+
+#### Example 1:
+A user opens the machine list and sees a list of machines.
+
+They select a different OS than the one currently installed on the machine.
+
+The blue Apply button appears on the Actions column for the machine, replacing the Reimage button.
+
+The user clicks Apply and a modal pops up confirming that the user wants to reimage the machine
+to apply the new OS, warning at the loss of data.
+
+The user clicks "Yes" and the machine is reimaged with the new OS.
+
+#### Example 2:
+A user opens the machine list and sees a list of machines.
+
+They click the Reimage button for a machine.
+
+A modal pops up confirming that the user wants to reimage the machine
+to apply the new OS, warning at the loss of data.
+
+The user clicks "Yes" and the machine is reimaged with the new OS.
+
 ### Summary
 
 Dragonfly’s onboarding is structured to:

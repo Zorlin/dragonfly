@@ -1266,7 +1266,7 @@ pub struct OsInfo {
 // Get OS icon for a specific OS
 pub fn get_os_icon(os: &str) -> String {
     match os {
-        "ubuntu-2204" | "ubuntu-2404" => "<i class=\"fab fa-ubuntu text-orange-500 dark:text-orange-500\"></i>",
+        "ubuntu-2204" | "ubuntu-2404" => "<i class=\"fab fa-ubuntu text-orange-500 dark:text-orange-500 no-invert\"></i>",
         "debian-12" => "<i class=\"fab fa-debian text-red-500\"></i>",
         "proxmox" => "<i class=\"fas fa-server text-blue-500\"></i>",
         "talos" => "<i class=\"fas fa-robot text-purple-500\"></i>",
