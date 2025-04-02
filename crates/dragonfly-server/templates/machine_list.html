@@ -31,8 +31,8 @@
         <div class="-my-2 -mx-4 overflow-x-auto sm:-mx-6 lg:-mx-8">
             <div class="inline-block min-w-full py-2 align-middle md:px-6 lg:px-8">
                 <div class="overflow-hidden shadow md:rounded-lg">
-                    <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-300">
-                        <thead class="bg-gray-50 dark:bg-gray-900">
+                    <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-300 border border-purple-500 dark:border-purple-900"">
+                        <thead class="bg-gray-50 dark:bg-gray-950">
                             <tr>
                                 <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                                     Name
@@ -56,7 +56,7 @@
                         </thead>
                         <tbody 
                             id="machine-list" 
-                            class="divide-y divide-gray-200 dark:divide-gray-600 bg-white dark:bg-gray-800" 
+                            class="divide-y divide-gray-200 dark:divide-gray-600 bg-white dark:bg-gray-900" 
                             hx-get="/machines"
                             hx-select="#machine-list > tr"
                             hx-target="#machine-list"
