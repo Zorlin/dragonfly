@@ -14,6 +14,8 @@ Whether you’ve got 5 test VMs or 5,000 enterprise grade machines in a datacent
 
 Dragonfly will help.
 
+![Dragonfly UI](image.png)
+
 ---
 
 ## What does it do?

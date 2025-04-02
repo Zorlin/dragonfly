@@ -14,10 +14,23 @@
     powerModal: false,
     currentMachineId: null,
     currentMachineName: null,
+    osDropdowns: {}, // Track open state of OS dropdowns
     openTagModal(id, name) { this.tagModal = true; this.currentMachineId = id; this.currentMachineName = name; },
     openReimageModal(id) { this.reimageModal = true; this.currentMachineId = id; },
     openPowerModal(id) { this.powerModal = true; this.currentMachineId = id; },
-    openDeleteModal(id) { this.deleteModal = true; this.currentMachineId = id; }
+    openDeleteModal(id) { this.deleteModal = true; this.currentMachineId = id; },
+    toggleOsDropdown(id) { 
+        this.osDropdowns[id] = !this.osDropdowns[id]; 
+        // Close all other dropdowns
+        Object.keys(this.osDropdowns).forEach(key => {
+            if (key !== id && this.osDropdowns[key]) this.osDropdowns[key] = false;
+        });
+    },
+    selectOs(id, os) {
+        // TODO: Implement OS selection API call
+        console.log(`Select OS ${os} for machine ${id}`);
+        this.osDropdowns[id] = false;
+    }
 }" x-init="window.isAuthenticated = isAuthenticated"
    @close-tag-modal.window="tagModal = false"
    @close-delete-modal.window="deleteModal = false">
@@ -120,9 +133,57 @@
                                     </span>
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-                                    {% if machine.os_choice %}
-                                        🖥️ {{ machine.os_choice }}
-                                    {% endif %}
+                                    <div class="relative" @click.stop>
+                                        <div class="flex items-center cursor-pointer" @click="toggleOsDropdown('{{ machine.id }}')">
+                                            {% if machine.os_choice %}
+                                                <span class="flex items-center">
+                                                    {{ machine.os_choice | format_os_icon | safe }} 
+                                                    <span class="ml-1">{{ machine.os_choice | format_os }}</span>
+                                                </span>
+                                            {% else %}
+                                                <span class="text-gray-400 italic flex items-center">
+                                                    <i class="fas fa-square-question text-gray-400 mr-1"></i> No OS
+                                                </span>
+                                            {% endif %}
+                                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 ml-1 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                                            </svg>
+                                        </div>
+                                        
+                                        <!-- OS Dropdown -->
+                                        <div 
+                                            x-show="osDropdowns['{{ machine.id }}'] === true"
+                                            x-transition:enter="transition ease-out duration-100"
+                                            x-transition:enter-start="transform opacity-0 scale-95"
+                                            x-transition:enter-end="transform opacity-100 scale-100"
+                                            x-transition:leave="transition ease-in duration-75"
+                                            x-transition:leave-start="transform opacity-100 scale-100"
+                                            x-transition:leave-end="transform opacity-0 scale-95"
+                                            class="absolute z-10 mt-1 w-48 rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5 focus:outline-none dark:bg-black dark:ring-gray-700"
+                                            @click.outside="osDropdowns['{{ machine.id }}'] = false"
+                                            x-cloak
+                                        >
+                                            <div class="py-1">
+                                                <!-- OS Options -->
+                                                <a href="#" @click.prevent="selectOs('{{ machine.id }}', 'ubuntu-2204')" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white flex items-center">
+                                                    <i class="fab fa-ubuntu text-orange-500 dark:text-orange-500 mr-2"></i> Ubuntu 22.04
+                                                </a>
+                                                <a href="#" @click.prevent="selectOs('{{ machine.id }}', 'ubuntu-2404')" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white flex items-center">
+                                                    <i class="fab fa-ubuntu text-orange-500 dark:text-orange-500 mr-2"></i> Ubuntu 24.04
+                                                </a>
+                                                <a href="#" @click.prevent="selectOs('{{ machine.id }}', 'debian-12')" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white flex items-center">
+                                                    <i class="fab fa-debian text-red-500 mr-2"></i> Debian 12
+                                                </a>
+                                                <a href="#" @click.prevent="selectOs('{{ machine.id }}', 'proxmox')" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white flex items-center">
+                                                    <i class="fas fa-server text-blue-500 mr-2"></i> Proxmox
+                                                </a>
+                                                <a href="#" @click.prevent="selectOs('{{ machine.id }}', 'talos')" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white flex items-center">
+                                                    <i class="fas fa-robot text-purple-500 mr-2"></i> Talos
+                                                </a>
+                                                <!-- Add more OS options as needed -->
+                                            </div>
+                                        </div>
+                                    </div>
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
                                     {% if machine.status == "InstallingOS" %}

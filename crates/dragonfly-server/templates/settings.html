@@ -79,11 +79,21 @@
                                 class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md"
                             >
                                 <option value="" {% if default_os_none %}selected{% endif %}>None</option>
-                                <option value="ubuntu-2204" {% if default_os_ubuntu2204 %}selected{% endif %}>Ubuntu 22.04</option>
-                                <option value="ubuntu-2404" {% if default_os_ubuntu2404 %}selected{% endif %}>Ubuntu 24.04</option>
-                                <option value="debian-12" {% if default_os_debian12 %}selected{% endif %}>Debian 12</option>
-                                <option value="proxmox" {% if default_os_proxmox %}selected{% endif %}>Proxmox</option>
-                                <option value="talos" {% if default_os_talos %}selected{% endif %}>Talos</option>
+                                <option value="ubuntu-2204" {% if default_os_ubuntu2204 %}selected{% endif %}>
+                                    Ubuntu 22.04
+                                </option>
+                                <option value="ubuntu-2404" {% if default_os_ubuntu2404 %}selected{% endif %}>
+                                    Ubuntu 24.04
+                                </option>
+                                <option value="debian-12" {% if default_os_debian12 %}selected{% endif %}>
+                                    Debian 12
+                                </option>
+                                <option value="proxmox" {% if default_os_proxmox %}selected{% endif %}>
+                                    Proxmox
+                                </option>
+                                <option value="talos" {% if default_os_talos %}selected{% endif %}>
+                                    Talos
+                                </option>
                             </select>
                         </div>
                         <p class="text-sm text-gray-500 dark:text-gray-400 ml-36">When set, newly discovered machines will automatically have this OS assigned for deployment.</p>

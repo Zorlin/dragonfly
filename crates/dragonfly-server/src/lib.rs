@@ -289,6 +289,12 @@ pub async fn run() -> anyhow::Result<()> {
                 let mut env = Environment::new();
                 let path_for_closure = template_path.clone();
                 env.set_loader(path_loader(&path_for_closure));
+                
+                // Set up filters and globals
+                if let Err(e) = ui::setup_minijinja_environment(&mut env) {
+                    error!("Failed to set up MiniJinja environment: {}", e);
+                }
+                
                 flag_clone_for_closure.store(true, Ordering::SeqCst);
                 notifier.watch_path(path_for_closure.as_str(), true);
                 Ok(env)
@@ -329,6 +335,12 @@ pub async fn run() -> anyhow::Result<()> {
             info!("Using static MiniJinja environment for release build");
             let mut env = Environment::new();
             env.set_loader(path_loader(&template_path));
+            
+            // Set up filters and globals
+            if let Err(e) = ui::setup_minijinja_environment(&mut env) {
+                error!("Failed to set up MiniJinja environment: {}", e);
+            }
+            
             TemplateEnv::Static(Arc::new(env))
         }
     };

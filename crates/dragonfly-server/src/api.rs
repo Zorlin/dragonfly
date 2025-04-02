@@ -1256,6 +1256,28 @@ pub async fn download_hookos_artifacts(version: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+// OS information struct
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OsInfo {
+    pub name: String,
+    pub icon: String,
+}
+
+// Get OS icon for a specific OS
+pub fn get_os_icon(os: &str) -> String {
+    match os {
+        "ubuntu-2204" | "ubuntu-2404" => "<i class=\"fab fa-ubuntu text-orange-500 dark:text-orange-500\"></i>",
+        "debian-12" => "<i class=\"fab fa-debian text-red-500\"></i>",
+        "proxmox" => "<i class=\"fas fa-server text-blue-500\"></i>",
+        "talos" => "<i class=\"fas fa-robot text-purple-500\"></i>",
+        "windows" => "<i class=\"fab fa-windows text-blue-400\"></i>",
+        "rocky" | "rocky-9" => "<i class=\"fas fa-mountain text-green-500\"></i>",
+        "fedora" => "<i class=\"fab fa-fedora text-blue-600\"></i>",
+        "alma" | "almalinux" => "<i class=\"fas fa-hat-cowboy text-amber-600\"></i>",
+        _ => "<i class=\"fas fa-square-question text-gray-500\"></i>", // Unknown OS
+    }.to_string()
+}
+
 // Make format_os_name public
 pub fn format_os_name(os: &str) -> String {
     match os {
@@ -1266,6 +1288,14 @@ pub fn format_os_name(os: &str) -> String {
         "talos" => "Talos",
         _ => os, // Return original string if no match
     }.to_string()
+}
+
+// Get both OS name and icon
+pub fn get_os_info(os: &str) -> OsInfo {
+    OsInfo {
+        name: format_os_name(os),
+        icon: get_os_icon(os),
+    }
 }
 
 async fn update_installation_progress(

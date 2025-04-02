@@ -24,6 +24,9 @@ use std::str::FromStr;
 // Import global state
 use crate::{AppState, INSTALL_STATE_REF, InstallationState};
 
+// Import format_os_name from api.rs
+use crate::api::{format_os_name, get_os_icon, get_os_info, OsInfo};
+
 // Extract theme from cookies
 pub fn get_theme_from_cookie(headers: &HeaderMap) -> String {
     if let Some(cookie_header) = headers.get(header::COOKIE) {
@@ -1093,4 +1096,68 @@ pub async fn setup_swarm(
             render_minijinja(&app_state, "error.html", context)
         }
     }
+}
+
+// Environment setup for MiniJinja
+pub fn setup_minijinja_environment(env: &mut minijinja::Environment) -> Result<(), anyhow::Error> {
+    // Add OS name formatter
+    env.add_filter("format_os", |os: &str| -> String {
+        format_os_name(os)
+    });
+    
+    // Add OS icon formatter
+    env.add_filter("format_os_icon", |os: &str| -> String {
+        get_os_icon(os)
+    });
+    
+    // Add combined OS info formatter that returns a serializable struct
+    env.add_filter("get_os_info", |os: &str| -> minijinja::Value {
+        let info = get_os_info(os);
+        minijinja::value::Value::from_serialize(&info)
+    });
+    
+    // Register datetime formatting filter
+    env.add_filter("datetime_format", |args: &[minijinja::Value]| -> Result<String, minijinja::Error> {
+        if args.len() < 2 {
+            return Err(minijinja::Error::new(
+                minijinja::ErrorKind::InvalidOperation,
+                "datetime_format requires a datetime and format string"
+            ));
+        }
+        
+        // Extract the datetime from the first argument
+        let dt_str = args[0].as_str().ok_or_else(|| {
+            minijinja::Error::new(
+                minijinja::ErrorKind::InvalidOperation,
+                "datetime must be a string in ISO format"
+            )
+        })?;
+        
+        // Parse the datetime
+        let dt = match chrono::DateTime::parse_from_rfc3339(dt_str) {
+            Ok(dt) => dt.with_timezone(&chrono::Utc),
+            Err(_) => {
+                return Err(minijinja::Error::new(
+                    minijinja::ErrorKind::InvalidOperation,
+                    "could not parse datetime string"
+                ));
+            }
+        };
+        
+        // Extract the format string
+        let fmt = args[1].as_str().ok_or_else(|| {
+            minijinja::Error::new(
+                minijinja::ErrorKind::InvalidOperation,
+                "format must be a string"
+            )
+        })?;
+        
+        // Format the datetime
+        Ok(dt.format(fmt).to_string())
+    });
+    
+    // Set up more configuration as needed
+    env.add_global("now", minijinja::Value::from(chrono::Utc::now().to_rfc3339()));
+    
+    Ok(())
 } 
