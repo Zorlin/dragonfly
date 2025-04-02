@@ -49,6 +49,7 @@ pub struct IndexTemplate {
     pub installation_in_progress: bool,
     pub initial_install_message: String,
     pub initial_animation_class: String,
+    pub is_demo_mode: bool,
 }
 
 #[derive(Serialize)]
@@ -222,22 +223,26 @@ pub async fn index(
         return Redirect::to("/login").into_response();
     }
 
-    // Check if installation is in progress by reading the global state
-    let mut installation_in_progress = false;
+    // Determine if we are in installation mode
+    let installation_in_progress = std::env::var("DRAGONFLY_INSTALL_SERVER_MODE").is_ok();
     let mut initial_install_message = String::new();
     let mut initial_animation_class = String::new();
+    
+    // Determine if we are in demo mode
+    let is_demo_mode = std::env::var("DRAGONFLY_DEMO_MODE").is_ok();
 
-    // Clone the Arc out of the RwLock guard before awaiting
-    let install_state_arc_mutex: Option<Arc<tokio::sync::Mutex<InstallationState>>> = {
-        INSTALL_STATE_REF.read().unwrap().as_ref().cloned()
-    };
+    // If installing, get initial state
+    if installation_in_progress {
+        // Clone the Arc out of the RwLock guard before awaiting
+        let install_state_arc_mutex: Option<Arc<tokio::sync::Mutex<InstallationState>>> = {
+            INSTALL_STATE_REF.read().unwrap().as_ref().cloned()
+        };
 
-    if let Some(state_arc_mutex) = install_state_arc_mutex {
-        installation_in_progress = true;
-        // Now lock the tokio::sync::Mutex using await
-        let initial_state = state_arc_mutex.lock().await.clone(); 
-        initial_install_message = initial_state.get_message().to_string();
-        initial_animation_class = initial_state.get_animation_class().to_string();
+        if let Some(state_arc_mutex) = install_state_arc_mutex {
+            let initial_state = state_arc_mutex.lock().await.clone(); 
+            initial_install_message = initial_state.get_message().to_string();
+            initial_animation_class = initial_state.get_animation_class().to_string();
+        }
     }
     
     // Prepare context for the template
@@ -271,6 +276,7 @@ pub async fn index(
         installation_in_progress,
         initial_install_message,
         initial_animation_class,
+        is_demo_mode,
     };
     
     render_minijinja(&app_state, "index.html", context)
@@ -411,6 +417,7 @@ pub async fn machine_details(
                         installation_in_progress: false,
                         initial_install_message: String::new(),
                         initial_animation_class: String::new(),
+                        is_demo_mode: false,
                     };
                     // Pass AppState to render_minijinja
                     render_minijinja(&app_state, "index.html", context)
@@ -429,6 +436,7 @@ pub async fn machine_details(
                         installation_in_progress: false,
                         initial_install_message: String::new(),
                         initial_animation_class: String::new(),
+                        is_demo_mode: false,
                     };
                     // Pass AppState to render_minijinja
                     render_minijinja(&app_state, "index.html", context)
@@ -449,6 +457,7 @@ pub async fn machine_details(
                 installation_in_progress: false,
                 initial_install_message: String::new(),
                 initial_animation_class: String::new(),
+                is_demo_mode: false,
             };
             // Pass AppState to render_minijinja
             render_minijinja(&app_state, "index.html", context)

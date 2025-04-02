@@ -28,7 +28,7 @@ When a user runs `dragonfly` from the command line:
 
 ---
 
-### 🖥️ Scenario B: Server Mode (`DRAGONFLY_SERVER_MODE=true`)
+### 🖥️ Scenario B: Server Mode (`dragonfly server`)
 
 #### If Dragonfly is already installed:
 

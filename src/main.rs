@@ -21,8 +21,8 @@ use cmd::install::InstallArgs;
 use std::fs::OpenOptions;
 use std::io::stderr; // For foreground logging
 
-// Import status module from server crate
-use dragonfly_server::status;
+// Import status module and run function from server crate
+use dragonfly_server::{status, run as run_server, database_exists}; // Import run and database_exists
 
 // --- Structs and Enums for Default Invocation Logic --- 
 
@@ -171,8 +171,40 @@ async fn main() -> Result<()> {
                  // let _ = shutdown_tx.send(()); // Optional: Signal server to stop
             }
         }
-        Some(Commands::Setup(_)) | Some(Commands::Server(_)) | None => {
-            // Scenario A: Handle default 'dragonfly' invocation
+        // Separate Server command logic
+        Some(Commands::Server(_args)) => {
+            info!("Checking Dragonfly installation status for server mode...");
+            let is_installed = database_exists().await;
+
+            if is_installed {
+                info!("Dragonfly is installed. Starting main server process...");
+                // Call the server run function from the dragonfly_server crate
+                if let Err(e) = run_server().await {
+                    error!("Server failed to run: {:#}", e);
+                    eprintln!("Error running Dragonfly server: {}", e);
+                    // Ensure shutdown signal is sent on error
+                    let _ = shutdown_tx.send(());
+                    std::process::exit(1);
+                }
+            } else {
+                info!("Dragonfly is not installed. Starting Demo Experience...");
+                // Set environment variable to trigger demo mode within the server run function
+                std::env::set_var("DRAGONFLY_DEMO_MODE", "true");
+                println!("🚀 Starting Dragonfly in Demo Mode (no hardware touched).");
+                println!("   Run 'dragonfly install' to set up the full system.");
+
+                if let Err(e) = run_server().await {
+                    error!("Demo server failed to run: {:#}", e);
+                    eprintln!("Error running Dragonfly demo server: {}", e);
+                     // Ensure shutdown signal is sent on error
+                    let _ = shutdown_tx.send(());
+                    std::process::exit(1);
+                }
+            }
+        }
+        // Handle Setup and default invocation (None)
+        Some(Commands::Setup(_)) | None => {
+            // Scenario A: Handle default 'dragonfly' invocation (and potentially Setup)
             // Gather status first
             let db_exists = dragonfly_server::database_exists().await;
             

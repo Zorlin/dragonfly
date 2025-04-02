@@ -4,7 +4,13 @@
 
 {% block content %}
 <div class="container mx-auto px-4 py-6">
-    <h2 class="text-lg font-medium text-purple-600 dark:text-purple-400 uppercase tracking-wider mb-6">Welcome to Dragonfly.</h2>
+    <h2 class="text-lg font-medium text-purple-600 dark:text-purple-400 uppercase tracking-wider mb-6">
+        {% if is_demo_mode %}
+            You're in demo mode - welcome to Dragonfly.
+        {% else %}
+            Welcome to Dragonfly.
+        {% endif %}
+    </h2>
 
     {# Conditional display: Installer or Regular Dashboard #}
     {% if installation_in_progress %}
