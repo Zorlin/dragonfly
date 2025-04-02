@@ -12,8 +12,10 @@
     tagModal: false,
     reimageModal: false,
     powerModal: false,
+    macConfirmModal: false,
     currentMachineId: null,
     currentMachineName: null,
+    newMacAddress: null,
     osDropdowns: {}, // Track open state of OS dropdowns
     editingField: null, // Track which field is being edited
     fieldChanges: {}, // Track changes to fields
@@ -141,19 +143,28 @@
             return;
         }
         
-        if (confirm(`Changing the MAC address for this machine will cause issues if the machine is still using the old one. Are you sure you want to change it to ${newMac}?`)) {
-            this.applyChanges(machineId);
-        } else {
-            // Revert changes if user cancels
-            delete this.fieldChanges[machineId].mac_address;
-            if (Object.keys(this.fieldChanges[machineId]).length === 0) {
-                delete this.fieldChanges[machineId];
-            }
-            this.pendingChanges = Object.keys(this.fieldChanges).length > 0;
-            
-            // Refresh the display
-            htmx.trigger(document.querySelector('tbody'), 'refreshMachines');
+        this.currentMachineId = machineId;
+        this.newMacAddress = newMac;
+        this.macConfirmModal = true;
+    },
+    
+    confirmMacChangeApply() {
+        this.applyChanges(this.currentMachineId);
+        this.macConfirmModal = false;
+    },
+    
+    cancelMacChange() {
+        // Revert changes if user cancels
+        delete this.fieldChanges[this.currentMachineId].mac_address;
+        if (Object.keys(this.fieldChanges[this.currentMachineId]).length === 0) {
+            delete this.fieldChanges[this.currentMachineId];
         }
+        this.pendingChanges = Object.keys(this.fieldChanges).length > 0;
+        
+        // Refresh the display
+        htmx.trigger(document.querySelector('tbody'), 'refreshMachines');
+        
+        this.macConfirmModal = false;
     },
     
     openTagModal(id, name) { this.tagModal = true; this.currentMachineId = id; this.currentMachineName = name; },
@@ -168,9 +179,43 @@
         });
     },
     selectOs(id, os) {
-        // TODO: Implement OS selection API call
-        console.log(`Select OS ${os} for machine ${id}`);
+        // Initialize changes object if needed
+        if (!this.originalValues[id]) {
+            this.originalValues[id] = {};
+        }
+        if (!this.originalValues[id]['os_choice']) {
+            // Store original OS value from the DOM since we don't have it in our data model
+            const osElement = document.querySelector('tr[data-machine-id=' + id + '] .os-current-value');
+            this.originalValues[id]['os_choice'] = osElement ? osElement.textContent.trim() : '';
+        }
+        
+        // Update the changes object
+        if (!this.fieldChanges[id]) {
+            this.fieldChanges[id] = {};
+        }
+        
+        // Check if the value has actually changed
+        if (os !== this.originalValues[id]['os_choice']) {
+            this.fieldChanges[id]['os_choice'] = os;
+            this.pendingChanges = true;
+        } else {
+            // If value is back to original, remove it from changes
+            delete this.fieldChanges[id]['os_choice'];
+            
+            // Check if there are any changes left for this machine
+            if (Object.keys(this.fieldChanges[id]).length === 0) {
+                delete this.fieldChanges[id];
+            }
+            
+            // Check if there are any changes left at all
+            this.pendingChanges = Object.keys(this.fieldChanges).length > 0;
+        }
+        
+        // Close the dropdown
         this.osDropdowns[id] = false;
+        
+        // For debugging
+        console.log('Select OS ' + os + ' for machine ' + id);
     }
 }" x-init="window.isAuthenticated = isAuthenticated"
    @close-tag-modal.window="tagModal = false"
@@ -235,9 +280,9 @@
                                             <input x-show="editingField === '{{ machine.id }}-hostname'"
                                                    x-ref="hostname{{ machine.id }}"
                                                    x-on:click.stop
-                                                   x-on:keydown.enter.stop="if(validateHostname($event.target.value)) { updateField('{{ machine.id }}', 'hostname', $event.target.value); stopEditing(); }"
+                                                   x-on:keydown.enter.stop="validateHostname($event.target.value) ? (updateField('{{ machine.id }}', 'hostname', $event.target.value), stopEditing()) : (showToast('Invalid hostname. Must follow RFC-1123 format.', 'error'), $event.target.value = originalValues['{{ machine.id }}']['hostname'], stopEditing())"
                                                    x-on:keydown.escape.stop="stopEditing()"
-                                                   x-on:blur="if(validateHostname($event.target.value)) { updateField('{{ machine.id }}', 'hostname', $event.target.value); stopEditing(); }"
+                                                   x-on:blur="validateHostname($event.target.value) ? (updateField('{{ machine.id }}', 'hostname', $event.target.value), stopEditing()) : (showToast('Invalid hostname. Must follow RFC-1123 format.', 'error'), $event.target.value = originalValues['{{ machine.id }}']['hostname'], stopEditing())"
                                                    x-effect="if(editingField === '{{ machine.id }}-hostname') setTimeout(() => $refs['hostname{{ machine.id }}'].focus(), 50)"
                                                    type="text"
                                                    value="{{ machine.hostname|default('') }}"
@@ -281,9 +326,9 @@
                                         <input x-show="editingField === '{{ machine.id }}-mac_address'"
                                                x-ref="macAddress{{ machine.id }}"
                                                x-on:click.stop
-                                               x-on:keydown.enter.stop="updateField('{{ machine.id }}', 'mac_address', $event.target.value); stopEditing();"
+                                               x-on:keydown.enter.stop="validateMac($event.target.value) ? (updateField('{{ machine.id }}', 'mac_address', $event.target.value), stopEditing()) : (showToast('Invalid MAC address format. Must be XX:XX:XX:XX:XX:XX', 'error'), $event.target.value = originalValues['{{ machine.id }}']['mac_address'], stopEditing())"
                                                x-on:keydown.escape.stop="stopEditing()"
-                                               x-on:blur="updateField('{{ machine.id }}', 'mac_address', $event.target.value); stopEditing();"
+                                               x-on:blur="validateMac($event.target.value) ? (updateField('{{ machine.id }}', 'mac_address', $event.target.value), stopEditing()) : (showToast('Invalid MAC address format. Must be XX:XX:XX:XX:XX:XX', 'error'), $event.target.value = originalValues['{{ machine.id }}']['mac_address'], stopEditing())"
                                                x-effect="if(editingField === '{{ machine.id }}-mac_address') setTimeout(() => $refs['macAddress{{ machine.id }}'].focus(), 50)"
                                                type="text"
                                                value="{{ machine.mac_address }}"
@@ -303,9 +348,9 @@
                                         <input x-show="editingField === '{{ machine.id }}-ip_address'"
                                                x-ref="ipAddress{{ machine.id }}"
                                                x-on:click.stop
-                                               x-on:keydown.enter.stop="if(validateIp($event.target.value)) { updateField('{{ machine.id }}', 'ip_address', $event.target.value); stopEditing(); }"
+                                               x-on:keydown.enter.stop="validateIp($event.target.value) ? (updateField('{{ machine.id }}', 'ip_address', $event.target.value), stopEditing()) : (showToast('Invalid IP address format. Must be a valid IPv4 address.', 'error'), $event.target.value = originalValues['{{ machine.id }}']['ip_address'], stopEditing())"
                                                x-on:keydown.escape.stop="stopEditing()"
-                                               x-on:blur="if(validateIp($event.target.value)) { updateField('{{ machine.id }}', 'ip_address', $event.target.value); stopEditing(); }"
+                                               x-on:blur="validateIp($event.target.value) ? (updateField('{{ machine.id }}', 'ip_address', $event.target.value), stopEditing()) : (showToast('Invalid IP address format. Must be a valid IPv4 address.', 'error'), $event.target.value = originalValues['{{ machine.id }}']['ip_address'], stopEditing())"
                                                x-effect="if(editingField === '{{ machine.id }}-ip_address') setTimeout(() => $refs['ipAddress{{ machine.id }}'].focus(), 50)"
                                                type="text"
                                                value="{{ machine.ip_address }}"
@@ -680,6 +725,45 @@
                         <button type="button" class="disabled:opacity-50 inline-flex w-full justify-center rounded-md bg-red-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-red-500 sm:w-auto" disabled>Power Off</button>
                         <button type="button" class="disabled:opacity-50 inline-flex w-full justify-center rounded-md bg-green-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-green-500 sm:w-auto" disabled>Power On</button>
                      </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {# MAC Address Change Confirmation Modal #}
+    <div id="mac-confirm-modal" class="relative z-50" aria-labelledby="modal-title" role="dialog" aria-modal="true" 
+        x-show="macConfirmModal" 
+        x-transition:enter="ease-out duration-200"
+        x-transition:enter-start="opacity-0 scale-95"
+        x-transition:enter-end="opacity-100 scale-100"
+        x-transition:leave="ease-in duration-100"
+        x-transition:leave-start="opacity-100 scale-100"
+        x-transition:leave-end="opacity-0 scale-95"
+        x-cloak>
+        <div class="fixed inset-0 pointer-events-none"></div>
+        <div class="fixed inset-0 z-50 overflow-y-auto" @click="macConfirmModal = false">
+            <div class="flex min-h-full items-center justify-center p-4 text-center sm:p-0">
+                <div class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6 border border-purple-500/30 dark:border-purple-500/20" 
+                    @click.stop>
+                    <div class="sm:flex sm:items-start">
+                        <div class="mx-auto flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-yellow-100 sm:mx-0 sm:h-10 sm:w-10">
+                            <svg class="h-6 w-6 text-yellow-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+                            </svg>
+                        </div>
+                        <div class="mt-3 text-center sm:ml-4 sm:mt-0 sm:text-left">
+                            <h3 class="text-base font-semibold leading-6 text-gray-900 dark:text-white" id="modal-title">Confirm MAC Address Change</h3>
+                            <div class="mt-2">
+                                <p class="text-sm text-gray-500 dark:text-gray-300">
+                                    Changing the MAC address for this machine will cause issues if the machine is still using the old one. Are you sure you want to change it to <code x-text="newMacAddress" class="font-mono text-purple-600 dark:text-purple-400"></code>?
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="mt-5 sm:mt-4 sm:flex sm:flex-row-reverse">
+                        <button type="button" class="inline-flex w-full justify-center rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-500 sm:ml-3 sm:w-auto" @click="confirmMacChangeApply()">Confirm Change</button>
+                        <button type="button" class="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 sm:mt-0 sm:w-auto dark:bg-gray-600 dark:text-white dark:ring-gray-500 dark:hover:bg-gray-500" @click="cancelMacChange()">Cancel</button>
+                    </div>
                 </div>
             </div>
         </div>
