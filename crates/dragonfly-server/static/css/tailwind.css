@@ -1934,11 +1934,6 @@
       grid-template-columns: repeat(3, minmax(0, 1fr));
     }
   }
-  .md\:rounded-lg {
-    @media (width >= 48rem) {
-      border-radius: var(--radius-lg);
-    }
-  }
   .md\:px-6 {
     @media (width >= 48rem) {
       padding-inline: calc(var(--spacing) * 6);
@@ -2049,6 +2044,11 @@
   .dark\:border-purple-800\/30 {
     &:where(.dark, .dark *) {
       border-color: color-mix(in oklab, var(--color-purple-800) 30%, transparent);
+    }
+  }
+  .dark\:border-purple-900 {
+    &:where(.dark, .dark *) {
+      border-color: var(--color-purple-900);
     }
   }
   .dark\:border-red-500\/20 {
