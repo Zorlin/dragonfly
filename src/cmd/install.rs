@@ -8,11 +8,10 @@ use std::process::{Command, Output}; // For running commands
 use std::time::Instant;
 use tokio::fs; // For async file operations
 use ipnetwork::Ipv4Network;
-use network_interface::{NetworkInterface, NetworkInterfaceConfig};
-use network_interface::Addr;
-use std::sync::{Arc, Mutex};
-use tokio::task_local; // Import task_local
-use tokio::signal; // Import signal for Ctrl+C
+use network_interface::NetworkInterfaceConfig;
+use std::sync::Arc;
+ // Import task_local
+ // Import signal for Ctrl+C
 use tokio::sync::watch; // Import watch
 
 // Import state and globals from server crate
@@ -858,6 +857,7 @@ async fn install_tinkerbell_stack(bootstrap_ip: Ipv4Addr, network: Ipv4Network, 
   publicIP: {bootstrap_ip}
 smee:
   dhcp:
+    enabled: false
     allowUnknownHosts: true
     mode: auto-proxy
     httpIPXE:

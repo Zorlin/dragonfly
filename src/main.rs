@@ -18,7 +18,6 @@ mod cmd;
 use cmd::install::InstallArgs;
 
 // Import necessary file handling modules
-use std::fs::OpenOptions;
 use std::io::stderr; // For foreground logging
 
 // Import status module and run function from server crate
@@ -116,10 +115,40 @@ async fn main() -> Result<()> {
     color_eyre::install()?; // Install better error handling
 
     let cli = Cli::parse();
-    let log_level = if cli.verbose { Level::DEBUG } else { Level::INFO };
 
     // Create shutdown channel (used only by install command for now)
     let (shutdown_tx, shutdown_rx) = watch::channel(());
+
+    // --- Centralized Logging Initialization ---
+    let filter = match &cli.command {
+        Some(Commands::Install(_)) => {
+            // Install mode: Silence server and noisy dependencies
+            let log_level = if cli.verbose { "debug" } else { "info" };
+            let directives = format!(
+                "dragonfly={level},dragonfly_server=off,tower=warn,hyper=warn,sqlx=warn,kube=warn,rustls=warn,h2=warn,reqwest=warn,tokio_reactor=warn,mio=warn,want=warn",
+                level = log_level
+            );
+            EnvFilter::new(directives)
+        }
+        _ => {
+            // Server/Setup/Default mode: Respect RUST_LOG, fallback to verbose/info for this crate
+            let default_level = if cli.verbose { "debug" } else { "info" };
+            // Construct a default directive string, but let RUST_LOG override if set.
+            let default_directives = format!(
+                "dragonfly={level},dragonfly_server={level},tower=warn,hyper=warn,sqlx=warn,kube=warn,rustls=warn,h2=warn,reqwest=warn,tokio_reactor=warn,mio=warn,want=warn",
+                level = default_level
+            );
+             EnvFilter::try_from_default_env()
+                 .unwrap_or_else(|_| EnvFilter::new(default_directives))
+        }
+    };
+
+    // Initialize the global logger ONCE
+    // TODO: Add file logging here maybe, depending on mode?
+    registry().with(filter).with(fmt::layer().with_writer(stderr)).init();
+
+    info!("Global logger initialized."); // Should appear based on filter settings
+    // --- End Centralized Logging Initialization ---
 
     // For non-server commands, set up a Ctrl+C handler that sends the shutdown signal
     if !matches!(cli.command, Some(Commands::Server(_))) {
@@ -130,30 +159,6 @@ async fn main() -> Result<()> {
             // Send shutdown signal. Ignore result if receiver already dropped.
             let _ = shutdown_tx_clone.send(());
         });
-    }
-
-    // Initialize logging ONLY if we are the main installer process
-    if let Some(Commands::Install(_)) = &cli.command {
-        // Define EnvFilter directives for install mode:
-        // - Default level based on verbosity for the installer itself (crate root)
-        // - Silence server-related crates
-        let directives = format!(
-            "dragonfly={level},dragonfly_server=off,tower=warn,hyper=warn,sqlx=warn,kube=warn,rustls=warn,h2=warn,reqwest=warn,tokio_reactor=warn,mio=warn,want=warn",
-            level = log_level
-        );
-        let filter = EnvFilter::new(directives);
-        let fmt_layer = fmt::layer().with_writer(stderr).with_target(false);
-        registry().with(filter).with(fmt_layer).init();
-        info!("Installer process starting with logging enabled...");
-    }
-    // NOTE: No logging init here for other modes. Server/Setup/Demo rely on RUST_LOG.
-    
-    // Set RUST_LOG env var based on verbosity *only if not installing*.
-    // This allows tracing's default EnvFilter to pick it up if server is run directly.
-    if !matches!(cli.command, Some(Commands::Install(_))) {
-        if cli.verbose && std::env::var("RUST_LOG").is_err() {
-            std::env::set_var("RUST_LOG", "debug");
-        }
     }
 
     // Process commands
@@ -176,7 +181,8 @@ async fn main() -> Result<()> {
         // Separate Server command logic
         Some(Commands::Server(_args)) => {
             info!("Checking Dragonfly installation status for server mode...");
-            let is_installed = database_exists().await;
+            // Use the comprehensive installation check from the server crate
+            let is_installed = dragonfly_server::is_dragonfly_installed().await;
             
             // Register a panic handler to ensure clean exit
             let original_hook = std::panic::take_hook();

@@ -18,13 +18,13 @@ This document outlines the core user flows and behaviors for Dragonfly across va
 When a user runs `dragonfly` from the command line:
 
 #### If Dragonfly is already installed:
-✅ Completed, needs unit tests
+🚀 Completed
 - Ensure all Dragonfly services are running.
 - Print the local address of the WebUI (e.g., `http://localhost:3000`).
 - Print the full CLI help text.
 
 #### If Dragonfly is not installed:
-✅ Completed, needs unit tests
+🚀 Completed
 - Print the CLI help text.
 - Do **not** attempt to inspect any server state.
 - Emphasize that `dragonfly install` is the next step.
@@ -43,6 +43,18 @@ When a user runs `dragonfly` from the command line:
 #### If no mode has been selected yet:
 🏗️ To do
 - Display the `welcome.html` onboarding screen.
+
+The Welcome screen intentionally uses the chrome from the main Dragonfly UI, but removes the Dashboard, Machines, Settings, and Login sections until the user has chosen a mode.
+
+Once the user has chosen a mode (they will be encouraged to choose Flight mode by default), we show the normal UI and fade in the normal buttons.
+
+They are prompted to change the initial password, and are given the option to change it later. It saves the initial password as a secret in Kubernetes in case the user forgets the initial password, but *will not* store any passwords the user changes it to later.
+
+The user loads into the main interface, and having selected Flight mode, Dragonfly will start downloading HookOS images.
+
+When the user selects an OS, a pullthrough cache is used to store the OS images as they are imaged onto the machine.
+
+The user can select a machine from the machine list and change its OS to a different OS and redeploy it, or change its hostname, friendly name, MAC address, or tags.
 
 #### If Dragonfly is **not** installed:
 🚧 In progress
@@ -278,6 +290,7 @@ They see the new cluster in the machine list, with the hosts and VMs clearly lab
 The grid displays the hosts and VMs in a grid, with the hosts wrapped around the VMs they manage and control. The grid is arranged Tetris style with a sorting algorithm that tries to fill the screen as best as possible.
 
 ### Scenario H:
+🚧🚧🚧 Heavy construction 🚧🚧🚧
 Let's add real deployment tracking to the demo.
 
 The way it will work is you can run a normal deployment of Dragonfly, install a bunch of machines with it, then shut it down and start the server in demo mode. In demo mode, it will replace the normal list of machines with a fake list of machines and not give out any information to allow real clients to avoid booting from it.

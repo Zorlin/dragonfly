@@ -26,10 +26,6 @@ use minijinja::{Error as MiniJinjaError, ErrorKind as MiniJinjaErrorKind};
 // Constants for the initial password file (not for loading, just for UX)
 const INITIAL_PASSWORD_FILE: &str = "initial_password.txt";
 
-// Constants for auth system
-const USER_ID_KEY: &str = "user_id";
-const SESSION_COOKIE_NAME: &str = "dragonfly_auth";
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Credentials {
     pub username: String,
@@ -364,52 +360,6 @@ async fn logout(mut auth_session: AuthSession) -> Response {
         Ok(_) => Redirect::to("/login").into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
-}
-
-// Authentication middleware
-pub async fn auth_middleware(
-    auth_session: AuthSession,
-    settings: Extension<Arc<Mutex<Settings>>>,
-    req: Request<axum::body::Body>,
-    next: Next,
-) -> Response {
-    let path = req.uri().path();
-    
-    // Always allow these paths regardless of authentication
-    if path.starts_with("/static/") || 
-       path.starts_with("/css/") || 
-       path.starts_with("/js/") || 
-       path.starts_with("/images/") || 
-       path == "/login" || 
-       path == "/logout" ||
-       path == "/favicon.ico" ||
-       path == "/login-test" {  // Explicitly allow login-test
-        return next.run(req).await;
-    }
-    
-    // Always allow API endpoints (they have their own auth)
-    if path.starts_with("/api/") {
-        return next.run(req).await;
-    }
-    
-    // Get authentication status
-    let is_authenticated = auth_session.user.is_some();
-    let is_demo_mode = std::env::var("DRAGONFLY_DEMO_MODE").is_ok();
-    
-    // Always log authentication status and path in demo mode
-    if is_demo_mode {
-        info!("Demo mode request: path={}, authenticated={}", path, is_authenticated);
-    }
-    
-    // Check if login is required 
-    if !is_authenticated {
-        // In all cases, redirect to login if not authenticated
-        info!("User not authenticated, redirecting to login page");
-        return Redirect::to("/login").into_response();
-    }
-    
-    // User is authenticated, proceed
-    next.run(req).await
 }
 
 // Helper functions for managing credentials

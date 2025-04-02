@@ -4,9 +4,7 @@ use axum::{
     extract::{State, Path, Json, Form, FromRequest},
     http::{StatusCode},
     response::{IntoResponse, Html, Response, sse::{Event, Sse, KeepAlive}},
-    body::{Body},
 };
-use http_body_util::StreamBody;
 use std::convert::Infallible;
 use serde_json::json;
 use uuid::Uuid;
@@ -26,9 +24,9 @@ use crate::{
     InstallationState
 };
 use std::sync::Arc;
-use tokio_stream::wrappers::BroadcastStream;
-use tokio_stream::StreamExt;
-use tokio::sync::broadcast::error::RecvError;
+use std::path::Path as FilePath;
+use std::fs::File;
+use tar::Archive;
 
 pub fn api_router() -> Router<crate::AppState> {
     Router::new()
@@ -1139,17 +1137,6 @@ pub async fn get_machine_status(Path(id): Path<Uuid>) -> impl IntoResponse {
     Html(html)
 }
 
-// Error handling
-pub async fn handle_error(err: anyhow::Error) -> Response {
-    error!("Internal server error: {}", err);
-    let error_response = ErrorResponse {
-        error: "Internal Server Error".to_string(),
-        message: err.to_string(),
-    };
-
-    (StatusCode::INTERNAL_SERVER_ERROR, Json(error_response)).into_response()
-}
-
 // Add this new handler function
 async fn machine_events(
     State(state): State<AppState>,
@@ -1245,14 +1232,78 @@ pub async fn sse_events(
 
 // Add stubs for functions called from mode.rs
 pub async fn check_hookos_artifacts() -> bool {
-    warn!("STUB: check_hookos_artifacts called - returning true");
-    // TODO: Implement actual check for HookOS artifacts
+    // Check for the following four files
+    let files = vec![
+        "vmlinuz-latest-lts-x86_64",
+        "initramfs-latest-lts-x86_64",
+        "vmlinuz-latest-lts-aarch64",
+        "initramfs-latest-lts-aarch64",
+        "dtbs-latest-lts-aarch64.tar.gz",
+        "vmlinuz-x86_64",
+        "initramfs-x86_64",
+        "vmlinuz-aarch64",
+        "initramfs-aarch64",
+        "dtbs-aarch64.tar.gz",
+    ];
+
+    for file in files {
+        let path = FilePath::new("/var/lib/dragonfly/ipxe/hookos").join(file);
+        if !path.exists() {
+            return false;
+        }
+    }
+
+    info!("All HookOS artifacts found");
     true
 }
 
 pub async fn download_hookos_artifacts(version: &str) -> anyhow::Result<()> {
-    warn!("STUB: download_hookos_artifacts called for version {} - returning Ok", version);
-    // TODO: Implement actual download logic
+    // Create directory structure if it doesn't exist
+    let hookos_dir = FilePath::new("/var/lib/dragonfly/ipxe/hookos");
+    if !hookos_dir.exists() {
+        info!("Creating directory structure: {:?}", hookos_dir);
+        std::fs::create_dir_all(hookos_dir)?;
+    }
+    
+    // Download checksum file
+    let checksum_url = format!("https://github.com/tinkerbell/hook/releases/download/{}/checksum.txt", version);
+    let checksum_path = hookos_dir.join("checksum.txt");
+    let checksum_response = reqwest::get(checksum_url).await?;
+    let checksum_content = checksum_response.text().await?;
+    std::fs::write(checksum_path, checksum_content)?;
+
+    // Download the artifact tarballs
+    let files = vec![
+        "hook_x86_64.tar.gz",
+        "hook_aarch64.tar.gz",
+        "hook_latest-lts-x86_64.tar.gz",
+        "hook_latest-lts-aarch64.tar.gz",
+    ];
+
+    for file in &files {
+        let url = format!("https://github.com/tinkerbell/hook/releases/download/{}/{}", version, file);
+        let response = reqwest::get(url).await?;
+        let content = response.bytes().await?;
+        std::fs::write(hookos_dir.join(file), content)?;
+    }
+
+    // Extract the tarballs
+    for file in &files {
+        let path = hookos_dir.join(file);
+        let tar = File::open(path)?;
+        let mut archive = Archive::new(tar);
+        archive.unpack(hookos_dir)?;
+    }
+
+    // Remove the tarballs
+    for file in &files {
+        let path = hookos_dir.join(file);
+        if path.exists() {
+            std::fs::remove_file(path)?;
+        }
+    }
+    
+    info!("HookOS artifacts downloaded successfully to {:?}", hookos_dir);
     Ok(())
 }
 

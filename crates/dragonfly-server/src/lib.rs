@@ -5,7 +5,7 @@ use tower_sessions_sqlx_store::SqliteStore;
 use std::sync::{Arc};
 use tokio::sync::Mutex;
 use tower_http::trace::TraceLayer;
-use tracing::{info, error, warn};
+use tracing::{info, error, warn, debug};
 use std::net::SocketAddr;
 use tower_cookies::CookieManagerLayer;
 use tower_http::services::ServeDir;
@@ -28,6 +28,9 @@ use serde::Serialize;
 // Add back AtomicBool and Ordering imports
 use std::sync::atomic::{AtomicBool, Ordering};
 
+// Add back necessary tracing_subscriber imports
+use tracing_subscriber::{fmt, layer::SubscriberExt, EnvFilter};
+
 // Ensure prelude is still imported if needed elsewhere
 // use tracing_subscriber::prelude::*;
 
@@ -44,6 +47,9 @@ pub mod mode;
 // Expose status module for integration tests
 pub mod status;
 
+// Add tokio::fs for directory check
+use tokio::fs as async_fs;
+
 // Global static for accessing event manager from other modules
 use std::sync::RwLock;
 use once_cell::sync::Lazy;
@@ -51,10 +57,61 @@ pub static EVENT_MANAGER_REF: Lazy<RwLock<Option<std::sync::Arc<EventManager>>>>
     RwLock::new(None)
 });
 
-// Global static for accessing installation state during install
+// Global static for installation state (used ONLY during install process itself)
 pub static INSTALL_STATE_REF: Lazy<RwLock<Option<Arc<Mutex<InstallationState>>>>> = Lazy::new(|| {
     RwLock::new(None)
 });
+
+// Stub function to check installation status (Replace with real check later)
+// Checks environment variable DRAGONFLY_FORCE_INSTALLED=true for testing
+// Also checks for /var/lib/dragonfly and dragonfly StatefulSet status
+pub async fn is_dragonfly_installed() -> bool {
+    // 1. Check environment variable override first
+    if std::env::var("DRAGONFLY_FORCE_INSTALLED").map_or(false, |val| val.to_lowercase() == "true") {
+        info!("Installation status forced to TRUE via DRAGONFLY_FORCE_INSTALLED");
+        return true;
+    }
+
+    // 2. Check for the existence of the directory
+    let dir_path = "/var/lib/dragonfly";
+    let dir_exists = match async_fs::metadata(dir_path).await {
+        Ok(metadata) => metadata.is_dir(),
+        Err(e) => {
+            // Log specific error only if it's NOT NotFound
+            if e.kind() != std::io::ErrorKind::NotFound {
+                warn!("Installation check: Error checking directory {}: {}", dir_path, e);
+            }
+            false
+        },
+    };
+
+    if !dir_exists {
+        debug!("Installation check: Directory '{}' not found.", dir_path);
+        return false;
+    }
+    debug!("Installation check: Directory '{}' found.", dir_path);
+
+    // 3. Check Kubernetes StatefulSet status
+    let statefulset_ready = match status::check_dragonfly_statefulset_status().await {
+        Ok(ready) => ready,
+        Err(e) => {
+            // Only log a warning here, as inability to check k8s might be temporary or expected
+            // if k3s isn't fully up yet during startup.
+            warn!("Installation check: Error checking Dragonfly StatefulSet status: {}. Assuming not installed.", e);
+            false // If we can't check k8s, assume not installed for safety
+        }
+    };
+
+    if !statefulset_ready {
+        debug!("Installation check: Dragonfly StatefulSet not found or not ready.");
+        return false;
+    }
+    debug!("Installation check: Dragonfly StatefulSet found and ready.");
+
+    // If both directory exists and StatefulSet is ready, mark as installed
+    info!("Installation check: Detected installed state (directory exists and StatefulSet ready).");
+    true
+}
 
 // Enum to hold either static or reloading environment
 #[derive(Clone)]
@@ -130,6 +187,10 @@ pub struct AppState {
     pub shutdown_tx: watch::Sender<()>,  // Channel to signal shutdown
     // Use the new enum for the environment
     pub template_env: TemplateEnv,
+    // Add flags for Scenario B
+    pub is_installed: bool,
+    pub is_demo_mode: bool, // True if explicitly DEMO or if not installed
+    pub is_installation_server: bool, // True if started via install command
 }
 
 // Clean up any existing processes
@@ -138,12 +199,30 @@ async fn cleanup_existing_processes() {
 }
 
 pub async fn run() -> anyhow::Result<()> {
-    // Determine modes FIRST
-    let is_installation_server = std::env::var("DRAGONFLY_INSTALL_SERVER_MODE").is_ok(); 
-    let _demo_mode = std::env::var("DRAGONFLY_DEMO_MODE").is_ok();
+    // --- Initialize Logging FIRST --- 
+    // Use EnvFilter to respect RUST_LOG, defaulting to INFO if not set.
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info"));
+
+    // Build the subscriber
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(fmt::layer());
+    // --- Logging Initialized --- 
+
+    // Determine modes SECOND (after logging is set up)
+    let is_installation_server = std::env::var("DRAGONFLY_INSTALL_SERVER_MODE").is_ok();
+    let is_explicit_demo_mode = std::env::var("DRAGONFLY_DEMO_MODE").is_ok();
     let setup_mode = std::env::var("DRAGONFLY_SETUP_MODE").is_ok();
 
-    // --- Populate Install State IMMEDIATELY if needed --- 
+    // Determine installation status
+    let is_installed = is_dragonfly_installed().await;
+
+    // Determine final demo mode status
+    // It's demo mode if explicitly set OR if Dragonfly is not installed (and not the installer server itself)
+    let is_demo_mode = is_explicit_demo_mode || (!is_installed && !is_installation_server);
+
+    // --- Populate Install State IMMEDIATELY if needed ---
     if is_installation_server { 
         let state = Arc::new(Mutex::new(InstallationState::WaitingSudo));
         match INSTALL_STATE_REF.write() { 
@@ -172,14 +251,22 @@ pub async fn run() -> anyhow::Result<()> {
     // Calls like info!() etc. will use whatever global dispatcher exists (or none).
 
     // --- Start Server Setup --- 
-    // Conditional info!() calls throughout the rest of the function are fine.
-    // They will either be logged (if main.rs init or RUST_LOG) or dropped (if Dispatch::none).
+    // Conditional info!() calls remain appropriate for specific verbose messages
+    // during install, but general logging now respects RUST_LOG.
 
     let _is_install_mode = is_installation_server;
-    let is_demo_mode = std::env::var("DRAGONFLY_DEMO_MODE").is_ok();
-    
+
     if is_demo_mode {
-        info!("Starting server in DEMO MODE - no hardware will be touched");
+        if is_explicit_demo_mode {
+            // This info message will now respect RUST_LOG level
+            info!("Starting server explicitly in DEMO MODE - no hardware will be touched");
+        } else if !is_installed && !is_installation_server {
+            info!("Dragonfly not installed - starting server in DEMO MODE - no hardware will be touched");
+        }
+    } else if !is_installed && is_installation_server {
+        info!("Starting server in INSTALLATION MODE");
+    } else if is_installed {
+        info!("Dragonfly installed - starting server in normal mode");
     }
 
     // Initialize the database 
@@ -192,17 +279,25 @@ pub async fn run() -> anyhow::Result<()> {
     tinkerbell::load_historical_timings().await?; // Essential
 
     // --- Start OS Templates Initialization --- 
-    if !is_installation_server { // Only run if NOT server-during-install
-        info!("Starting OS templates initialization in background...");
+    // Only initialize OS templates if we're in Flight mode
+    let is_flight_mode = match mode::get_current_mode().await {
+        Ok(Some(mode::DeploymentMode::Flight)) => true,
+        _ => false,
+    };
+    
+    if is_flight_mode && !is_installation_server {
+        info!("Starting OS templates initialization for Flight mode...");
         let event_manager_clone = event_manager.clone(); // Clone for the task
         tokio::spawn(async move { 
             match os_templates::init_os_templates().await {
                 Ok(_) => { info!("OS templates initialized successfully"); },
                 Err(e) => { warn!("Failed to initialize OS templates: {}", e); }
             }
-            // Send event if needed, maybe?
+            // Send event after templates are initialized
             let _ = event_manager_clone.send("templates_ready".to_string());
         });
+    } else {
+        debug!("Skipping OS templates initialization (not in Flight mode)");
     } // End conditional OS template init
 
     // --- Graceful Shutdown Setup --- 
@@ -213,11 +308,13 @@ pub async fn run() -> anyhow::Result<()> {
     
     // Event Manager already created and stored above
 
-    // Start the workflow polling task
-    if !is_installation_server { // Conditional Logging
-        info!("Starting workflow polling task with interval of 1s");
+    // Start the workflow polling task - only in Flight mode
+    if is_flight_mode && !is_installation_server {
+        info!("Starting workflow polling task with interval of 1s for Flight mode");
+        tinkerbell::start_workflow_polling_task(event_manager.clone(), shutdown_rx.clone()).await;
+    } else {
+        debug!("Skipping workflow polling task (not in Flight mode)");
     }
-    tinkerbell::start_workflow_polling_task(event_manager.clone(), shutdown_rx.clone()).await; // Essential
 
     // Load or generate admin credentials
     let credentials = if is_demo_mode {
@@ -354,6 +451,10 @@ pub async fn run() -> anyhow::Result<()> {
         first_run,
         shutdown_tx: shutdown_tx.clone(),
         template_env,
+        // Add the new flags
+        is_installed,
+        is_demo_mode,
+        is_installation_server,
     };
 
     // Session store setup

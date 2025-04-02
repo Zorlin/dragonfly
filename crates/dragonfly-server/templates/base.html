@@ -708,5 +708,26 @@
     
     <!-- Gamepad Support -->
     <script src="/static/js/gamepad.js"></script>
+
+    {# --- Demo Mode Banner --- #}
+    {% if is_demo_mode %}
+    <div class="bg-yellow-100 border-b border-yellow-300 text-yellow-800 px-4 py-2 text-center text-sm dark:bg-yellow-900/30 dark:border-yellow-700/50 dark:text-yellow-200 z-50 sticky top-0 shadow-sm">
+        <i class="fas fa-flask mr-1"></i>
+        <strong>Demo Mode:</strong> Dragonfly is not installed. This is a preview — none of your hardware is touched.
+        {# Optionally add an install button/link here #}
+        {# <a href="/install" class="ml-2 underline font-medium hover:text-yellow-900 dark:hover:text-yellow-100">Install Now</a> #}
+    </div>
+    {% endif %}
+    {# --- End Demo Mode Banner --- #}
+
+    {# --- Installation Progress Banner --- #}
+    {% if installation_in_progress %}
+    {# ... (existing installation banner) ... #}
+    {% endif %}
+    {# --- End Installation Progress Banner --- #}
+
+    <!-- Toast Notification Container -->
+    <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col items-end space-y-2"></div>
+    <script src="/static/js/toast.js"></script>
 </body>
 </html>

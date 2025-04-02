@@ -314,14 +314,26 @@
   .static {
     position: static;
   }
+  .sticky {
+    position: sticky;
+  }
   .inset-0 {
     inset: calc(var(--spacing) * 0);
+  }
+  .top-0 {
+    top: calc(var(--spacing) * 0);
   }
   .right-4 {
     right: calc(var(--spacing) * 4);
   }
+  .right-5 {
+    right: calc(var(--spacing) * 5);
+  }
   .bottom-4 {
     bottom: calc(var(--spacing) * 4);
+  }
+  .bottom-5 {
+    bottom: calc(var(--spacing) * 5);
   }
   .left-4 {
     left: calc(var(--spacing) * 4);
@@ -679,6 +691,13 @@
       margin-block-end: calc(calc(var(--spacing) * 1) * calc(1 - var(--tw-space-y-reverse)));
     }
   }
+  .space-y-2 {
+    :where(& > :not(:last-child)) {
+      --tw-space-y-reverse: 0;
+      margin-block-start: calc(calc(var(--spacing) * 2) * var(--tw-space-y-reverse));
+      margin-block-end: calc(calc(var(--spacing) * 2) * calc(1 - var(--tw-space-y-reverse)));
+    }
+  }
   .space-y-4 {
     :where(& > :not(:last-child)) {
       --tw-space-y-reverse: 0;
@@ -860,6 +879,9 @@
   }
   .border-transparent {
     border-color: transparent;
+  }
+  .border-yellow-300 {
+    border-color: var(--color-yellow-300);
   }
   .border-yellow-400 {
     border-color: var(--color-yellow-400);
@@ -1322,6 +1344,9 @@
   .italic {
     font-style: italic;
   }
+  .underline {
+    text-decoration-line: underline;
+  }
   .placeholder-gray-400 {
     &::placeholder {
       color: var(--color-gray-400);
@@ -1674,6 +1699,13 @@
     &:hover {
       @media (hover: hover) {
         color: var(--color-red-900);
+      }
+    }
+  }
+  .hover\:text-yellow-900 {
+    &:hover {
+      @media (hover: hover) {
+        color: var(--color-yellow-900);
       }
     }
   }
@@ -2184,6 +2216,11 @@
       border-color: color-mix(in oklab, var(--color-yellow-500) 20%, transparent);
     }
   }
+  .dark\:border-yellow-700\/50 {
+    &:where(.dark, .dark *) {
+      border-color: color-mix(in oklab, var(--color-yellow-700) 50%, transparent);
+    }
+  }
   .dark\:bg-\[\#0A0B10\] {
     &:where(.dark, .dark *) {
       background-color: #0A0B10;
@@ -2387,6 +2424,11 @@
   .dark\:bg-yellow-900\/10 {
     &:where(.dark, .dark *) {
       background-color: color-mix(in oklab, var(--color-yellow-900) 10%, transparent);
+    }
+  }
+  .dark\:bg-yellow-900\/30 {
+    &:where(.dark, .dark *) {
+      background-color: color-mix(in oklab, var(--color-yellow-900) 30%, transparent);
     }
   }
   .dark\:from-indigo-400 {
@@ -2721,6 +2763,15 @@
       &:hover {
         @media (hover: hover) {
           color: var(--color-white);
+        }
+      }
+    }
+  }
+  .dark\:hover\:text-yellow-100 {
+    &:where(.dark, .dark *) {
+      &:hover {
+        @media (hover: hover) {
+          color: var(--color-yellow-100);
         }
       }
     }

@@ -15,17 +15,15 @@ use serde::Serialize;
 use crate::db::{self, get_app_settings, save_app_settings, mark_setup_completed};
 use crate::auth::{self, AuthSession, Settings, Credentials};
 use crate::mode;
-use minijinja::{Environment, Error as MiniJinjaError, ErrorKind as MiniJinjaErrorKind};
+use minijinja::{Error as MiniJinjaError, ErrorKind as MiniJinjaErrorKind};
 use std::sync::Arc;
-use uuid::Uuid;
 use std::net::{IpAddr, Ipv4Addr};
-use std::str::FromStr;
 
 // Import global state
 use crate::{AppState, INSTALL_STATE_REF, InstallationState};
 
 // Import format_os_name from api.rs
-use crate::api::{format_os_name, get_os_icon, get_os_info, OsInfo};
+use crate::api::{format_os_name, get_os_icon, get_os_info};
 
 // Extract theme from cookies
 pub fn get_theme_from_cookie(headers: &HeaderMap) -> String {
@@ -373,17 +371,63 @@ pub async fn index(
     let is_authenticated = auth_session.user.is_some();
     let require_login = app_state.settings.lock().await.require_login;
 
-    if require_login && !is_authenticated {
-        return Redirect::to("/login").into_response();
+    // --- Scenario B Logic --- 
+    if app_state.is_demo_mode {
+        // Case B.3: Not installed (or explicitly demo) -> Show Demo Experience
+        info!("Rendering Demo Experience (root route)");
+        // The rest of this function will now handle rendering the demo dashboard
+        // Ensure is_demo_mode is passed to the template
+    } else if app_state.is_installed {
+        // Case B.1 & B.2: Installed
+        let current_mode = mode::get_current_mode().await.unwrap_or(None);
+        if current_mode.is_none() {
+            // Case B.2: Installed, no mode selected -> Show Welcome Screen
+            info!("Installed, no mode selected, redirecting to /welcome");
+            return Redirect::to("/welcome").into_response();
+        } else {
+            // Case B.1: Installed, mode selected -> Proceed to normal UI (Dashboard)
+            info!("Installed, mode selected, rendering normal dashboard");
+            // Login check happens *after* this block if needed
+        }
+    } else {
+        // This case means it's *not* demo, *not* installed.
+        // Check if it's the installation server running.
+        if app_state.is_installation_server {
+            // This is the expected state during installation. Proceed normally.
+            // The template will handle showing the installation progress UI.
+            info!("Install server running, rendering index page for installation progress.");
+        } else {
+            // It's NOT the install server, so this state is truly unexpected.
+            warn!("Root route accessed in unexpected state (not demo, not installed, not install server). Rendering error.");
+            let context = ErrorTemplate {
+                theme,
+                is_authenticated: false, // Assume not authenticated
+                title: "Unexpected Server State".to_string(),
+                message: "The server is in an unexpected state. Installation might be incomplete or the server requires setup.".to_string(),
+                error_details: "Error code: UI_ROOT_UNEXPECTED_STATE_FINAL".to_string(), // Use a distinct code
+                back_url: "/".to_string(),
+                back_text: "Retry".to_string(),
+                show_retry: true,
+                retry_url: "/".to_string(),
+            };
+            return render_minijinja(&app_state, "error.html", context);
+        }
+    }
+    // --- End Scenario B Logic ---
+
+    // Login check (only applies if *not* demo and mode *is* selected)
+    if require_login && !is_authenticated && app_state.is_installed {
+        let current_mode = mode::get_current_mode().await.unwrap_or(None);
+        if current_mode.is_some() { // Only redirect if mode is selected
+             info!("Login required, redirecting to /login");
+             return Redirect::to("/login").into_response();
+        }
     }
 
-    // Determine if we are in installation mode
+    // --- Continue with Dashboard/Demo Rendering --- 
     let installation_in_progress = std::env::var("DRAGONFLY_INSTALL_SERVER_MODE").is_ok();
     let mut initial_install_message = String::new();
     let mut initial_animation_class = String::new();
-    
-    // Determine if we are in demo mode
-    let is_demo_mode = std::env::var("DRAGONFLY_DEMO_MODE").is_ok();
 
     // If installing, get initial state
     if installation_in_progress {
@@ -400,9 +444,9 @@ pub async fn index(
     }
     
     // Prepare context for the template
-    // Only fetch real machine data if NOT installing and NOT in demo mode
+    // Fetch real/demo data based on app_state.is_demo_mode
     let (machines, status_counts, status_counts_json, display_dates) = if !installation_in_progress {
-        if is_demo_mode {
+        if app_state.is_demo_mode { // Check the state flag now
             // In demo mode, generate fake demo machines
             let demo_machines = generate_demo_machines();
             let counts = count_machines_by_status(&demo_machines);
@@ -444,9 +488,9 @@ pub async fn index(
         installation_in_progress,
         initial_install_message,
         initial_animation_class,
-        is_demo_mode,
+        is_demo_mode: app_state.is_demo_mode, // Use the state flag
     };
-    
+
     render_minijinja(&app_state, "index.html", context)
 }
 
@@ -460,12 +504,32 @@ pub async fn machine_list(
     let is_admin = is_authenticated;
 
     let require_login = app_state.settings.lock().await.require_login;
+
+    // --- Scenario B: Mode/Install Check --- 
+    // Redirect to welcome if installed but no mode selected
+    if app_state.is_installed && !app_state.is_demo_mode { // Don't check mode if in demo
+        let current_mode = mode::get_current_mode().await.unwrap_or(None);
+        if current_mode.is_none() {
+            info!("/machines accessed before mode selection, redirecting to /welcome");
+            // Need to return a response that HTMX can use to redirect
+            let mut response = Redirect::to("/welcome").into_response();
+            response.headers_mut().insert("HX-Redirect", "/welcome".parse().unwrap());
+            return response;
+        }
+    }
+    // --- End Scenario B Check ---
+
+    // Login check (applies to both normal and demo mode if require_login is true)
     if require_login && !is_authenticated {
-        return Redirect::to("/login").into_response();
+        info!("Login required for /machines, redirecting to /login");
+        // HTMX redirect
+        let mut response = Redirect::to("/login").into_response();
+        response.headers_mut().insert("HX-Redirect", "/login".parse().unwrap());
+        return response;
     }
 
-    // Determine if we are in demo mode
-    let is_demo_mode = std::env::var("DRAGONFLY_DEMO_MODE").is_ok();
+    // Determine if we are in demo mode (using the state flag)
+    let is_demo_mode = app_state.is_demo_mode;
 
     // If in demo mode, show demo machines
     if is_demo_mode {
@@ -482,50 +546,50 @@ pub async fn machine_list(
             workflow_infos,
         };
         return render_minijinja(&app_state, "machine_list.html", context);
-    }
-
-    // Normal mode - fetch machines from database
-    match db::get_all_machines().await {
-        Ok(machines) => {
-            let mut workflow_infos = HashMap::new();
-            for machine in &machines {
-                if machine.status == MachineStatus::InstallingOS {
-                    match crate::tinkerbell::get_workflow_info(machine).await {
-                        Ok(Some(info)) => {
-                            workflow_infos.insert(machine.id, info);
-                        }
-                        Ok(None) => { /* No active workflow found */ }
-                        Err(e) => {
-                            error!("Error fetching workflow info for machine {}: {}", machine.id, e);
-                            // Optionally insert a default/error state info
+    } else { // Normal mode
+        // Normal mode - fetch machines from database
+        match db::get_all_machines().await {
+            Ok(machines) => {
+                let mut workflow_infos = HashMap::new();
+                for machine in &machines {
+                    if machine.status == MachineStatus::InstallingOS {
+                        match crate::tinkerbell::get_workflow_info(machine).await {
+                            Ok(Some(info)) => {
+                                workflow_infos.insert(machine.id, info);
+                            }
+                            Ok(None) => { /* No active workflow found */ }
+                            Err(e) => {
+                                error!("Error fetching workflow info for machine {}: {}", machine.id, e);
+                                // Optionally insert a default/error state info
+                            }
                         }
                     }
                 }
-            }
 
-            // Replace Askama render with placeholder
-            let context = MachineListTemplate {
-                machines,
-                theme,
-                is_authenticated,
-                is_admin,
-                workflow_infos,
-            };
-            // Pass AppState to render_minijinja
-            render_minijinja(&app_state, "machine_list.html", context)
-        },
-        Err(e) => {
-            error!("Error fetching machines for machine list page: {}", e);
-            // Replace Askama render with placeholder
-            let context = MachineListTemplate {
-                machines: vec![],
-                theme,
-                is_authenticated,
-                is_admin,
-                workflow_infos: HashMap::new(),
-            };
-            // Pass AppState to render_minijinja
-            render_minijinja(&app_state, "machine_list.html", context)
+                // Replace Askama render with placeholder
+                let context = MachineListTemplate {
+                    machines,
+                    theme,
+                    is_authenticated,
+                    is_admin,
+                    workflow_infos,
+                };
+                // Pass AppState to render_minijinja
+                render_minijinja(&app_state, "machine_list.html", context)
+            },
+            Err(e) => {
+                error!("Error fetching machines for machine list page: {}", e);
+                // Replace Askama render with placeholder
+                let context = MachineListTemplate {
+                    machines: vec![],
+                    theme,
+                    is_authenticated,
+                    is_admin,
+                    workflow_infos: HashMap::new(),
+                };
+                // Pass AppState to render_minijinja
+                render_minijinja(&app_state, "machine_list.html", context)
+            }
         }
     }
 }
@@ -1011,9 +1075,6 @@ pub async fn setup_flight(
     // Configure the system for Flight mode
     match mode::configure_flight_mode().await {
         Ok(_) => {
-            info!("System configured for Flight mode - k3s deployment started in background");
-            
-            // Fix this: Mark setup as completed by passing bool instead of &AppState
             if let Err(e) = mark_setup_completed(true).await {
                 error!("Failed to mark setup as completed: {}", e);
             } else {

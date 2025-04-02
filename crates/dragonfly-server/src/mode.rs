@@ -2,8 +2,8 @@ use std::process::Command;
 use std::path::{Path, PathBuf};
 use tokio::sync::watch;
 use tokio::signal::unix::{signal, SignalKind};
-use anyhow::{Result, Context, anyhow};
-use tracing::{info, error, warn};
+use anyhow::{Result, Context, anyhow, bail};
+use tracing::{info, error, warn, debug};
 use tracing_appender;
 use tracing_subscriber;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -11,6 +11,9 @@ use dirs;
 use std::os::unix::fs::PermissionsExt;
 use nix::libc;
 use std::str;
+use crate::status::{check_kubernetes_connectivity, check_dragonfly_statefulset_status, get_webui_address};
+use tokio::fs;
+use sqlx::sqlite::SqlitePoolOptions;
 
 // The different deployment modes
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,95 +70,94 @@ pub async fn get_current_mode() -> Result<Option<DeploymentMode>> {
 
 // Save the current mode
 pub async fn save_mode(mode: DeploymentMode, already_elevated: bool) -> Result<()> {
-    // First check if the mode is already set to the requested value
-    if let Ok(Some(current_mode)) = get_current_mode().await {
-        if current_mode == mode {
-            info!("Deployment mode already set to {}, no changes needed", mode.as_str());
-            return Ok(());
+    // Save the mode to the database using SQLx
+    // Define the database path
+    const DB_DIR: &str = "/var/lib/dragonfly";
+    const DB_PATH: &str = "/var/lib/dragonfly/sqlite.db";
+
+    // Ensure the directory exists. This might require elevated privileges.
+    let db_dir_path = Path::new(DB_DIR);
+    if !db_dir_path.exists() {
+        // If the directory doesn't exist and we aren't already elevated,
+        // we probably can't create it. Return an error suggesting elevation.
+        // Note: This check isn't foolproof, file permissions matter too.
+        if !already_elevated && nix::unistd::geteuid().is_root() == false {
+             bail!("Database directory {} does not exist. Please run with sudo or as root to create it.", DB_DIR);
         }
+        // Attempt to create the directory
+        tokio::fs::create_dir_all(db_dir_path)
+            .await
+            .with_context(|| format!("Failed to create database directory: {}", DB_DIR))?;
+        info!("Created database directory: {}", DB_DIR);
+        // Consider setting appropriate permissions if needed, e.g., chown
     }
-    
-    // Create the directory if it doesn't exist
-    let dir = Path::new(MODE_DIR);
-    if !dir.exists() {
-        let result = tokio::fs::create_dir_all(dir).await;
-        if let Err(e) = result {
-            info!("Failed to create mode directory with regular permissions: {}", e);
-            
-            // Check if we're on macOS and try with graphical sudo
-            if is_macos() && !already_elevated {
-                info!("Using admin privileges to create mode directory");
-                
-                // Create a properly escaped command that works with osascript
-                // The double quotes around the shell command need to be properly escaped
-                let script = format!(
-                    r#"do shell script "mkdir -p {0} && echo '{1}' > {2} && chmod 755 {0}" with administrator privileges with prompt "Dragonfly needs permission to save your deployment mode""#,
-                    MODE_DIR, mode.as_str(), MODE_FILE
-                );
-                
-                let osa_output = Command::new("osascript")
-                    .arg("-e")
-                    .arg(&script)
-                    .output()
-                    .context("Failed to execute osascript for sudo prompt")?;
-                    
-                if !osa_output.status.success() {
-                    let stderr = String::from_utf8_lossy(&osa_output.stderr);
-                    return Err(anyhow!("Failed to create mode directory with admin privileges: {}", stderr));
-                }
-                
-                info!("Mode directory created and mode set to: {}", mode.as_str());
-                return Ok(());
-            } else if !already_elevated {
-                // Try with sudo on Linux
-                info!("Using sudo to create mode directory");
-                let sudo_mkdir = Command::new("sudo")
-                    .args(["mkdir", "-p", MODE_DIR])
-                    .output()
-                    .context("Failed to create mode directory with sudo")?;
-                    
-                if !sudo_mkdir.status.success() {
-                    return Err(anyhow!("Failed to create mode directory with sudo: {}", 
-                        String::from_utf8_lossy(&sudo_mkdir.stderr)));
-                }
-                
-                // Now write the mode file with sudo
-                let echo_cmd = format!("echo {} | sudo tee {} > /dev/null", mode.as_str(), MODE_FILE);
-                let sudo_write = Command::new("sh")
-                    .arg("-c")
-                    .arg(&echo_cmd)
-                    .output()
-                    .context("Failed to write mode file with sudo")?;
-                    
-                if !sudo_write.status.success() {
-                    return Err(anyhow!("Failed to write mode file with sudo: {}", 
-                        String::from_utf8_lossy(&sudo_write.stderr)));
-                }
-                
-                // Set permissions
-                let _ = Command::new("sudo")
-                    .args(["chmod", "755", MODE_DIR])
-                    .output();
-                    
-                let _ = Command::new("sudo")
-                    .args(["chmod", "644", MODE_FILE])
-                    .output();
-                
-                info!("Mode directory created and mode set to: {}", mode.as_str());
-                return Ok(());
-            } else {
-                return Err(anyhow!("Failed to create mode directory and already attempted elevation: {}", e));
+
+    // Create a connection pool
+    // The pool is automatically managed and connections are returned when dropped.
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1) // Keep it simple for this config task
+        .connect_with(
+            sqlx::sqlite::SqliteConnectOptions::new()
+                .filename(DB_PATH)
+                .create_if_missing(true),
+        )
+        .await
+        .with_context(|| format!("Failed to connect to SQLite database at {}", DB_PATH))?;
+
+    // First check if the table exists to avoid errors
+    let table_exists = sqlx::query("SELECT name FROM sqlite_master WHERE type='table' AND name='settings'")
+        .fetch_optional(&pool)
+        .await
+        .map(|row| row.is_some())
+        .unwrap_or(false);
+
+    // Create the table only if it doesn't exist
+    if !table_exists {
+        debug!("Creating settings table in SQLite database");
+        match sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY NOT NULL,
+                value TEXT NOT NULL
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await {
+            Ok(_) => debug!("Settings table created successfully"),
+            Err(e) => {
+                // If table already exists (error code 1), just log and continue
+                // For all other errors, return the error
+                warn!("Error creating settings table (may already exist): {}", e);
+                // Continue execution - the insert will fail if there's a real problem
             }
+        }
+    } else {
+        debug!("Settings table already exists in SQLite database");
+    }
+
+    // Insert or replace the deployment mode setting
+    let mode_str = mode.as_str();
+    match sqlx::query(
+        r#"
+        INSERT OR REPLACE INTO settings (key, value)
+        VALUES (?, ?)
+        "#,
+    )
+    .bind("deployment_mode")
+    .bind(mode_str)
+    .execute(&pool)
+    .await {
+        Ok(_) => info!("Successfully saved deployment mode '{}' to database: {}", mode_str, DB_PATH),
+        Err(e) => {
+            error!("Failed to save deployment mode to SQLite database: {}", e);
+            return Err(anyhow!("Failed to save deployment mode: {}", e));
         }
     }
 
-    // Write the mode file
-    tokio::fs::write(MODE_FILE, mode.as_str())
-        .await
-        .context("Failed to write mode file")?;
-    
-    info!("Deployment mode set to: {}", mode.as_str());
-    
+    // Pool is closed when it goes out of scope
+    pool.close().await;
+
     Ok(())
 }
 
@@ -555,7 +557,6 @@ pub async fn configure_simple_mode() -> Result<()> {
     
     // Initialize logger
     let log_dir_path = ensure_log_directory()?;
-    let mut used_elevation = false;
     
     // Copy executable to /usr/local/bin if needed
     let target_path = Path::new(EXECUTABLE_TARGET_PATH);
@@ -585,7 +586,6 @@ pub async fn configure_simple_mode() -> Result<()> {
                 },
                 _ => {
                     info!("Need elevated permissions to copy executable to {}", EXECUTABLE_TARGET_PATH);
-                    used_elevation = true;
 
                     // Need to use sudo, with one command that does everything:
                     // 1. Copy executable
@@ -640,7 +640,6 @@ pub async fn configure_simple_mode() -> Result<()> {
                 },
                 Err(e) => {
                     info!("Need elevated permissions to copy executable to {}: {}", EXECUTABLE_TARGET_PATH, e);
-                    used_elevation = true;
 
                     // Try with pkexec first (graphical sudo)
                     let pkexec_available = Command::new("which")
@@ -749,23 +748,21 @@ pub async fn configure_simple_mode() -> Result<()> {
     };
     
     // Create log directory before setting up services if not already handled by elevated commands
-    if !used_elevation {
-        let log_dir = "/var/log/dragonfly";
-        if !std::path::Path::new(log_dir).exists() {
-            // Create directory with appropriate permissions
-            if let Err(e) = tokio::fs::create_dir_all(log_dir).await {
-                warn!("Could not create log directory {}: {}", log_dir, e);
-                // Try with sudo
-                let _ = Command::new("sudo")
-                    .args(["mkdir", "-p", log_dir])
-                    .output();
-                let _ = Command::new("sudo")
-                    .args(["chmod", "755", log_dir])
-                    .output();
-            }
+    let log_dir = "/var/log/dragonfly";
+    if !std::path::Path::new(log_dir).exists() {
+        // Create directory with appropriate permissions
+        if let Err(e) = tokio::fs::create_dir_all(log_dir).await {
+            warn!("Could not create log directory {}: {}", log_dir, e);
+            // Try with sudo
+            let _ = Command::new("sudo")
+                .args(["mkdir", "-p", log_dir])
+                .output();
+            let _ = Command::new("sudo")
+                .args(["chmod", "755", log_dir])
+                .output();
         }
-        info!("Log directory ready at {}", log_dir);
     }
+    info!("Log directory ready at {}", log_dir);
     
     // Check if we're on macOS
     let is_macos = std::env::consts::OS == "macos" || std::env::consts::OS == "darwin";
@@ -839,9 +836,7 @@ pub async fn configure_simple_mode() -> Result<()> {
     }
     
     // Save the mode if we haven't already done it with elevated privileges
-    if !used_elevation {
-        save_mode(DeploymentMode::Simple, false).await?;
-    }
+    save_mode(DeploymentMode::Simple, false).await?;
     
     let is_macos = std::env::consts::OS == "macos" || std::env::consts::OS == "darwin";
     
@@ -929,153 +924,174 @@ pub async fn configure_flight_mode() -> Result<()> {
     if let Ok(Some(current_mode)) = get_current_mode().await {
         if current_mode == DeploymentMode::Flight {
             info!("System is already configured for Flight mode");
+            
+            // Still check if HookOS artifacts are present, but only download if missing
+            info!("Checking HookOS artifacts...");
+            if !crate::api::check_hookos_artifacts().await {
+                info!("HookOS artifacts not found. Downloading HookOS artifacts...");
+                match crate::api::download_hookos_artifacts("v0.10.0").await {
+                    Ok(_) => info!("HookOS artifacts downloaded successfully"),
+                    Err(e) => warn!("Failed to download HookOS artifacts: {}", e),
+                }
+            } else {
+                info!("HookOS artifacts already exist");
+            }
+            
             return Ok(());
         }
     }
     
     // Track if we've used elevated privileges
-    let mut used_elevation = false;
-    
-    // Create the k3s config directory
-    if let Err(e) = tokio::fs::create_dir_all(K3S_CONFIG_DIR).await {
-        // Try with sudo
-        info!("Need elevated permissions to create k3s config directory: {}", e);
-        
-        if is_macos() {
-            // Use osascript for macOS
-            let script = format!(
-                r#"do shell script "mkdir -p {} && mkdir -p {} && echo {} > {} && chmod 755 {}" with administrator privileges with prompt \"Dragonfly needs permission to configure Flight mode\""#,
-                K3S_CONFIG_DIR,
-                MODE_DIR,
-                DeploymentMode::Flight.as_str(),
-                MODE_FILE,
-                MODE_DIR
-            );
-            
-            let osa_output = Command::new("osascript")
-                .arg("-e")
-                .arg(&script)
-                .output()
-                .context("Failed to execute osascript for sudo prompt")?;
-                
-            if !osa_output.status.success() {
-                let stderr = String::from_utf8_lossy(&osa_output.stderr);
-                return Err(anyhow!("Failed to create directories with admin privileges: {}", stderr));
-            }
-            
-            info!("Directories created and mode set with admin privileges");
-            used_elevation = true;
-        } else {
-            // Use sudo for Linux
-            let sudo_script = format!(
-                "sudo sh -c 'mkdir -p {} && mkdir -p {} && echo {} > {} && chmod 755 {}'",
-                K3S_CONFIG_DIR,
-                MODE_DIR,
-                DeploymentMode::Flight.as_str(),
-                MODE_FILE,
-                MODE_DIR
-            );
-            
-            let sudo_output = Command::new("sh")
-                .arg("-c")
-                .arg(&sudo_script)
-                .output()
-                .context("Failed to execute sudo command")?;
-                
-            if !sudo_output.status.success() {
-                let stderr = String::from_utf8_lossy(&sudo_output.stderr);
-                return Err(anyhow!("Failed to create directories with sudo: {}", stderr));
-            }
-            
-            info!("Directories created and mode set with sudo");
-            used_elevation = true;
-        }
-    }
-    
-    // Ensure /var/lib/dragonfly exists and is owned by the current user on macOS
-    if let Err(e) = ensure_var_lib_ownership().await {
-        warn!("Failed to ensure /var/lib/dragonfly ownership: {}", e);
-        // Non-critical, continue anyway
-    }
-    
-    // Download HookOS artifacts before starting k3s deployment
+    let _used_elevation = false;
+
+    // Check HookOS artifacts and download if needed
     info!("Checking HookOS artifacts...");
-    tokio::spawn(async {
-        // First check if artifacts exist
-        use crate::api;
-        
-        if !api::check_hookos_artifacts().await {
-            info!("HookOS artifacts not found. Downloading HookOS artifacts...");
-            match api::download_hookos_artifacts("v0.10.0").await {
-                Ok(_) => info!("HookOS artifacts downloaded successfully"),
-                Err(e) => warn!("Failed to download HookOS artifacts: {}", e),
-            }
-        } else {
-            info!("HookOS artifacts already exist");
-        }
-    });
-    
-    // Spawn a process to deploy k3s and initiate handoff
-    tokio::spawn(async move {
-        info!("Starting background k3s deployment for Flight mode");
-        
-        let result = deploy_k3s_and_handoff().await;
-        
-        if let Err(e) = result {
-            error!("Failed to deploy k3s: {}", e);
-        }
-    });
-    
-    // Save the mode if it hasn't been done already with elevated privileges
-    if !used_elevation {
-        if is_macos() {
-            info!("Saving mode directly using admin privileges on macOS");
-            let script = format!(
-                r#"do shell script "mkdir -p {0} && echo '{1}' > {2} && chmod 755 {0}" with administrator privileges with prompt "Dragonfly needs permission to save your deployment mode""#,
-                MODE_DIR, DeploymentMode::Flight.as_str(), MODE_FILE
-            );
-            
-            let osa_output = Command::new("osascript")
-                .arg("-e")
-                .arg(&script)
-                .output()
-                .context("Failed to execute osascript for sudo prompt")?;
-                
-            if !osa_output.status.success() {
-                let stderr = String::from_utf8_lossy(&osa_output.stderr);
-                return Err(anyhow!("Failed to create mode directory with admin privileges: {}", stderr));
-            }
-            
-            info!("Mode set to flight");
-        } else {
-            // Use the regular save_mode function for Linux
-            save_mode(DeploymentMode::Flight, false).await?;
-        }
-    }
-    
-    // Download HookOS for PXE booting (in background)
-    tokio::spawn(async move {
+    let need_hookos_download = !crate::api::check_hookos_artifacts().await;
+    if need_hookos_download {
+        info!("HookOS artifacts not found. Downloading HookOS artifacts...");
         match crate::api::download_hookos_artifacts("v0.10.0").await {
-            Ok(_) => info!("HookOS artifacts downloaded successfully for Flight mode"),
+            Ok(_) => info!("HookOS artifacts downloaded successfully"),
             Err(e) => warn!("Failed to download HookOS artifacts: {}", e),
         }
-    });
-    
-    info!("System configured for Flight mode. K3s deployment started in background.");
-    
-    let is_macos = std::env::consts::OS == "macos" || std::env::consts::OS == "darwin";
-    
-    if !is_macos {
-        // Start the service via service manager (which will exit on non-macOS)
-        start_service()?;
     } else {
-        info!("Running in foreground mode on macOS");
+        info!("HookOS artifacts already exist");
     }
     
+    // Enter Flight mode
+    enter_flight_mode().await?;
+    
+    // Use the regular save_mode function for Linux
+    save_mode(DeploymentMode::Flight, false).await?;
+    
+    info!("System configured for Flight mode. 🐉");
+    Ok(())
+}
+
+// Enter Flight Mode
+pub async fn enter_flight_mode() -> Result<()> {
+    // Check the Kubernetes API is available - handle the color_eyre Result<()> return type
+    match check_kubernetes_connectivity().await {
+        Ok(()) => info!("Kubernetes connectivity confirmed."),
+        Err(e) => {
+            error!("Error checking Kubernetes connectivity: {}. Cannot enter Flight mode.", e);
+            // Convert color_eyre error to anyhow
+            return Err(anyhow!("Error checking Kubernetes connectivity: {}", e));
+        }
+    }
+
+    // Check if the WebUI service is ready
+    match check_webui_service_status().await {
+        Ok(true) => info!("WebUI service status confirmed as ready."),
+        Ok(false) => {
+            error!("WebUI service is not ready. Cannot enter Flight mode.");
+            bail!("WebUI service is not ready");
+        }
+        Err(e) => {
+            error!("Error checking WebUI service status: {}. Cannot enter Flight mode.", e);
+            return Err(anyhow!("Error checking WebUI service status: {}", e));
+        }
+    }
+
+    // Activate Smee's DHCP service in Flight mode using
+    // Check if the Tinkerbell stack is already installed
+    let release_exists = {
+        let release_check = Command::new("helm")
+            .args(["list", "-n", "tink", "--filter", "tink-stack", "--short"])
+            .output()?;
+            
+        release_check.status.success() && 
+        !String::from_utf8_lossy(&release_check.stdout).trim().is_empty()
+    };
+    
+    // Log whether we're installing or upgrading
+    if release_exists {
+        info!("Tinkerbell stack already exists, will upgrade");
+    } else {
+        return Err(anyhow!("Tinkerbell stack not found, failed to activate Flight mode"));
+    }
+
+    // --- Clone the GitHub repository for the Helm chart ---
+    info!("Fetching Dragonfly Helm charts from GitHub...");
+    
+    // Create a temporary directory for the repo
+    let repo_dir = std::env::temp_dir().join("dragonfly-charts");
+    
+    // Remove the directory if it already exists
+    if repo_dir.exists() {
+        fs::remove_dir_all(&repo_dir).await
+            .with_context(|| format!("Failed to clean up previous charts directory: {:?}", repo_dir))?;
+    }
+    
+    // Clone the repository
+    let clone_cmd = format!(
+        "git clone --depth 1 https://github.com/Zorlin/dragonfly-charts.git {}",
+        repo_dir.display()
+    );
+    run_shell_command(&clone_cmd, "clone Dragonfly Helm charts")?;
+    
+    // Path to the chart
+    let chart_path = repo_dir.join("tinkerbell");
+    
+    // Create a separate path for the Helm upgrade command
+    let upgrade_chart_path = chart_path.join("stack");
+
+    // Check if the chart path exists
+    if !chart_path.exists() {
+        bail!("Helm chart not found in expected location: {:?}", chart_path);
+    }
+
+    // --- Build the Helm chart dependencies ---
+    info!("Building Helm chart dependencies...");
+    let dependency_build_cmd = format!(
+        "cd {} && helm dependency build stack/",
+        chart_path.display()
+    );
+    run_shell_command(&dependency_build_cmd, "build Helm chart dependencies")
+        .with_context(|| "Failed to build Helm chart dependencies")?;
+
+    // --- Run Helm Install/Upgrade with the local chart path ---
+    // helm upgrade tink-stack tink-stack/ -n tink --reuse-values --set="smee.dhcp.enabled=true"
+    let helm_args = [
+        "upgrade", "tink-stack",
+        upgrade_chart_path.to_str().ok_or_else(|| anyhow!("Chart path is not valid UTF-8"))?,
+        "--namespace", "tink",
+        "--wait",
+        "--timeout", "10m",
+        "--reuse-values",
+        "--set", "smee.dhcp.enabled=true"
+    ];
+
+    info!("Deploying Dragonfly Tinkerbell stack...");
+    run_command("helm", &helm_args, "install/upgrade Dragonfly Tinkerbell Helm chart")?;
+
+    // Verify the deployment
+    let deployment_check = Command::new("kubectl")
+        .args(["get", "pods", "-n", "tink", "--no-headers"])
+        .output()
+        .with_context(|| "Failed to check deployment status")?;
+    
+    if deployment_check.status.success() {
+        let pods_output = String::from_utf8_lossy(&deployment_check.stdout).trim().to_string();
+        if !pods_output.is_empty() && 
+           !pods_output.contains("Pending") && 
+           !pods_output.contains("Error") && 
+           !pods_output.contains("CrashLoopBackOff") {
+            info!("Dragonfly Tinkerbell stack is running properly");
+        } else {
+            warn!("Dragonfly Tinkerbell stack deployed but some pods may not be ready. Check with 'kubectl get pods -n tink'");
+        }
+    }
+
+    // Clean up - remove the cloned repository
+    debug!("Cleaning up temporary chart repository...");
+    let _ = fs::remove_dir_all(&repo_dir).await; // Best effort cleanup, don't fail if it doesn't work
+
+    info!("Dragonfly Tinkerbell stack {} successfully", if release_exists { "upgraded" } else { "installed" });
     Ok(())
 }
 
 // Deploy k3s and initiate handoff
+// TODO - Move this to install.rs!
 pub async fn deploy_k3s_and_handoff() -> Result<()> {
     // Get the current process ID for ACK
     let my_pid = std::process::id();
@@ -1569,7 +1585,7 @@ pub async fn configure_swarm_mode() -> Result<()> {
     }
     
     // Track if we've used elevated privileges
-    let mut used_elevation = false;
+    let _used_elevation = false;
     
     // Ensure /var/lib/dragonfly exists and is owned by the current user on macOS
     if let Err(e) = ensure_var_lib_ownership().await {
@@ -1580,7 +1596,7 @@ pub async fn configure_swarm_mode() -> Result<()> {
     // TODO: Implement swarm mode configuration
     
     // Save the mode if it hasn't been done with elevated privileges
-    if !used_elevation {
+    if !_used_elevation {
         if is_macos() {
             info!("Saving mode directly using admin privileges on macOS");
             let script = format!(
@@ -1643,4 +1659,57 @@ fn setup_logging(log_dir: &str) -> Result<(), anyhow::Error> {
     info!("Logging initialized. Log file: {}", log_path.display());
 
     Ok(())
+}
+
+// TODO: Move helper functions below to a shared utility module
+
+// Placeholder for run_shell_command - Implement robustly
+fn run_shell_command(script: &str, description: &str) -> Result<()> {
+    debug!("Running shell command: {}", description);
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(script)
+        .output()
+        .with_context(|| format!("Failed to execute command: {}", description))?;
+
+    if !output.status.success() {
+        error!("Command '{}' failed with status: {}", description, output.status);
+        error!("Stderr: {}", String::from_utf8_lossy(&output.stderr));
+        error!("Stdout: {}", String::from_utf8_lossy(&output.stdout));
+        // Use anyhow::bail here as the function returns anyhow::Result
+        bail!("Command '{}' failed", description);
+    } else {
+         debug!("Command '{}' succeeded.", description);
+    }
+    Ok(())
+}
+
+// Placeholder for run_command - Implement robustly
+fn run_command(cmd: &str, args: &[&str], description: &str) -> Result<std::process::Output> { // Specify Output type
+    debug!("Running command: {} {}", cmd, args.join(" "));
+     let output = Command::new(cmd)
+        .args(args)
+        .output()
+        .with_context(|| format!("Failed to execute command: {}", description))?;
+
+     if !output.status.success() {
+        error!("Command '{}' failed with status: {}", description, output.status);
+        error!("Stderr: {}", String::from_utf8_lossy(&output.stderr));
+        error!("Stdout: {}", String::from_utf8_lossy(&output.stdout));
+        // Use anyhow::bail here as the function returns anyhow::Result
+        bail!("Command '{}' failed", description);
+    } else {
+        debug!("Command '{}' succeeded.", description);
+    }
+     Ok(output)
+}
+
+// Function to check if WebUI service is ready (based on get_webui_address)
+async fn check_webui_service_status() -> anyhow::Result<bool> {
+    // Convert color_eyre::Result to anyhow::Result
+    match get_webui_address().await {
+        Ok(Some(_)) => Ok(true), // Address available means service is ready
+        Ok(None) => Ok(false),   // No address means not ready
+        Err(e) => Err(anyhow!("Error checking WebUI service: {}", e))
+    }
 } 

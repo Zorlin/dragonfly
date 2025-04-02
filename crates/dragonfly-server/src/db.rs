@@ -10,7 +10,7 @@ use serde_json;
 
 use dragonfly_common::models::{Machine, MachineStatus, RegisterRequest};
 // Make re-exports public and correct the imported names
-pub use dragonfly_common::models::{BmcCredentials, BmcType, DiskInfo, OsAssignmentRequest, RegisterResponse, ErrorResponse, StatusUpdateRequest, OsInstalledUpdateRequest, OsInstalledUpdateResponse, BmcCredentialsUpdateRequest, InstallationProgressUpdateRequest, HostnameUpdateRequest, HostnameUpdateResponse}; // Removed UpdateTagsRequest, corrected others
+pub use dragonfly_common::models::{OsAssignmentRequest, RegisterResponse, ErrorResponse}; // Removed UpdateTagsRequest, corrected others
 use crate::auth::{Credentials, Settings};
 use crate::tinkerbell::WorkflowInfo;
 

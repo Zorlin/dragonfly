@@ -27,36 +27,46 @@ pub async fn check_kubernetes_connectivity() -> Result<()> {
 /// Checks the status of the Dragonfly StatefulSet.
 /// Returns Ok(true) if ready, Ok(false) if not ready, Err if API call fails.
 pub async fn check_dragonfly_statefulset_status() -> Result<bool> {
-    debug!("Checking status of Dragonfly StatefulSet...");
-    let client = Client::try_default().await.wrap_err("Failed to create Kubernetes client")?;
+    debug!("Checking status of StatefulSet '{}/{}'...", DRAGONFLY_NAMESPACE, DRAGONFLY_STATEFULSET);
+    let client = match Client::try_default().await {
+        Ok(c) => c,
+        Err(e) => {
+            // If client creation fails, k8s is likely unavailable or not configured.
+            warn!("Failed to create Kubernetes client: {}. Assuming StatefulSet is not ready.", e);
+            return Ok(false); // Not an error in checking status, just means k8s isn't there
+        }
+    };
     
-    let statefulsets: Api<StatefulSet> = Api::namespaced(client, DRAGONFLY_NAMESPACE);
-
-    match statefulsets.get(DRAGONFLY_STATEFULSET).await {
-        Ok(sts) => {
-            let spec_replicas = sts.spec.as_ref().and_then(|s| s.replicas).unwrap_or(1); // Default to 1 if not specified
-            let status_replicas = sts.status.as_ref().map(|s| s.replicas).unwrap_or(0);
-            let ready_replicas = sts.status.as_ref().and_then(|s| s.ready_replicas).unwrap_or(0);
-
-            debug!(
-                "StatefulSet '{}': Spec Replicas={}, Status Replicas={}, Ready Replicas={}",
-                DRAGONFLY_STATEFULSET, spec_replicas, status_replicas, ready_replicas
-            );
-
-            if ready_replicas >= spec_replicas && status_replicas >= spec_replicas {
-                debug!("Dragonfly StatefulSet is ready.");
+    let sts: Api<StatefulSet> = Api::namespaced(client, DRAGONFLY_NAMESPACE);
+    
+    match sts.get(DRAGONFLY_STATEFULSET).await {
+        Ok(stateful_set) => {
+            let spec = stateful_set.spec.ok_or_else(|| eyre!("StatefulSet '{}' has no spec", DRAGONFLY_STATEFULSET))?;
+            let status = stateful_set.status.ok_or_else(|| eyre!("StatefulSet '{}' has no status", DRAGONFLY_STATEFULSET))?;
+            
+            let desired_replicas = spec.replicas.unwrap_or(0); // Default to 0 if not specified
+            let ready_replicas = status.ready_replicas.unwrap_or(0);
+            
+            debug!("StatefulSet '{}/{}': Desired replicas = {}, Ready replicas = {}", 
+                   DRAGONFLY_NAMESPACE, DRAGONFLY_STATEFULSET, desired_replicas, ready_replicas);
+                   
+            // Consider ready if desired > 0 and ready == desired
+            if desired_replicas > 0 && ready_replicas == desired_replicas {
+                info!("StatefulSet '{}/{}' is ready.", DRAGONFLY_NAMESPACE, DRAGONFLY_STATEFULSET);
                 Ok(true)
             } else {
-                debug!("Dragonfly StatefulSet is not ready (Ready: {}/{}, Status: {}).", ready_replicas, spec_replicas, status_replicas);
+                debug!("StatefulSet '{}/{}' is not ready (desired={}, ready={}).", 
+                       DRAGONFLY_NAMESPACE, DRAGONFLY_STATEFULSET, desired_replicas, ready_replicas);
                 Ok(false)
             }
         }
         Err(kube::Error::Api(ae)) if ae.code == 404 => {
-            warn!("Dragonfly StatefulSet '{}' not found in namespace '{}'.", DRAGONFLY_STATEFULSET, DRAGONFLY_NAMESPACE);
+            debug!("StatefulSet '{}/{}' not found.", DRAGONFLY_NAMESPACE, DRAGONFLY_STATEFULSET);
             Ok(false) // Not found means not ready
         }
         Err(e) => {
-            Err(e).wrap_err_with(|| format!("Failed to get StatefulSet '{}' in namespace '{}'", DRAGONFLY_STATEFULSET, DRAGONFLY_NAMESPACE))
+            // Other API errors are actual errors in checking status
+            Err(e).wrap_err_with(|| format!("Failed to get StatefulSet '{}/{}'", DRAGONFLY_NAMESPACE, DRAGONFLY_STATEFULSET))
         }
     }
 }
