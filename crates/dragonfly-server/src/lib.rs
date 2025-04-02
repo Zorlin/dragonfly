@@ -13,8 +13,6 @@ use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::watch;
 use anyhow::Context;
 use listenfd::ListenFd;
-use axum::body::Body;
-use axum::http::Request;
 
 use crate::auth::{AdminBackend, auth_router, load_credentials, generate_default_credentials, load_settings, Settings};
 use crate::db::init_db;
@@ -42,9 +40,9 @@ pub mod tinkerbell;
 pub mod event_manager;
 pub mod os_templates;
 pub mod mode;
-// Remove missing module declarations
-// pub mod state;
-// pub mod utils;
+
+// Expose status module for integration tests
+pub mod status;
 
 // Global static for accessing event manager from other modules
 use std::sync::RwLock;
@@ -142,7 +140,7 @@ async fn cleanup_existing_processes() {
 pub async fn run() -> anyhow::Result<()> {
     // Determine modes FIRST
     let is_installation_server = std::env::var("DRAGONFLY_INSTALL_SERVER_MODE").is_ok(); 
-    let demo_mode = std::env::var("DRAGONFLY_DEMO_MODE").is_ok();
+    let _demo_mode = std::env::var("DRAGONFLY_DEMO_MODE").is_ok();
     let setup_mode = std::env::var("DRAGONFLY_SETUP_MODE").is_ok();
 
     // --- Populate Install State IMMEDIATELY if needed --- 
@@ -177,7 +175,7 @@ pub async fn run() -> anyhow::Result<()> {
     // Conditional info!() calls throughout the rest of the function are fine.
     // They will either be logged (if main.rs init or RUST_LOG) or dropped (if Dispatch::none).
 
-    let is_install_mode = is_installation_server;
+    let _is_install_mode = is_installation_server;
 
     // Initialize the database 
     let db_pool = init_db().await?; // DB init is essential
@@ -471,6 +469,4 @@ async fn handle_favicon() -> impl IntoResponse {
 }
 
 // Access functions for main.rs to use
-pub async fn database_exists() -> bool {
-    db::database_exists().await
-}
+pub use db::database_exists;

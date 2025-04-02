@@ -74,7 +74,7 @@ async fn register_machine(
             }
             
             // Emit machine discovered event
-            state.event_manager.send(format!("machine_discovered:{}", machine_id));
+            let _ = state.event_manager.send(format!("machine_discovered:{}", machine_id));
             
             let response = RegisterResponse {
                 machine_id,
@@ -572,7 +572,7 @@ async fn update_status(
             }
             
             // Emit machine updated event
-            state.event_manager.send(format!("machine_updated:{}", id));
+            let _ = state.event_manager.send(format!("machine_updated:{}", id));
             
             // Return HTML success message
             Html(format!(r#"
@@ -633,7 +633,7 @@ async fn update_hostname(
             }
             
             // Emit machine updated event
-            state.event_manager.send(format!("machine_updated:{}", id));
+            let _ = state.event_manager.send(format!("machine_updated:{}", id));
             
             let response = HostnameUpdateResponse {
                 success: true,
@@ -671,7 +671,7 @@ async fn update_os_installed(
     match db::update_os_installed(&id, &payload.os_installed).await {
         Ok(true) => {
             // Emit machine updated event
-            state.event_manager.send(format!("machine_updated:{}", id));
+            let _ = state.event_manager.send(format!("machine_updated:{}", id));
             
             let response = OsInstalledUpdateResponse {
                 success: true,
@@ -731,7 +731,7 @@ async fn update_bmc(
     match db::update_bmc_credentials(&id, &credentials).await {
         Ok(true) => {
             // Emit machine updated event
-            state.event_manager.send(format!("machine_updated:{}", id));
+            let _ = state.event_manager.send(format!("machine_updated:{}", id));
             
             (StatusCode::OK, Html(format!(r#"
                 <div class="p-4 mb-4 text-sm text-green-700 bg-green-100 rounded-lg" role="alert">
@@ -909,7 +909,7 @@ async fn delete_machine(
                     };
                     
                     // Emit machine deleted event
-                    state.event_manager.send(format!("machine_deleted:{}", id));
+                    let _ = state.event_manager.send(format!("machine_deleted:{}", id));
                     
                     (StatusCode::OK, Json(json!({ "success": true, "message": message }))).into_response()
                 },
@@ -1046,7 +1046,7 @@ async fn update_machine(
 
     if updated {
         // Emit machine updated event
-        state.event_manager.send(format!("machine_updated:{}", id));
+        let _ = state.event_manager.send(format!("machine_updated:{}", id));
         
         (StatusCode::OK, Json(json!({
             "success": true,
@@ -1342,7 +1342,7 @@ async fn api_update_machine_tags(
     match db_update_machine_tags(&id, &tags).await {
         Ok(true) => {
             // Emit machine updated event
-            state.event_manager.send(format!("machine_updated:{}", id)); 
+            let _ = state.event_manager.send(format!("machine_updated:{}", id)); 
             (StatusCode::OK, Json(json!({ "success": true, "message": "Tags updated" }))).into_response()
         }
                     Ok(false) => {

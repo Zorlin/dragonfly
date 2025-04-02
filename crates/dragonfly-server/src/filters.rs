@@ -1,6 +1,3 @@
-// use askama::Result;
-use chrono::{DateTime, Utc};
-
 /* TODO: Refactor filters for MiniJinja
 pub fn length<T>(collection: &[T]) -> Result<usize> {
     Ok(collection.len())

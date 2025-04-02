@@ -126,11 +126,10 @@ pub async fn run_install(args: InstallArgs, mut shutdown_rx: watch::Receiver<()>
     let passwordless_sudo = check_passwordless_sudo().await;
     if !passwordless_sudo {
         println!("🔐 Meanwhile, you'll need to enter your sudo password for the next stages of the installer.");
+        // Handle the Result from sudo_prompt
+        let _ = sudo_prompt().await;
     }
 
-    // Trigger a sudo prompt and *wait for it to complete before we do anything else*
-    sudo_prompt().await;
-    
     // Set initial state (WaitingSudo) - use the helper
     update_install_state(InstallationState::WaitingSudo).await;
     

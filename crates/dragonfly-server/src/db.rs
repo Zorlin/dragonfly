@@ -1691,8 +1691,8 @@ pub async fn is_setup_completed() -> Result<bool> {
     }
 }
 
-// Check if the database exists
+// Check if the database exists by checking the standard installation path
 pub async fn database_exists() -> bool {
-    let db_path = "sqlite.db";
+    let db_path = "/var/lib/dragonfly/sqlite.db";
     Path::new(db_path).exists()
 } 
