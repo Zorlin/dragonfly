@@ -15,6 +15,147 @@
     currentMachineId: null,
     currentMachineName: null,
     osDropdowns: {}, // Track open state of OS dropdowns
+    editingField: null, // Track which field is being edited
+    fieldChanges: {}, // Track changes to fields
+    originalValues: {}, // Track original values for fields
+    pendingChanges: false, // Whether there are unsaved changes
+    
+    // Just Type functionality
+    startEditing(machineId, fieldName, currentValue) {
+        // Don't allow editing if not authenticated
+        if (!this.isAuthenticated) return;
+        
+        // Store the field being edited
+        this.editingField = `${machineId}-${fieldName}`;
+        
+        // Store the original value
+        if (!this.originalValues[machineId]) {
+            this.originalValues[machineId] = {};
+        }
+        this.originalValues[machineId][fieldName] = currentValue;
+        
+        // Initialize changes object if needed
+        if (!this.fieldChanges[machineId]) {
+            this.fieldChanges[machineId] = {};
+        }
+    },
+    
+    updateField(machineId, fieldName, newValue) {
+        // Update the changes object
+        if (!this.fieldChanges[machineId]) {
+            this.fieldChanges[machineId] = {};
+        }
+        
+        // Check if the value has actually changed
+        if (newValue !== this.originalValues[machineId][fieldName]) {
+            this.fieldChanges[machineId][fieldName] = newValue;
+            this.pendingChanges = true;
+        } else {
+            // If value is back to original, remove it from changes
+            delete this.fieldChanges[machineId][fieldName];
+            
+            // Check if there are any changes left for this machine
+            if (Object.keys(this.fieldChanges[machineId]).length === 0) {
+                delete this.fieldChanges[machineId];
+            }
+            
+            // Check if there are any changes left at all
+            this.pendingChanges = Object.keys(this.fieldChanges).length > 0;
+        }
+    },
+    
+    stopEditing() {
+        this.editingField = null;
+    },
+    
+    // Validate a MAC address
+    validateMac(mac) {
+        return /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/.test(mac);
+    },
+    
+    // Validate a hostname (RFC-1123 compliant)
+    validateHostname(hostname) {
+        return /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/i.test(hostname);
+    },
+    
+    // Validate an IP address
+    validateIp(ip) {
+        return /^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/.test(ip);
+    },
+    
+    // Apply changes to a specific machine
+    applyChanges(machineId) {
+        if (!this.fieldChanges[machineId]) return;
+        
+        const changes = this.fieldChanges[machineId];
+        const payload = {};
+        
+        // Convert changes to a payload
+        Object.keys(changes).forEach(field => {
+            payload[field] = changes[field];
+        });
+        
+        // Submit changes via AJAX
+        fetch(`/api/machines/${machineId}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: new URLSearchParams(payload).toString()
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            // Clear changes for this machine
+            delete this.fieldChanges[machineId];
+            this.pendingChanges = Object.keys(this.fieldChanges).length > 0;
+            
+            // Show success toast
+            showToast(`Machine ${machineId} updated: ${data.message}`, 'success');
+            
+            // Refresh the machine list
+            htmx.trigger(document.querySelector('tbody'), 'refreshMachines');
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            showToast(`Failed to update machine: ${error.message}`, 'error');
+        });
+    },
+    
+    // Check if field has changes
+    hasFieldChanged(machineId, fieldName) {
+        return this.fieldChanges[machineId] && 
+               this.fieldChanges[machineId][fieldName] !== undefined &&
+               this.fieldChanges[machineId][fieldName] !== this.originalValues[machineId][fieldName];
+    },
+    
+    confirmMacChange(machineId) {
+        const newMac = this.fieldChanges[machineId].mac_address;
+        
+        if (!this.validateMac(newMac)) {
+            showToast('Invalid MAC address format. Please use XX:XX:XX:XX:XX:XX format.', 'error');
+            return;
+        }
+        
+        if (confirm(`Changing the MAC address for this machine will cause issues if the machine is still using the old one. Are you sure you want to change it to ${newMac}?`)) {
+            this.applyChanges(machineId);
+        } else {
+            // Revert changes if user cancels
+            delete this.fieldChanges[machineId].mac_address;
+            if (Object.keys(this.fieldChanges[machineId]).length === 0) {
+                delete this.fieldChanges[machineId];
+            }
+            this.pendingChanges = Object.keys(this.fieldChanges).length > 0;
+            
+            // Refresh the display
+            htmx.trigger(document.querySelector('tbody'), 'refreshMachines');
+        }
+    },
+    
     openTagModal(id, name) { this.tagModal = true; this.currentMachineId = id; this.currentMachineName = name; },
     openReimageModal(id) { this.reimageModal = true; this.currentMachineId = id; },
     openPowerModal(id) { this.powerModal = true; this.currentMachineId = id; },
@@ -33,7 +174,8 @@
     }
 }" x-init="window.isAuthenticated = isAuthenticated"
    @close-tag-modal.window="tagModal = false"
-   @close-delete-modal.window="deleteModal = false">
+   @close-delete-modal.window="deleteModal = false"
+   @click.window="stopEditing()">
     <div class="sm:flex sm:items-center">
         <div class="sm:flex-auto">
             <h1 class="text-xl font-semibold text-gray-900 dark:text-white">Machines</h1>
@@ -80,31 +222,95 @@
                             {% for machine in machines %}
                             <tr class="hover:ring-1 hover:ring-purple-500 dark:hover:ring-purple-700/60 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer" @click="window.location='/machines/{{ machine.id }}'">
                                 <td class="px-6 py-4 whitespace-nowrap">
-                                    <div class="flex items-center">
-                                        {# Main identifier display #}
-                                        <div class="text-sm font-medium text-gray-900 dark:text-white">
-                                            <a href="/machines/{{ machine.id }}" class="hover:text-indigo-600 dark:hover:text-indigo-400">
-                                                {% if machine.hostname %}
-                                                    {{ machine.hostname }}
-                                                {% else %}
-                                                    {# Fallback to ID if no hostname #}
-                                                    {{ machine.id }}
-                                                {% endif %}
-                                            </a>
-                                            {# Display memorable_name below if it exists #}
-                                            {% if machine.memorable_name %}
-                                            <div class="mt-1 text-xs text-gray-500 dark:text-gray-400 tracking-tight italic">
-                                                {{ machine.memorable_name }}
-                                            </div>
-                                            {% endif %}
+                                    <div class="text-sm font-medium text-gray-900 dark:text-white">
+                                        <div x-on:click.stop="startEditing('{{ machine.id }}', 'hostname', '{{ machine.hostname|default('') }}')" 
+                                             :class="{'cursor-text': isAuthenticated}" 
+                                             class="hover:text-indigo-600 dark:hover:text-indigo-400">
+                                            <span x-show="editingField !== '{{ machine.id }}-hostname'"
+                                                  :class="{'text-purple-700 dark:text-purple-400 font-medium': hasFieldChanged('{{ machine.id }}', 'hostname')}">
+                                                <span x-text="fieldChanges['{{ machine.id }}'] && fieldChanges['{{ machine.id }}'].hostname !== undefined ? 
+                                                             fieldChanges['{{ machine.id }}'].hostname : 
+                                                             '{% if machine.hostname %}{{ machine.hostname }}{% else %}Set hostname...{% endif %}'"></span>
+                                            </span>
+                                            <input x-show="editingField === '{{ machine.id }}-hostname'"
+                                                   x-ref="hostname{{ machine.id }}"
+                                                   x-on:click.stop
+                                                   x-on:keydown.enter.stop="if(validateHostname($event.target.value)) { updateField('{{ machine.id }}', 'hostname', $event.target.value); stopEditing(); }"
+                                                   x-on:keydown.escape.stop="stopEditing()"
+                                                   x-on:blur="if(validateHostname($event.target.value)) { updateField('{{ machine.id }}', 'hostname', $event.target.value); stopEditing(); }"
+                                                   x-effect="if(editingField === '{{ machine.id }}-hostname') setTimeout(() => $refs['hostname{{ machine.id }}'].focus(), 50)"
+                                                   type="text"
+                                                   value="{{ machine.hostname|default('') }}"
+                                                   class="w-full border-b border-indigo-500 bg-transparent focus:outline-none focus:border-indigo-700 dark:text-white">
                                         </div>
+                                        {# Display memorable_name below if it exists #}
+                                        {% if machine.memorable_name %}
+                                        <div x-on:click.stop="startEditing('{{ machine.id }}', 'memorable_name', '{{ machine.memorable_name }}')" 
+                                             :class="{'cursor-text': isAuthenticated}"
+                                             class="mt-1 text-xs text-gray-500 dark:text-gray-400 tracking-tight italic">
+                                            <span x-show="editingField !== '{{ machine.id }}-memorable_name'"
+                                                  :class="{'text-purple-700 dark:text-purple-400 font-medium': hasFieldChanged('{{ machine.id }}', 'memorable_name')}">
+                                                <span x-text="fieldChanges['{{ machine.id }}'] && fieldChanges['{{ machine.id }}'].memorable_name !== undefined ? 
+                                                             fieldChanges['{{ machine.id }}'].memorable_name : 
+                                                             '{{ machine.memorable_name }}'"></span>
+                                            </span>
+                                            <input x-show="editingField === '{{ machine.id }}-memorable_name'"
+                                                   x-ref="memorableName{{ machine.id }}"
+                                                   x-on:click.stop
+                                                   x-on:keydown.enter.stop="updateField('{{ machine.id }}', 'memorable_name', $event.target.value); stopEditing();"
+                                                   x-on:keydown.escape.stop="stopEditing()"
+                                                   x-on:blur="updateField('{{ machine.id }}', 'memorable_name', $event.target.value); stopEditing();"
+                                                   x-effect="if(editingField === '{{ machine.id }}-memorable_name') setTimeout(() => $refs['memorableName{{ machine.id }}'].focus(), 50)"
+                                                   type="text"
+                                                   value="{{ machine.memorable_name }}"
+                                                   class="w-full border-b border-indigo-500 bg-transparent focus:outline-none focus:border-indigo-700 dark:text-white text-xs">
+                                        </div>
+                                        {% endif %}
                                     </div>
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400 tech-mono">
-                                    {{ machine.mac_address }}
+                                    <div x-on:click.stop="startEditing('{{ machine.id }}', 'mac_address', '{{ machine.mac_address }}')" 
+                                         :class="{'cursor-text': isAuthenticated}">
+                                        <span x-show="editingField !== '{{ machine.id }}-mac_address'"
+                                              :class="{'text-purple-700 dark:text-purple-400 font-medium': hasFieldChanged('{{ machine.id }}', 'mac_address')}"
+                                              class="tech-mono">
+                                            <span x-text="fieldChanges['{{ machine.id }}'] && fieldChanges['{{ machine.id }}'].mac_address !== undefined ? 
+                                                         fieldChanges['{{ machine.id }}'].mac_address : 
+                                                         '{{ machine.mac_address }}'" class="tech-mono"></span>
+                                        </span>
+                                        <input x-show="editingField === '{{ machine.id }}-mac_address'"
+                                               x-ref="macAddress{{ machine.id }}"
+                                               x-on:click.stop
+                                               x-on:keydown.enter.stop="updateField('{{ machine.id }}', 'mac_address', $event.target.value); stopEditing();"
+                                               x-on:keydown.escape.stop="stopEditing()"
+                                               x-on:blur="updateField('{{ machine.id }}', 'mac_address', $event.target.value); stopEditing();"
+                                               x-effect="if(editingField === '{{ machine.id }}-mac_address') setTimeout(() => $refs['macAddress{{ machine.id }}'].focus(), 50)"
+                                               type="text"
+                                               value="{{ machine.mac_address }}"
+                                               class="w-full border-b border-indigo-500 bg-transparent focus:outline-none focus:border-indigo-700 dark:text-white tech-mono">
+                                    </div>
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400 tech-mono">
-                                    {{ machine.ip_address }}
+                                    <div x-on:click.stop="startEditing('{{ machine.id }}', 'ip_address', '{{ machine.ip_address }}')" 
+                                         :class="{'cursor-text': isAuthenticated}">
+                                        <span x-show="editingField !== '{{ machine.id }}-ip_address'"
+                                              :class="{'text-purple-700 dark:text-purple-400 font-medium': hasFieldChanged('{{ machine.id }}', 'ip_address')}"
+                                              class="tech-mono">
+                                            <span x-text="fieldChanges['{{ machine.id }}'] && fieldChanges['{{ machine.id }}'].ip_address !== undefined ? 
+                                                         fieldChanges['{{ machine.id }}'].ip_address : 
+                                                         '{{ machine.ip_address }}'" class="tech-mono"></span>
+                                        </span>
+                                        <input x-show="editingField === '{{ machine.id }}-ip_address'"
+                                               x-ref="ipAddress{{ machine.id }}"
+                                               x-on:click.stop
+                                               x-on:keydown.enter.stop="if(validateIp($event.target.value)) { updateField('{{ machine.id }}', 'ip_address', $event.target.value); stopEditing(); }"
+                                               x-on:keydown.escape.stop="stopEditing()"
+                                               x-on:blur="if(validateIp($event.target.value)) { updateField('{{ machine.id }}', 'ip_address', $event.target.value); stopEditing(); }"
+                                               x-effect="if(editingField === '{{ machine.id }}-ip_address') setTimeout(() => $refs['ipAddress{{ machine.id }}'].focus(), 50)"
+                                               type="text"
+                                               value="{{ machine.ip_address }}"
+                                               class="w-full border-b border-indigo-500 bg-transparent focus:outline-none focus:border-indigo-700 dark:text-white tech-mono">
+                                    </div>
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap">
                                     <span class="px-3 py-1 inline-flex text-sm leading-5 font-semibold rounded-full 
@@ -224,12 +430,22 @@
                                                 🏷️ Tags
                                             </button>
                                             
-                                            {# Reimage Action #}
-                                            {% if machine.status == "Ready" or machine.status == "AwaitingAssignment" or machine.status == "ExistingOS" or machine.status == "Offline" %}
-                                            <button @click="openReimageModal('{{ machine.id }}')" class="inline-flex items-center px-3 py-1 border border-transparent text-sm leading-5 font-medium rounded text-cyan-700 bg-cyan-100 hover:bg-cyan-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-cyan-500 dark:bg-cyan-900 dark:text-cyan-200 dark:hover:bg-cyan-800">
-                                                ♻️ Reimage
-                                            </button>
-                                            {% endif %}
+                                            {# Apply Button - Only show when there are changes to apply #}
+                                            <template x-if="fieldChanges['{{ machine.id }}'] && Object.keys(fieldChanges['{{ machine.id }}']).length > 0">
+                                                <button @click="fieldChanges['{{ machine.id }}'].mac_address ? confirmMacChange('{{ machine.id }}') : applyChanges('{{ machine.id }}')" 
+                                                        class="inline-flex items-center px-3 py-1 border border-transparent text-sm leading-5 font-medium rounded text-blue-700 bg-blue-100 hover:bg-blue-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 dark:bg-blue-900 dark:text-blue-200 dark:hover:bg-blue-800">
+                                                    ⚡ Apply
+                                                </button>
+                                            </template>
+                                            
+                                            {# Reimage Action - Only show when there are no changes to apply #}
+                                            <template x-if="!fieldChanges['{{ machine.id }}'] || Object.keys(fieldChanges['{{ machine.id }}']).length === 0">
+                                                {% if machine.status == "Ready" or machine.status == "AwaitingAssignment" or machine.status == "ExistingOS" or machine.status == "Offline" %}
+                                                <button @click="openReimageModal('{{ machine.id }}')" class="inline-flex items-center px-3 py-1 border border-transparent text-sm leading-5 font-medium rounded text-cyan-700 bg-cyan-100 hover:bg-cyan-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-cyan-500 dark:bg-cyan-900 dark:text-cyan-200 dark:hover:bg-cyan-800">
+                                                    ♻️ Reimage
+                                                </button>
+                                                {% endif %}
+                                            </template>
 
                                             {# Power Action #}
                                             {% if machine.bmc_credentials %}
