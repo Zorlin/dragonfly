@@ -5,10 +5,10 @@ use axum::{
     routing::{get, post},
     Form, Router,
 };
-use dragonfly_common::models::{Machine, MachineStatus};
+use dragonfly_common::models::{Machine, MachineStatus, DiskInfo};
 use tracing::{error, info, warn};
 use std::collections::HashMap;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Utc, TimeZone};
 use cookie::{Cookie, SameSite};
 use std::fs;
 use serde::Serialize;
@@ -17,6 +17,9 @@ use crate::auth::{self, AuthSession, Settings, Credentials};
 use crate::mode;
 use minijinja::{Environment, Error as MiniJinjaError, ErrorKind as MiniJinjaErrorKind};
 use std::sync::Arc;
+use uuid::Uuid;
+use std::net::{IpAddr, Ipv4Addr};
+use std::str::FromStr;
 
 // Import global state
 use crate::{AppState, INSTALL_STATE_REF, InstallationState};
@@ -209,6 +212,152 @@ fn format_datetime(dt: &DateTime<Utc>) -> String {
     dt.format("%Y-%m-%d %H:%M:%S UTC").to_string()
 }
 
+// Function to generate demo machines
+fn generate_demo_machines() -> Vec<Machine> {
+    let mut machines = Vec::new();
+    let base_time = Utc.with_ymd_and_hms(2023, 4, 15, 12, 0, 0).unwrap();
+    let base_mac = [0x52, 0x54, 0x00, 0xAB, 0xCD, 0x00];
+    let base_ip = Ipv4Addr::new(10, 0, 42, 0);
+
+    // Generate topaz-control[01:03]
+    for i in 1..=3 {
+        let hostname = format!("topaz-control{:02}", i);
+        let mac_suffix = i as u8;
+        let ip_suffix = 10 + i as u8;
+        machines.push(create_demo_machine(
+            &hostname, 
+            base_mac, 
+            mac_suffix, 
+            base_ip, 
+            ip_suffix, 
+            base_time.clone(), 
+            MachineStatus::Ready,
+            Some(500), // 500GB disk
+        ));
+    }
+
+    // Generate topaz-worker[01:06]
+    for i in 1..=6 {
+        let hostname = format!("topaz-worker{:02}", i);
+        let mac_suffix = 10 + i as u8;
+        let ip_suffix = 20 + i as u8;
+        machines.push(create_demo_machine(
+            &hostname, 
+            base_mac, 
+            mac_suffix, 
+            base_ip, 
+            ip_suffix, 
+            base_time.clone(), 
+            MachineStatus::Ready,
+            Some(2000), // 2TB disk
+        ));
+    }
+
+    // Generate cubefs-master[01:03]
+    for i in 1..=3 {
+        let hostname = format!("cubefs-master{:02}", i);
+        let mac_suffix = 20 + i as u8;
+        let ip_suffix = 30 + i as u8;
+        machines.push(create_demo_machine(
+            &hostname, 
+            base_mac, 
+            mac_suffix,
+            base_ip, 
+            ip_suffix, 
+            base_time.clone(), 
+            MachineStatus::Ready,
+            Some(500), // 500GB disk
+        ));
+    }
+
+    // Generate cubefs-datanode[01:06]
+    for i in 1..=6 {
+        let hostname = format!("cubefs-datanode{:02}", i);
+        let mac_suffix = 30 + i as u8;
+        let ip_suffix = 40 + i as u8;
+        let status = if i <= 5 { 
+            MachineStatus::Ready 
+        } else { 
+            // Make one datanode show as "installing" for variety
+            MachineStatus::InstallingOS 
+        };
+        machines.push(create_demo_machine(
+            &hostname, 
+            base_mac, 
+            mac_suffix, 
+            base_ip, 
+            ip_suffix, 
+            base_time.clone(), 
+            status,
+            Some(4000), // 4TB disk
+        ));
+    }
+
+    machines
+}
+
+// Helper function to create a demo machine
+fn create_demo_machine(
+    hostname: &str,
+    base_mac: [u8; 6],
+    mac_suffix: u8,
+    base_ip: Ipv4Addr,
+    ip_suffix: u8,
+    base_time: DateTime<Utc>,
+    status: MachineStatus,
+    disk_size_gb: Option<u64>,
+) -> Machine {
+    // Generate a deterministic UUID based on hostname
+    let mut mac = base_mac;
+    mac[5] = mac_suffix;
+    
+    // Use new_v4 instead of nonexistent new_v5 - since these are demo machines, we don't need deterministic UUIDs
+    let uuid = Uuid::new_v4();
+    let created_at = base_time + chrono::Duration::minutes(mac_suffix as i64);
+    let updated_at = created_at + chrono::Duration::hours(1);
+    
+    let mut ip_octets = base_ip.octets();
+    ip_octets[3] = ip_suffix;
+    let ip = IpAddr::V4(Ipv4Addr::from(ip_octets));
+
+    // Format MAC address with colons
+    let mac_string = format!(
+        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+    );
+
+    // Generate memorable name using BIP39 words based on MAC address
+    let memorable_name = dragonfly_common::mac_to_words::mac_to_words_safe(&mac_string);
+
+    // Create a disk to match the requested disk size
+    let disk = DiskInfo {
+        device: format!("/dev/sda"),
+        size_bytes: disk_size_gb.unwrap_or(500) * 1_073_741_824, // Convert GB to bytes
+        model: Some(format!("Demo Disk {}", disk_size_gb.unwrap_or(500))),
+        calculated_size: Some(format!("{} GB", disk_size_gb.unwrap_or(500))),
+    };
+
+    // Create the machine with the correct fields
+    Machine {
+        id: uuid,
+        hostname: Some(hostname.to_string()),
+        mac_address: mac_string,
+        ip_address: ip.to_string(), // No Option<> here, ip_address is a String
+        status,
+        os_choice: Some("ubuntu-2204".to_string()),
+        os_installed: Some("Ubuntu 22.04".to_string()),
+        disks: vec![disk],
+        nameservers: vec!["8.8.8.8".to_string(), "1.1.1.1".to_string()],
+        memorable_name: Some(memorable_name),
+        created_at,
+        updated_at,
+        bmc_credentials: None,
+        installation_progress: 0,
+        installation_step: None,
+        last_deployment_duration: None,
+    }
+}
+
 #[axum::debug_handler]
 pub async fn index(
     State(app_state): State<AppState>,
@@ -246,18 +395,32 @@ pub async fn index(
     }
     
     // Prepare context for the template
-    // Only fetch machine data if NOT installing
+    // Only fetch real machine data if NOT installing and NOT in demo mode
     let (machines, status_counts, status_counts_json, display_dates) = if !installation_in_progress {
-        match db::get_all_machines().await {
-            Ok(m) => {
-                let counts = count_machines_by_status(&m);
-                let counts_json = serde_json::to_string(&counts).unwrap_or_else(|_| "{}".to_string());
-                let dates = m.iter().map(|mach| (mach.id.to_string(), format_datetime(&mach.created_at))).collect();
-                (m, counts, counts_json, dates)
-            },
-            Err(e) => {
-                error!("Error fetching machines for index page: {}", e);
-                (vec![], HashMap::new(), "{}".to_string(), HashMap::new())
+        if is_demo_mode {
+            // In demo mode, generate fake demo machines
+            let demo_machines = generate_demo_machines();
+            let counts = count_machines_by_status(&demo_machines);
+            let counts_json = serde_json::to_string(&counts).unwrap_or_else(|_| "{}".to_string());
+            let dates = demo_machines.iter()
+                .map(|mach| (mach.id.to_string(), format_datetime(&mach.created_at)))
+                .collect();
+            (demo_machines, counts, counts_json, dates)
+        } else {
+            // Normal mode - fetch real machines from database
+            match db::get_all_machines().await {
+                Ok(m) => {
+                    let counts = count_machines_by_status(&m);
+                    let counts_json = serde_json::to_string(&counts).unwrap_or_else(|_| "{}".to_string());
+                    let dates = m.iter()
+                        .map(|mach| (mach.id.to_string(), format_datetime(&mach.created_at)))
+                        .collect();
+                    (m, counts, counts_json, dates)
+                },
+                Err(e) => {
+                    error!("Error fetching machines for index page: {}", e);
+                    (vec![], HashMap::new(), "{}".to_string(), HashMap::new())
+                }
             }
         }
     } else {
@@ -296,6 +459,27 @@ pub async fn machine_list(
         return Redirect::to("/login").into_response();
     }
 
+    // Determine if we are in demo mode
+    let is_demo_mode = std::env::var("DRAGONFLY_DEMO_MODE").is_ok();
+
+    // If in demo mode, show demo machines
+    if is_demo_mode {
+        // Generate demo machines
+        let machines = generate_demo_machines();
+        // Create an empty workflow info map
+        let workflow_infos = HashMap::new();
+
+        let context = MachineListTemplate {
+            machines,
+            theme,
+            is_authenticated,
+            is_admin,
+            workflow_infos,
+        };
+        return render_minijinja(&app_state, "machine_list.html", context);
+    }
+
+    // Normal mode - fetch machines from database
     match db::get_all_machines().await {
         Ok(machines) => {
             let mut workflow_infos = HashMap::new();
@@ -360,10 +544,70 @@ pub async fn machine_details(
         return Redirect::to("/login").into_response();
     }
     
+    // Check if we are in demo mode
+    let is_demo_mode = std::env::var("DRAGONFLY_DEMO_MODE").is_ok();
+    
     // Parse UUID from string
     match uuid::Uuid::parse_str(&id) {
         Ok(uuid) => {
-            // Get machine by ID
+            // If in demo mode, find the machine in our demo dataset
+            if is_demo_mode {
+                let demo_machines = generate_demo_machines();
+                if let Some(machine) = demo_machines.iter().find(|m| m.id == uuid) {
+                    let created_at_formatted = machine.created_at.format("%Y-%m-%d %H:%M:%S UTC").to_string();
+                    let updated_at_formatted = machine.updated_at.format("%Y-%m-%d %H:%M:%S UTC").to_string();
+                    
+                    // Create a mock workflow info if the machine is in installing status
+                    let workflow_info = if machine.status == MachineStatus::InstallingOS {
+                        Some(crate::tinkerbell::WorkflowInfo {
+                            state: "running".to_string(),
+                            current_action: Some("Writing disk image".to_string()),
+                            progress: 65,
+                            tasks: vec![
+                                crate::tinkerbell::TaskInfo {
+                                    name: "Installing operating system".to_string(),
+                                    status: "STATE_RUNNING".to_string(),
+                                    started_at: (Utc::now() - chrono::Duration::minutes(15)).to_rfc3339(),
+                                    duration: 900, // 15 minutes in seconds
+                                    reported_duration: 900,
+                                    estimated_duration: 1800, // 30 minutes in seconds
+                                    progress: 65,
+                                }
+                            ],
+                            estimated_completion: Some("About 10 minutes remaining".to_string()),
+                            template_name: "ubuntu-2204".to_string(),
+                        })
+                    } else {
+                        None
+                    };
+                    
+                    let context = MachineDetailsTemplate {
+                        machine: machine.clone(),
+                        theme,
+                        is_authenticated,
+                        created_at_formatted,
+                        updated_at_formatted,
+                        workflow_info,
+                    };
+                    return render_minijinja(&app_state, "machine_details.html", context);
+                } else {
+                    // Machine not found in demo mode, show error
+                    let context = ErrorTemplate {
+                        theme,
+                        is_authenticated,
+                        title: "Demo Machine Not Found".to_string(),
+                        message: "The requested demo machine was not found.".to_string(),
+                        error_details: format!("UUID: {}", uuid),
+                        back_url: "/machines".to_string(),
+                        back_text: "Back to Machines".to_string(),
+                        show_retry: false,
+                        retry_url: "".to_string(),
+                    };
+                    return render_minijinja(&app_state, "error.html", context);
+                }
+            }
+            
+            // Normal mode - get machine by ID from database
             match db::get_machine_by_id(&uuid).await {
                 Ok(Some(machine)) => {
                     info!("Rendering machine details page for machine {}", uuid);

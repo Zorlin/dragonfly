@@ -126,18 +126,18 @@
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
                                     {% if machine.status == "InstallingOS" %}
-                                        {% if workflow_infos.get(machine.id) %}
+                                        {% if workflow_infos[machine.id] %}
                                             <div class="flex flex-col space-y-1">
                                                 <div class="flex justify-between text-xs">
-                                                    <span>{{ workflow_infos.get(machine.id).progress }}%</span>
-                                                    {% if workflow_infos.get(machine.id).current_action %}
+                                                    <span>{{ workflow_infos[machine.id].progress }}%</span>
+                                                    {% if workflow_infos[machine.id].current_action %}
                                                         <span class="ml-2 truncate max-w-[120px]">
-                                                            {{ workflow_infos.get(machine.id).current_action }}
+                                                            {{ workflow_infos[machine.id].current_action }}
                                                         </span>
                                                     {% endif %}
                                                 </div>
                                                 <div class="w-full bg-gray-200 rounded-full h-2 dark:bg-gray-700">
-                                                    <div class="bg-yellow-500 h-2 rounded-full dark:bg-yellow-600 workflow-progress-bar" data-machine-id="{{ machine.id }}" data-progress="{{ workflow_infos.get(machine.id).progress }}"></div>
+                                                    <div class="bg-yellow-500 h-2 rounded-full dark:bg-yellow-600 workflow-progress-bar" data-machine-id="{{ machine.id }}" data-progress="{{ workflow_infos[machine.id].progress }}"></div>
                                                 </div>
                                             </div>
                                         {% else %}
