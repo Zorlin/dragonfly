@@ -285,6 +285,9 @@
   }
 }
 @layer utilities {
+  .pointer-events-none {
+    pointer-events: none;
+  }
   .visible {
     visibility: visible;
   }
@@ -842,6 +845,9 @@
   }
   .border-purple-500 {
     border-color: var(--color-purple-500);
+  }
+  .border-purple-500\/30 {
+    border-color: color-mix(in oklab, var(--color-purple-500) 30%, transparent);
   }
   .border-purple-800 {
     border-color: var(--color-purple-800);
@@ -2136,6 +2142,11 @@
   .dark\:border-indigo-400 {
     &:where(.dark, .dark *) {
       border-color: var(--color-indigo-400);
+    }
+  }
+  .dark\:border-purple-500\/20 {
+    &:where(.dark, .dark *) {
+      border-color: color-mix(in oklab, var(--color-purple-500) 20%, transparent);
     }
   }
   .dark\:border-purple-700 {
