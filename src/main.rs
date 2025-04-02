@@ -10,9 +10,12 @@ use tracing::{error, info, Level};
 // Updated imports: Add EnvFilter
 use tracing_subscriber::{fmt, prelude::*, registry, EnvFilter};
 use tokio::sync::watch; // For shutdown signal
+use clap::CommandFactory; // Needed for print_help
 
 // Reference the cmd module where subcommands live
 mod cmd;
+// Add the new status module
+mod status;
 // Reference the actual install args from its module
 use cmd::install::InstallArgs;
 
@@ -22,7 +25,7 @@ use std::io::stderr; // For foreground logging
 
 // Define the command-line arguments
 #[derive(Parser, Debug)]
-#[command(author, version, about = "Dragonfly Server and Installation Tool", long_about = None)]
+#[command(author, version, about = "Dragonfly Metal Management", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>, // Make the command optional
@@ -119,32 +122,68 @@ async fn main() -> Result<()> {
             }
         }
         Some(Commands::Setup(_)) | Some(Commands::Server(_)) | None => {
-            // Check for demo mode
-            // Must check before run() as run() doesn't have access to cli args easily
+            // Scenario A: Handle default 'dragonfly' invocation
+            // This scenario *only* prints information and help, then exits.
+            // It does NOT run the server.
             let db_exists = dragonfly_server::database_exists().await;
-             if !db_exists && !matches!(cli.command, Some(Commands::Setup(_))) {
-                 std::env::set_var("DRAGONFLY_DEMO_MODE", "true");
-                 println!("🐉 Dragonfly has launched in demo mode.");
-                 println!();
-                 println!("🌐 Web UI available at: http://localhost:3000");
-                 println!("🔍 This is a simulated environment — no machines will be affected.");
-                 println!();
-                 println!("💡 When you're ready to install Dragonfly for real, run:");
-                 println!("    dragonfly install");
-                 println!();
-             }
-             
-             if matches!(cli.command, Some(Commands::Setup(_))){
-                std::env::set_var("DRAGONFLY_SETUP_MODE", "true");
-             }
 
-             // Run the server. It will NOT initialize logging.
-             // It *might* pick up RUST_LOG if set above or by user.
-             if let Err(e) = dragonfly_server::run().await {
-                 eprintln!("Error running server/setup: {}", e);
-                 // error! macro might not work if no subscriber is set.
-                 std::process::exit(1);
-             }
+            if !db_exists {
+                // Case: Dragonfly Not Installed
+                println!("💡 Dragonfly is not installed.");
+                println!("🐉 To get started, run: dragonfly install");
+                println!();
+                Cli::command().print_help()?; // Print help text
+            } else {
+                // Case: Dragonfly Installed
+                println!("✅ Dragonfly is installed 🐉");
+                
+                // Check Kubernetes connectivity
+                match status::check_kubernetes_connectivity().await {
+                    Ok(_) => {
+                        println!("  🔗 Kubernetes API: Reachable");
+                        
+                        // Check Dragonfly StatefulSet status
+                        match status::check_dragonfly_statefulset_status().await {
+                            Ok(true) => {
+                                println!("  ✅ Dragonfly is running");
+                                // Attempt to get WebUI address ONLY if StatefulSet is ready
+                                match status::get_webui_address().await {
+                                    Ok(Some(url)) if url.starts_with("http") => {
+                                        println!("  🌐 Web UI should be available at: {}", url);
+                                    }
+                                    Ok(Some(internal_addr)) => {
+                                        // Likely ClusterIP, provide guidance
+                                        println!("    🏠 Web UI internal address: {} (Use 'kubectl port-forward svc/dragonfly 3000:80 -n dragonfly' or similar)", internal_addr);
+                                    }
+                                    Ok(None) => {
+                                        // Service found, but address not determined (e.g., LB pending, port missing)
+                                        println!("    ⏳ Web UI address determination pending (Service found, but address not ready/determinable)");
+                                    }
+                                    Err(e) => {
+                                        println!("    🔴 Error determining Web UI address: {}", e);
+                                    }
+                                }
+                            }
+                            Ok(false) => {
+                                println!("  ⚠️  Dragonfly is not running");
+                            }
+                            Err(e) => {
+                                println!("  🛑  Error checking StatefulSet 'dragonfly': {}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        println!("  🔴 Error connecting to Kubernetes API: {}", e);
+                        println!("    (Is k3s running? Is KUBECONFIG set correctly?)");
+                    }
+                }
+
+                // Remove the old hardcoded address print
+                // println!("🌐 Web UI should be available at: http://localhost:3000"); // Assuming default port
+                println!();
+                Cli::command().print_help()?; // Print help text
+            }
+            // Exit successfully after printing info/help.
         }
     }
 

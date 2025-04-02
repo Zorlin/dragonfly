@@ -123,7 +123,7 @@ pub async fn run_install(args: InstallArgs, mut shutdown_rx: watch::Receiver<()>
 
     // Only show sudo message if passwordless sudo is not available
     // Note: Need to check passwordless_sudo before this point
-    let passwordless_sudo = check_passwordless_sudo().await; // Check needs to be moved up if uncommented
+    let passwordless_sudo = check_passwordless_sudo().await;
     if !passwordless_sudo {
         println!("🔐 Meanwhile, you'll need to enter your sudo password for the next stages of the installer.");
     }
