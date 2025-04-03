@@ -28,6 +28,12 @@ use std::path::Path as FilePath;
 use std::fs::File;
 use tar::Archive;
 use flate2::read::GzDecoder;
+use tempfile::tempdir;
+use std::os::unix::fs::symlink as unix_symlink;
+use tokio::process::Command;
+use axum::http::header;
+use tokio::fs;
+use std::path::Path as StdPath;
 
 pub fn api_router() -> Router<crate::AppState> {
     Router::new()
@@ -51,6 +57,190 @@ pub fn api_router() -> Router<crate::AppState> {
         .route("/machines/{id}/workflow-progress", get(get_workflow_progress))
         .route("/heartbeat", get(heartbeat))
         .route("/install/status", get(get_install_status))
+}
+
+// Content constants
+const HOSTS_CONTENT: &str = r#"127.0.0.1 localhost
+::1 localhost ip6-localhost ip6-loopback
+fe00::0 ip6-localnet
+ff00::0 ip6-mcastprefix
+ff02::1 ip6-allnodes
+ff02::2 ip6-allrouters
+"#;
+
+const HOSTNAME_CONTENT: &str = "localhost";
+const APK_ARCH_CONTENT: &str = "x86_64"; // Assuming amd64/x86_64 for now
+const LBU_LIST_CONTENT: &str = "+usr/local";
+const REPOSITORIES_CONTENT: &str = r#"https://dl-cdn.alpinelinux.org/alpine/v3.21/main
+https://dl-cdn.alpinelinux.org/alpine/v3.21/community
+"#;
+const WORLD_CONTENT: &str = r#"alpine-baselayout
+alpine-conf
+alpine-keys
+alpine-release
+apk-tools
+busybox
+libc-utils
+kexec-tools
+libgcc
+wget
+"#;
+
+/// Generates the localhost.apkovl.tar.gz file needed by the Dragonfly Agent iPXE script.
+pub async fn generate_agent_apkovl(
+    target_apkovl_path: &StdPath,
+    base_url: &str,
+    agent_binary_url: &str,
+) -> Result<(), dragonfly_common::Error> {
+    info!("Generating agent APK overlay at: {:?}", target_apkovl_path);
+    
+    // 1. Create a temporary directory
+    let temp_dir = tempdir()
+        .map_err(|e| dragonfly_common::Error::Internal(format!("Failed to create temp directory for apkovl: {}", e)))?;
+    let temp_path = temp_dir.path();
+    info!("Building apkovl structure in: {:?}", temp_path);
+    
+    // 2. Create directory structure
+    fs::create_dir_all(temp_path.join("etc/local.d")).await
+        .map_err(|e| dragonfly_common::Error::Internal(format!("Failed to create dir etc/local.d: {}", e)))?;
+    fs::create_dir_all(temp_path.join("etc/apk/protected_paths.d")).await
+        .map_err(|e| dragonfly_common::Error::Internal(format!("Failed to create dir etc/apk/protected_paths.d: {}", e)))?;
+    fs::create_dir_all(temp_path.join("etc/runlevels/default")).await
+        .map_err(|e| dragonfly_common::Error::Internal(format!("Failed to create dir etc/runlevels/default: {}", e)))?;
+    fs::create_dir_all(temp_path.join("usr/local/bin")).await
+        .map_err(|e| dragonfly_common::Error::Internal(format!("Failed to create dir usr/local/bin: {}", e)))?;
+    
+    // 3. Write static files
+    fs::write(temp_path.join("etc/hosts"), HOSTS_CONTENT).await
+        .map_err(|e| dragonfly_common::Error::Internal(format!("Failed to write etc/hosts: {}", e)))?;
+    fs::write(temp_path.join("etc/hostname"), HOSTNAME_CONTENT).await
+        .map_err(|e| dragonfly_common::Error::Internal(format!("Failed to write etc/hostname: {}", e)))?;
+    fs::write(temp_path.join("etc/apk/arch"), APK_ARCH_CONTENT).await
+        .map_err(|e| dragonfly_common::Error::Internal(format!("Failed to write etc/apk/arch: {}", e)))?;
+    fs::write(temp_path.join("etc/apk/protected_paths.d/lbu.list"), LBU_LIST_CONTENT).await
+        .map_err(|e| dragonfly_common::Error::Internal(format!("Failed to write lbu.list: {}", e)))?;
+    fs::write(temp_path.join("etc/apk/repositories"), REPOSITORIES_CONTENT).await
+        .map_err(|e| dragonfly_common::Error::Internal(format!("Failed to write repositories: {}", e)))?;
+    fs::write(temp_path.join("etc/apk/world"), WORLD_CONTENT).await
+        .map_err(|e| dragonfly_common::Error::Internal(format!("Failed to write world: {}", e)))?;
+    
+    // Create empty mtab needed by Alpine init
+    fs::write(temp_path.join("etc/mtab"), "").await
+        .map_err(|e| dragonfly_common::Error::Internal(format!("Failed to write etc/mtab: {}", e)))?;
+    
+    // Create empty .default_boot_services
+    fs::write(temp_path.join("etc/.default_boot_services"), "").await
+        .map_err(|e| dragonfly_common::Error::Internal(format!("Failed to write .default_boot_services: {}", e)))?;
+    
+    // 4. Write dynamic dragonfly-agent.start script
+    let start_script_path = temp_path.join("etc/local.d/dragonfly-agent.start");
+    
+    // Create script content with explicit newline characters
+    let script_content = format!(
+        "#!/bin/sh\n\
+        # Start dragonfly-agent\n\
+        /usr/local/bin/dragonfly-agent --server {} --setup\n\
+        exit 0\n", 
+        base_url
+    );
+    
+    // Write the file
+    fs::write(&start_script_path, script_content).await
+        .map_err(|e| dragonfly_common::Error::Internal(format!("Failed to write start script: {}", e)))?;
+    
+    // Make it executable
+    set_executable_permission(&start_script_path).await?;
+    
+    // 5. Create the symlink (Unchanged, uses std::os::unix)
+    let link_target = "/etc/init.d/local";
+    let link_path = temp_path.join("etc/runlevels/default/local");
+    unix_symlink(link_target, &link_path)
+        .map_err(|e| dragonfly_common::Error::Internal(
+            format!("Failed to create symlink {:?} -> {}: {}", link_path, link_target, e)
+        ))?;
+    
+    // 6. Download the agent binary
+    let agent_binary_path = temp_path.join("usr/local/bin/dragonfly-agent");
+    download_file(agent_binary_url, &agent_binary_path).await?;
+    
+    // Make it executable
+    set_executable_permission(&agent_binary_path).await?;
+    
+    // 7. Create the tar.gz archive
+    info!("Creating tarball: {:?}", target_apkovl_path);
+    let output = Command::new("tar")
+        .arg("-czf")
+        .arg(target_apkovl_path)
+        .arg("-C")
+        .arg(temp_path)
+        .arg(".")
+        .output()
+        .await
+        .map_err(|e| dragonfly_common::Error::Internal(format!("Failed to execute tar command: {}", e)))?;
+    
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(dragonfly_common::Error::Internal(format!("Tar command failed: {}", stderr)));
+    }
+    
+    info!("Successfully generated apkovl: {:?}", target_apkovl_path);
+    Ok(())
+}
+
+// Helper function to set executable permission (Unix specific)
+async fn set_executable_permission(path: &StdPath) -> Result<(), dragonfly_common::Error> {
+    use std::os::unix::fs::PermissionsExt;
+    
+    let metadata = fs::metadata(path).await
+        .map_err(|e| dragonfly_common::Error::Internal(
+            format!("Failed to get metadata for {:?}: {}", path, e)
+        ))?;
+    
+    let mut perms = metadata.permissions();
+    perms.set_mode(0o755); // rwxr-xr-x
+    
+    fs::set_permissions(path, perms).await
+        .map_err(|e| dragonfly_common::Error::Internal(
+            format!("Failed to set executable permission on {:?}: {}", path, e)
+        ))
+}
+
+// Helper function to download a file from a URL
+async fn download_file(url: &str, target_path: &StdPath) -> Result<(), dragonfly_common::Error> {
+    info!("Downloading {} to {:?}", url, target_path);
+    
+    // Create a reqwest client
+    let client = reqwest::Client::new();
+    
+    // Send GET request to download the file
+    let response = client.get(url)
+        .send()
+        .await
+        .map_err(|e| dragonfly_common::Error::Internal(
+            format!("Failed to download file from {}: {}", url, e)
+        ))?;
+    
+    // Check if the request was successful
+    if !response.status().is_success() {
+        return Err(dragonfly_common::Error::Internal(
+            format!("Failed to download file from {}: HTTP status {}", url, response.status())
+        ));
+    }
+    
+    // Get the file content as bytes
+    let bytes = response.bytes().await
+        .map_err(|e| dragonfly_common::Error::Internal(
+            format!("Failed to read response body from {}: {}", url, e)
+        ))?;
+    
+    // Create the file and write the content
+    fs::write(target_path, bytes).await
+        .map_err(|e| dragonfly_common::Error::Internal(
+            format!("Failed to write downloaded file to {:?}: {}", target_path, e)
+        ))?;
+    
+    info!("Successfully downloaded {} to {:?}", url, target_path);
+    Ok(())
 }
 
 #[axum::debug_handler]

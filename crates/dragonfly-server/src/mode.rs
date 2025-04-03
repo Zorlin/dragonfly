@@ -16,6 +16,8 @@ use tokio::fs;
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::Row;
 use serde_yaml;
+use std::path::Path as StdPath;
+use url;
 
 // The different deployment modes
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1015,8 +1017,44 @@ pub async fn configure_flight_mode() -> Result<()> {
         }
     };
     
+    // Add the agent builder task
+    let agent_builder_fut = async {
+        info!("Building Dragonfly Agent APK overlay...");
+        
+        // Create the artifacts directory if it doesn't exist
+        let artifacts_dir = StdPath::new("/var/lib/dragonfly/artifacts");
+        if !artifacts_dir.exists() {
+            match fs::create_dir_all(artifacts_dir).await {
+                Ok(_) => debug!("Created artifacts directory: {:?}", artifacts_dir),
+                Err(e) => warn!("Failed to create artifacts directory: {}", e)
+            }
+        }
+        
+        // Set the target path for the APK overlay
+        let target_apkovl_path = artifacts_dir.join("localhost.apkovl.tar.gz");
+        
+        // Determine the base URL for the agent to connect back to
+        let base_url = format!("http://{}:3000", get_loadbalancer_ip().await?);
+        
+        // URL for the agent binary
+        let agent_binary_url = "https://github.com/Zorlin/dragonfly/releases/latest/download/dragonfly-agent-musl";
+        
+        // Generate the APK overlay
+        match crate::api::generate_agent_apkovl(&target_apkovl_path, &base_url, agent_binary_url).await {
+            Ok(_) => {
+                info!("Successfully built Dragonfly Agent APK overlay at {:?}", target_apkovl_path);
+                Ok(())
+            },
+            Err(e) => {
+                warn!("Failed to build Dragonfly Agent APK overlay: {}. PXE booting might not work correctly.", e);
+                // This is non-fatal for Flight mode configuration
+                Ok(())
+            }
+        }
+    };
+    
     // Run all prerequisite tasks in parallel
-    match tokio::try_join!(hooks_download_fut, k8s_check_fut, webui_check_fut) {
+    match tokio::try_join!(hooks_download_fut, k8s_check_fut, webui_check_fut, agent_builder_fut) {
         Ok(_) => {
             // All prerequisite checks passed (or were non-fatal)
             info!("Prerequisite checks complete, proceeding with Tinkerbell stack update...");
@@ -1856,4 +1894,46 @@ async fn check_webui_service_status() -> anyhow::Result<bool> {
         Ok(None) => Ok(false),   // No address means not ready
         Err(e) => Err(anyhow!("Error checking WebUI service: {}", e))
     }
+}
+
+// Helper function to get the load balancer IP for connections
+async fn get_loadbalancer_ip() -> Result<String> {
+    // Try to get the load balancer IP from the service
+    match get_webui_address().await {
+        Ok(Some(url)) => {
+            // Extract host from URL (remove http:// prefix and port)
+            if let Ok(parsed_url) = url::Url::parse(&url) {
+                if let Some(host) = parsed_url.host_str() {
+                    return Ok(host.to_string());
+                }
+            }
+        }
+        _ => {
+            // Failed to get URL or URL was None
+            debug!("Could not determine load balancer IP from web UI service");
+        }
+    }
+    
+    // If we can't get the load balancer IP, try to get the node IP
+    let kubectl_output = Command::new("kubectl")
+        .args(["get", "nodes", "-o", "jsonpath='{.items[0].status.addresses[?(@.type==\"InternalIP\")].address}'"])
+        .output();
+        
+    if let Ok(output) = kubectl_output {
+        if output.status.success() {
+            let node_ip = String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .trim_matches('\'')
+                .to_string();
+                
+            if !node_ip.is_empty() {
+                debug!("Using node IP as load balancer address: {}", node_ip);
+                return Ok(node_ip);
+            }
+        }
+    }
+    
+    // Fallback to localhost
+    debug!("Using localhost as load balancer address");
+    Ok("localhost".to_string())
 } 

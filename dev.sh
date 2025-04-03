@@ -18,7 +18,7 @@ elif [ "$1" == "cleanserver" ]; then
     KUBECONFIG=k3s.yaml kubectl scale statefulset dragonfly --replicas=0 -n tink
 
     # Remove the existing server data
-    sudo chown -R wings:wings /var/lib/dragonfly
+    sudo chown -R $(whoami):$(whoami) /var/lib/dragonfly
     rm -rf /var/lib/dragonfly/*
 
     # Spin up the web ui
