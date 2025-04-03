@@ -15,6 +15,7 @@ use crate::status::{check_kubernetes_connectivity, check_dragonfly_statefulset_s
 use tokio::fs;
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::Row;
+use serde_yaml;
 
 // The different deployment modes
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -962,78 +963,54 @@ pub async fn start_handoff_listener(mut shutdown_rx: watch::Receiver<()>) -> Res
 pub async fn configure_flight_mode() -> Result<()> {
     info!("Configuring system for Flight mode");
     
-    // First, check if we're already in Flight mode to avoid unnecessary work
-    if let Ok(Some(current_mode)) = get_current_mode().await {
-        if current_mode == DeploymentMode::Flight {
-            info!("System is already configured for Flight mode");
-            
-            // Still check if HookOS artifacts are present, but only download if missing
-            // This runs in background to not block the server startup
-            let _ = tokio::spawn(async {
-                info!("Checking HookOS artifacts in background...");
-                if !crate::api::check_hookos_artifacts().await {
-                    info!("HookOS artifacts not found. Downloading HookOS artifacts...");
-                    match crate::api::download_hookos_artifacts("v0.10.0").await {
-                        Ok(_) => info!("HookOS artifacts downloaded successfully"),
-                        Err(e) => warn!("Failed to download HookOS artifacts: {}", e),
-                    }
-                } else {
-                    info!("HookOS artifacts already exist");
-                }
-            });
-            
-            return Ok(());
-        }
-    }
+    // Always attempt the configuration steps for Flight mode
+    // The checks inside these functions (like artifact download) will handle idempotency.
     
-    // Execute multiple tasks in parallel
+    // Execute multiple prerequisite tasks in parallel
     let hooks_download_fut = async {
-        info!("Checking HookOS artifacts...");
-        let need_hookos_download = !crate::api::check_hookos_artifacts().await;
-        if need_hookos_download {
-            info!("HookOS artifacts not found. Downloading HookOS artifacts...");
-            match crate::api::download_hookos_artifacts("v0.10.0").await {
-                Ok(_) => info!("HookOS artifacts downloaded successfully"),
-                Err(e) => {
-                    warn!("Failed to download HookOS artifacts: {}", e);
-                    // Non-fatal, continue anyway
-                }
+        info!("Checking/Downloading HookOS artifacts...");
+        // The download function itself should be idempotent or check existence
+        match crate::api::download_hookos_artifacts("v0.10.0").await {
+            Ok(_) => info!("HookOS artifacts check/download complete."),
+            Err(e) => {
+                warn!("Failed to download/verify HookOS artifacts: {}", e);
+                // Non-fatal for configuration, might affect PXE booting later
             }
-        } else {
-            info!("HookOS artifacts already exist");
         }
         Ok::<(), anyhow::Error>(()) // Return Result for try_join
     };
     
     let k8s_check_fut = async {
-        // Check the Kubernetes API is available
+        info!("Checking Kubernetes connectivity...");
         match check_kubernetes_connectivity().await {
             Ok(()) => {
                 info!("Kubernetes connectivity confirmed.");
                 Ok(())
             },
             Err(e) => {
-                error!("Error checking Kubernetes connectivity: {}. Cannot enter Flight mode.", e);
-                // Convert color_eyre error to anyhow
+                error!("Error checking Kubernetes connectivity: {}. Cannot properly configure Flight mode.", e);
                 Err(anyhow!("Error checking Kubernetes connectivity: {}", e))
             }
         }
     };
     
+    // Add WebUI check future
     let webui_check_fut = async {
-        // Check if the WebUI service is ready
+        info!("Checking WebUI service status...");
         match check_webui_service_status().await {
             Ok(true) => {
                 info!("WebUI service status confirmed as ready.");
                 Ok(())
             },
             Ok(false) => {
-                error!("WebUI service is not ready. Cannot enter Flight mode.");
-                bail!("WebUI service is not ready")
+                warn!("WebUI service is not ready, but continuing with Flight mode configuration.");
+                // Return Ok since this is not fatal for the configuration
+                Ok(())
             },
             Err(e) => {
-                error!("Error checking WebUI service status: {}. Cannot enter Flight mode.", e);
-                Err(anyhow!("Error checking WebUI service status: {}", e))
+                warn!("Error checking WebUI service status: {}. Continuing with Flight mode configuration.", e);
+                // Return Ok since this is not fatal for the configuration
+                Ok(())
             }
         }
     };
@@ -1041,31 +1018,32 @@ pub async fn configure_flight_mode() -> Result<()> {
     // Run all prerequisite tasks in parallel
     match tokio::try_join!(hooks_download_fut, k8s_check_fut, webui_check_fut) {
         Ok(_) => {
-            // All prerequisite checks passed, continue with Tinkerbell stack update
-            info!("All prerequisite checks passed, updating Tinkerbell stack...");
+            // All prerequisite checks passed (or were non-fatal)
+            info!("Prerequisite checks complete, proceeding with Tinkerbell stack update...");
             
-            // Update the Tinkerbell stack
-            enter_flight_mode().await?;
-            
-            // Save the mode (if it's not already saved by the UI handler)
-            match get_current_mode().await {
-                Ok(Some(DeploymentMode::Flight)) => {
-                    info!("Flight mode already saved to database, skipping save_mode step");
-                },
-                _ => {
-                    info!("Saving Flight mode to database");
-                    save_mode(DeploymentMode::Flight, false).await?;
-                }
+            // Update the Tinkerbell stack (this should be idempotent too)
+            match enter_flight_mode().await {
+                 Ok(_) => info!("Successfully configured Flight mode (Tinkerbell stack updated)."),
+                 Err(e) => {
+                     error!("Failed to configure Tinkerbell stack for Flight mode: {}", e);
+                     // Return the error as configuration failed
+                     return Err(e);
+                 }
             }
-            
-            info!("System configured for Flight mode. 🐉");
-            Ok(())
         },
         Err(e) => {
-            error!("Failed to configure Flight mode: {}", e);
-            Err(e)
+            // One of the critical checks failed
+            error!("Critical prerequisite check failed: {}. Cannot complete Flight mode configuration.", e);
+            // Return the error
+            return Err(e);
         }
     }
+    
+    // Save the mode *after* successful configuration
+    save_mode(DeploymentMode::Flight, false).await?; // Assuming not already elevated
+    
+    info!("System successfully configured for Flight mode.");
+    Ok(())
 }
 
 // Enter Flight Mode
@@ -1093,101 +1071,166 @@ pub async fn enter_flight_mode() -> Result<()> {
         }
     }
 
-    // Activate Smee's DHCP service in Flight mode using
-    // Check if the Tinkerbell stack is already installed
-    let release_exists = {
-        let release_check = Command::new("helm")
-            .args(["list", "-n", "tink", "--filter", "tink-stack", "--short"])
-            .output()?;
+    // --- Check current Helm values for Smee DHCP --- 
+    info!("Checking current Helm values for tink-stack...");
+    let helm_get_values_output = Command::new("helm")
+        .args(["get", "values", "tink-stack", "-n", "tink", "-o", "yaml"])
+        .output();
+        
+    let needs_upgrade = match helm_get_values_output {
+        Ok(output) if output.status.success() => {
+            let values_yaml = String::from_utf8_lossy(&output.stdout);
+            debug!("Current Helm values:\n{}", values_yaml);
             
-        release_check.status.success() && 
-        !String::from_utf8_lossy(&release_check.stdout).trim().is_empty()
-    };
-    
-    // Log whether we're installing or upgrading
-    if release_exists {
-        info!("Tinkerbell stack already exists, will upgrade");
-    } else {
-        return Err(anyhow!("Tinkerbell stack not found, failed to activate Flight mode"));
-    }
-
-    // --- Clone the GitHub repository for the Helm chart ---
-    info!("Fetching Dragonfly Helm charts from GitHub...");
-    
-    // Create a temporary directory for the repo
-    let repo_dir = std::env::temp_dir().join("dragonfly-charts");
-    
-    // Remove the directory if it already exists
-    if repo_dir.exists() {
-        fs::remove_dir_all(&repo_dir).await
-            .with_context(|| format!("Failed to clean up previous charts directory: {:?}", repo_dir))?;
-    }
-    
-    // Clone the repository
-    let clone_cmd = format!(
-        "git clone --depth 1 https://github.com/Zorlin/dragonfly-charts.git {}",
-        repo_dir.display()
-    );
-    run_shell_command(&clone_cmd, "clone Dragonfly Helm charts")?;
-    
-    // Path to the chart
-    let chart_path = repo_dir.join("tinkerbell");
-    
-    // Create a separate path for the Helm upgrade command
-    let upgrade_chart_path = chart_path.join("stack");
-
-    // Check if the chart path exists
-    if !chart_path.exists() {
-        bail!("Helm chart not found in expected location: {:?}", chart_path);
-    }
-
-    // --- Build the Helm chart dependencies ---
-    info!("Building Helm chart dependencies...");
-    let dependency_build_cmd = format!(
-        "cd {} && helm dependency build stack/",
-        chart_path.display()
-    );
-    run_shell_command(&dependency_build_cmd, "build Helm chart dependencies")
-        .with_context(|| "Failed to build Helm chart dependencies")?;
-
-    // --- Run Helm Install/Upgrade with the local chart path ---
-    // helm upgrade tink-stack tink-stack/ -n tink --reuse-values --set="smee.dhcp.enabled=true"
-    let helm_args = [
-        "upgrade", "tink-stack",
-        upgrade_chart_path.to_str().ok_or_else(|| anyhow!("Chart path is not valid UTF-8"))?,
-        "--namespace", "tink",
-        "--wait",
-        "--timeout", "10m",
-        "--reuse-values",
-        "--set", "smee.dhcp.enabled=true"
-    ];
-
-    info!("Deploying Dragonfly Tinkerbell stack...");
-    run_command("helm", &helm_args, "install/upgrade Dragonfly Tinkerbell Helm chart")?;
-
-    // Verify the deployment
-    let deployment_check = Command::new("kubectl")
-        .args(["get", "pods", "-n", "tink", "--no-headers"])
-        .output()
-        .with_context(|| "Failed to check deployment status")?;
-    
-    if deployment_check.status.success() {
-        let pods_output = String::from_utf8_lossy(&deployment_check.stdout).trim().to_string();
-        if !pods_output.is_empty() && 
-           !pods_output.contains("Pending") && 
-           !pods_output.contains("Error") && 
-           !pods_output.contains("CrashLoopBackOff") {
-            info!("Dragonfly Tinkerbell stack is running properly");
-        } else {
-            warn!("Dragonfly Tinkerbell stack deployed but some pods may not be ready. Check with 'kubectl get pods -n tink'");
+            // Parse YAML to check smee.dhcp.enabled
+            match serde_yaml::from_str::<serde_yaml::Value>(&values_yaml) {
+                Ok(values) => {
+                    // Navigate the YAML structure
+                    let smee_dhcp_enabled = values
+                        .get("smee")
+                        .and_then(|smee| smee.get("dhcp"))
+                        .and_then(|dhcp| dhcp.get("enabled"))
+                        .and_then(|enabled| enabled.as_bool())
+                        .unwrap_or(true); // Default to true if not found (conservative)
+                        
+                    if smee_dhcp_enabled {
+                        info!("Smee DHCP is already enabled in Helm values. No upgrade needed.");
+                        false // No upgrade needed
+                    } else {
+                        info!("Smee DHCP is currently disabled. Helm upgrade required.");
+                        true // Upgrade needed
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to parse Helm values YAML: {}. Assuming upgrade is needed.", e);
+                    true // Assume upgrade needed if parsing fails
+                }
+            }
         }
+        Ok(output) => {
+             warn!("'helm get values' command failed: {}. Assuming upgrade is needed.", 
+                   String::from_utf8_lossy(&output.stderr));
+            true // Assume upgrade needed if command fails
+        }
+        Err(e) => {
+            warn!("Failed to execute 'helm get values': {}. Assuming upgrade is needed.", e);
+            true // Assume upgrade needed if execution fails
+        }
+    };
+
+    // Only proceed with upgrade if needed
+    if needs_upgrade {
+        info!("Proceeding with Helm upgrade to enable Smee DHCP...");
+        
+        // --- Activate Smee's DHCP service in Flight mode using Helm --- 
+        // Check if the Tinkerbell stack release actually exists (redundant but safe)
+        let release_exists = {
+            let release_check = Command::new("helm")
+                .args(["list", "-n", "tink", "--filter", "tink-stack", "--short"])
+                .output()
+                .with_context(|| "Failed to check deployment status after upgrade")?;
+                
+            release_check.status.success() && 
+            !String::from_utf8_lossy(&release_check.stdout).trim().is_empty()
+        };
+        
+        if !release_exists {
+            // This shouldn't happen if get values succeeded, but check anyway
+             return Err(anyhow!("Tinkerbell stack release 'tink-stack' not found. Cannot upgrade."));
+        }
+        
+        // --- Clone the GitHub repository for the Helm chart --- 
+        info!("Fetching Dragonfly Helm charts from GitHub for upgrade...");
+        let repo_dir = std::env::temp_dir().join("dragonfly-charts");
+        if repo_dir.exists() {
+            fs::remove_dir_all(&repo_dir).await.ok(); // Clean up previous clone if necessary
+        }
+        let clone_cmd = format!("git clone --depth 1 https://github.com/Zorlin/dragonfly-charts.git {}", repo_dir.display());
+        run_shell_command(&clone_cmd, "clone Dragonfly Helm charts")?;
+        let chart_path = repo_dir.join("tinkerbell");
+        let upgrade_chart_path = chart_path.join("stack");
+        if !upgrade_chart_path.exists() {
+            bail!("Helm chart stack directory not found in expected location: {:?}", upgrade_chart_path);
+        }
+
+        // --- Build the Helm chart dependencies --- 
+        info!("Building Helm chart dependencies...");
+        let dependency_build_cmd = format!("cd {} && helm dependency build stack/", chart_path.display());
+        run_shell_command(&dependency_build_cmd, "build Helm chart dependencies")?;
+
+        // --- Run Helm Upgrade --- 
+        let helm_args = [
+            "upgrade", "tink-stack",
+            upgrade_chart_path.to_str().ok_or_else(|| anyhow!("Chart path is not valid UTF-8"))?,
+            "--namespace", "tink",
+            "--wait",
+            "--timeout", "10m",
+            "--reuse-values",
+            "--set", "smee.dhcp.enabled=true"
+        ];
+
+        info!("Upgrading Dragonfly Tinkerbell stack to enable Smee DHCP...");
+        match run_command("helm", &helm_args, "upgrade Dragonfly Tinkerbell Helm chart") {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                debug!("Helm upgrade output: {}", stdout);
+                info!("Helm upgrade completed successfully");
+            },
+            Err(e) => {
+                error!("Helm upgrade failed: {}", e);
+                
+                // Try to get more diagnostic information
+                let helm_list = Command::new("helm")
+                    .args(["list", "-n", "tink", "-a"])
+                    .output();
+                
+                if let Ok(list_output) = helm_list {
+                    if list_output.status.success() {
+                        let list_stdout = String::from_utf8_lossy(&list_output.stdout);
+                        error!("Current Helm releases in tink namespace:\n{}", list_stdout);
+                    }
+                }
+                
+                let pod_list = Command::new("kubectl")
+                    .args(["get", "pods", "-n", "tink", "-o", "wide"])
+                    .output();
+                
+                if let Ok(pod_output) = pod_list {
+                    if pod_output.status.success() {
+                        let pod_stdout = String::from_utf8_lossy(&pod_output.stdout);
+                        error!("Current pods in tink namespace:\n{}", pod_stdout);
+                    }
+                }
+                
+                // Return the original error with context
+                return Err(anyhow!("Failed to upgrade Tinkerbell stack: {}. Check logs for diagnostics.", e));
+            }
+        }
+
+        // --- Verify the deployment --- 
+        let deployment_check = Command::new("kubectl")
+            .args(["get", "pods", "-n", "tink", "--no-headers"])
+            .output()
+            .with_context(|| "Failed to check deployment status after upgrade")?;
+        
+        if deployment_check.status.success() {
+            let pods_output = String::from_utf8_lossy(&deployment_check.stdout).trim().to_string();
+            if !pods_output.is_empty() && !pods_output.contains("Pending") && !pods_output.contains("Error") && !pods_output.contains("CrashLoopBackOff") {
+                info!("Dragonfly Tinkerbell stack appears healthy after upgrade.");
+            } else {
+                warn!("Dragonfly Tinkerbell stack upgraded, but some pods may not be ready. Check with 'kubectl get pods -n tink'");
+            }
+        }
+
+        // --- Clean up --- 
+        debug!("Cleaning up temporary chart repository...");
+        let _ = fs::remove_dir_all(&repo_dir).await; // Best effort cleanup
+
+        info!("Helm upgrade completed successfully.");
+    } else {
+        info!("Skipping Helm upgrade as Smee DHCP is already enabled.");
     }
 
-    // Clean up - remove the cloned repository
-    debug!("Cleaning up temporary chart repository...");
-    let _ = fs::remove_dir_all(&repo_dir).await; // Best effort cleanup, don't fail if it doesn't work
-
-    info!("Dragonfly Tinkerbell stack {} successfully", if release_exists { "upgraded" } else { "installed" });
     Ok(())
 }
 
