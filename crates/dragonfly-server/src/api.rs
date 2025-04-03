@@ -1757,7 +1757,7 @@ pub async fn serve_ipxe_artifact(headers: HeaderMap, Path(requested_path): Path<
     const ARTIFACT_DIR_ENV_VAR: &str = "DRAGONFLY_IPXE_ARTIFACT_DIR";
     const ALLOWED_IPXE_SCRIPTS: &[&str] = &["hookos", "dragonfly-agent"]; // Define allowlist
     const AGENT_APKOVL_PATH: &str = "dragonfly-agent/localhost.apkovl.tar.gz";
-    const AGENT_BINARY_URL: &str = "https://github.com/Zorlin/dragonfly/raw/refs/heads/main/dragonfly-agent"; // TODO: Make configurable
+    const AGENT_BINARY_URL: &str = "https://github.com/Zorlin/dragonfly/raw/refs/heads/main/dragonfly-agent-musl"; // TODO: Make configurable
     
     // Get the base directory from env var or use default
     let base_dir = env::var(ARTIFACT_DIR_ENV_VAR)
