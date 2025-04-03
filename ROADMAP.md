@@ -101,3 +101,15 @@ Let users type:
 dragonfly --demo
 
 to re-enter it later — great for testing or CI screenshots.
+
+# Memtest mode
+Action -> Run utility -> Run memtest and report results
+
+# Disk test mode
+Actions -> Run utility -> Run disk test and report results
+
+# Network test mode
+Actions -> Run utility -> Run network test and report results
+
+# Stress test mode
+Actions -> Run utility -> Run stress test and report results

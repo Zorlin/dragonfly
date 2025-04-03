@@ -100,11 +100,11 @@ pub async fn get_current_mode() -> Result<Option<DeploymentMode>> {
     // Fall back to checking the mode file if database check failed
     if Path::new(MODE_FILE).exists() {
         debug!("Checking mode file for deployment mode");
-        let content = tokio::fs::read_to_string(MODE_FILE)
-            .await
-            .context("Failed to read mode file")?;
-        
-        let mode = DeploymentMode::from_str(content.trim());
+    let content = tokio::fs::read_to_string(MODE_FILE)
+        .await
+        .context("Failed to read mode file")?;
+    
+    let mode = DeploymentMode::from_str(content.trim());
         return Ok(mode);
     }
     
@@ -202,7 +202,7 @@ pub async fn save_mode(mode: DeploymentMode, already_elevated: bool) -> Result<(
 
     // Pool is closed when it goes out of scope
     pool.close().await;
-
+    
     Ok(())
 }
 
@@ -793,21 +793,21 @@ pub async fn configure_simple_mode() -> Result<()> {
     };
     
     // Create log directory before setting up services if not already handled by elevated commands
-    let log_dir = "/var/log/dragonfly";
-    if !std::path::Path::new(log_dir).exists() {
-        // Create directory with appropriate permissions
-        if let Err(e) = tokio::fs::create_dir_all(log_dir).await {
-            warn!("Could not create log directory {}: {}", log_dir, e);
-            // Try with sudo
-            let _ = Command::new("sudo")
-                .args(["mkdir", "-p", log_dir])
-                .output();
-            let _ = Command::new("sudo")
-                .args(["chmod", "755", log_dir])
-                .output();
+        let log_dir = "/var/log/dragonfly";
+        if !std::path::Path::new(log_dir).exists() {
+            // Create directory with appropriate permissions
+            if let Err(e) = tokio::fs::create_dir_all(log_dir).await {
+                warn!("Could not create log directory {}: {}", log_dir, e);
+                // Try with sudo
+                let _ = Command::new("sudo")
+                    .args(["mkdir", "-p", log_dir])
+                    .output();
+                let _ = Command::new("sudo")
+                    .args(["chmod", "755", log_dir])
+                    .output();
+            }
         }
-    }
-    info!("Log directory ready at {}", log_dir);
+        info!("Log directory ready at {}", log_dir);
     
     // Check if we're on macOS
     let is_macos = std::env::consts::OS == "macos" || std::env::consts::OS == "darwin";
@@ -881,7 +881,7 @@ pub async fn configure_simple_mode() -> Result<()> {
     }
     
     // Save the mode if we haven't already done it with elevated privileges
-    save_mode(DeploymentMode::Simple, false).await?;
+        save_mode(DeploymentMode::Simple, false).await?;
     
     let is_macos = std::env::consts::OS == "macos" || std::env::consts::OS == "darwin";
     
@@ -1037,7 +1037,7 @@ pub async fn configure_flight_mode() -> Result<()> {
         let base_url = format!("http://{}:3000", get_loadbalancer_ip().await?);
         
         // URL for the agent binary
-        let agent_binary_url = "https://github.com/Zorlin/dragonfly/releases/latest/download/dragonfly-agent-musl";
+        let agent_binary_url = "https://github.com/Zorlin/dragonfly/raw/refs/heads/main/dragonfly-agent-musl";
         
         // Generate the APK overlay
         match crate::api::generate_agent_apkovl(&target_apkovl_path, &base_url, agent_binary_url).await {
@@ -1053,26 +1053,31 @@ pub async fn configure_flight_mode() -> Result<()> {
         }
     };
     
-    // Run all prerequisite tasks in parallel
-    match tokio::try_join!(hooks_download_fut, k8s_check_fut, webui_check_fut, agent_builder_fut) {
+    // Add a future for updating the Tinkerbell stack itself
+    let tinkerbell_update_fut = async {
+        info!("Starting Tinkerbell stack update concurrently...");
+        enter_flight_mode().await.map_err(|e| {
+            error!("Failed during Tinkerbell stack update: {}", e);
+            e // Propagate the error
+        })
+    };
+
+    // Run all prerequisite tasks AND the Tinkerbell stack update in parallel
+    match tokio::try_join!(
+        hooks_download_fut,
+        k8s_check_fut,
+        webui_check_fut,
+        agent_builder_fut,
+        tinkerbell_update_fut // Add the new future here
+    ) {
         Ok(_) => {
-            // All prerequisite checks passed (or were non-fatal)
-            info!("Prerequisite checks complete, proceeding with Tinkerbell stack update...");
-            
-            // Update the Tinkerbell stack (this should be idempotent too)
-            match enter_flight_mode().await {
-                 Ok(_) => info!("Successfully configured Flight mode (Tinkerbell stack updated)."),
-                 Err(e) => {
-                     error!("Failed to configure Tinkerbell stack for Flight mode: {}", e);
-                     // Return the error as configuration failed
-                     return Err(e);
-                 }
-            }
+            // All prerequisite checks and the Tinkerbell update completed successfully (or were non-fatal)
+            info!("Successfully configured Flight mode (all prerequisite tasks and Tinkerbell stack update complete).");
+            // Any further actions after successful configuration can go here
         },
         Err(e) => {
-            // One of the critical checks failed
-            error!("Critical prerequisite check failed: {}. Cannot complete Flight mode configuration.", e);
-            // Return the error
+            error!("Failed during Flight mode configuration: {}", e);
+            // Return the specific error that caused the failure
             return Err(e);
         }
     }
@@ -1162,25 +1167,25 @@ pub async fn enter_flight_mode() -> Result<()> {
         
         // --- Activate Smee's DHCP service in Flight mode using Helm --- 
         // Check if the Tinkerbell stack release actually exists (redundant but safe)
-        let release_exists = {
-            let release_check = Command::new("helm")
-                .args(["list", "-n", "tink", "--filter", "tink-stack", "--short"])
+    let release_exists = {
+        let release_check = Command::new("helm")
+            .args(["list", "-n", "tink", "--filter", "tink-stack", "--short"])
                 .output()
                 .with_context(|| "Failed to check deployment status after upgrade")?;
-                
-            release_check.status.success() && 
-            !String::from_utf8_lossy(&release_check.stdout).trim().is_empty()
-        };
-        
+            
+        release_check.status.success() && 
+        !String::from_utf8_lossy(&release_check.stdout).trim().is_empty()
+    };
+    
         if !release_exists {
             // This shouldn't happen if get values succeeded, but check anyway
              return Err(anyhow!("Tinkerbell stack release 'tink-stack' not found. Cannot upgrade."));
-        }
-        
-        // --- Clone the GitHub repository for the Helm chart --- 
-        info!("Fetching Dragonfly Helm charts from GitHub for upgrade...");
-        let repo_dir = std::env::temp_dir().join("dragonfly-charts");
-        if repo_dir.exists() {
+    }
+
+    // --- Clone the GitHub repository for the Helm chart ---
+    info!("Fetching Dragonfly Helm charts from GitHub for upgrade...");
+    let repo_dir = std::env::temp_dir().join("dragonfly-charts");
+    if repo_dir.exists() {
             fs::remove_dir_all(&repo_dir).await.ok(); // Clean up previous clone if necessary
         }
         let clone_cmd = format!("git clone --depth 1 https://github.com/Zorlin/dragonfly-charts.git {}", repo_dir.display());
@@ -1189,21 +1194,21 @@ pub async fn enter_flight_mode() -> Result<()> {
         let upgrade_chart_path = chart_path.join("stack");
         if !upgrade_chart_path.exists() {
             bail!("Helm chart stack directory not found in expected location: {:?}", upgrade_chart_path);
-        }
+    }
 
-        // --- Build the Helm chart dependencies --- 
-        info!("Building Helm chart dependencies...");
+    // --- Build the Helm chart dependencies ---
+    info!("Building Helm chart dependencies...");
         let dependency_build_cmd = format!("cd {} && helm dependency build stack/", chart_path.display());
         run_shell_command(&dependency_build_cmd, "build Helm chart dependencies")?;
 
         // --- Run Helm Upgrade --- 
-        let helm_args = [
-            "upgrade", "tink-stack",
+    let helm_args = [
+        "upgrade", "tink-stack",
             upgrade_chart_path.to_str().ok_or_else(|| anyhow!("Chart path is not valid UTF-8"))?,
-            "--namespace", "tink",
-            "--wait",
-            "--timeout", "10m",
-            "--reuse-values",
+        "--namespace", "tink",
+        "--wait",
+        "--timeout", "10m",
+        "--reuse-values",
             "--set", "smee.dhcp.enabled=true"
         ];
 
@@ -1242,21 +1247,6 @@ pub async fn enter_flight_mode() -> Result<()> {
                 
                 // Return the original error with context
                 return Err(anyhow!("Failed to upgrade Tinkerbell stack: {}. Check logs for diagnostics.", e));
-            }
-        }
-
-        // --- Verify the deployment --- 
-        let deployment_check = Command::new("kubectl")
-            .args(["get", "pods", "-n", "tink", "--no-headers"])
-            .output()
-            .with_context(|| "Failed to check deployment status after upgrade")?;
-        
-        if deployment_check.status.success() {
-            let pods_output = String::from_utf8_lossy(&deployment_check.stdout).trim().to_string();
-            if !pods_output.is_empty() && !pods_output.contains("Pending") && !pods_output.contains("Error") && !pods_output.contains("CrashLoopBackOff") {
-                info!("Dragonfly Tinkerbell stack appears healthy after upgrade.");
-            } else {
-                warn!("Dragonfly Tinkerbell stack upgraded, but some pods may not be ready. Check with 'kubectl get pods -n tink'");
             }
         }
 

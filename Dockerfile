@@ -34,6 +34,9 @@ COPY --from=builder /app/crates/dragonfly-server/static /opt/dragonfly/static
 # Copy templates to /opt/dragonfly/
 COPY --from=builder /app/crates/dragonfly-server/templates /opt/dragonfly/templates
 
+# Install Helm
+RUN apt update && apt install -y curl git && curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+RUN rm -rf /var/lib/apt/lists/* && apt clean
 # Expose the port that the application will run on.
 EXPOSE 3000
 

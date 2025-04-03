@@ -1,8 +1,8 @@
 use color_eyre::eyre::{Result, eyre};
 use color_eyre::eyre::WrapErr;
-use kube::{Client, Api};
+use kube::{Client, Api, Error as KubeError};
 use k8s_openapi::api::apps::v1::StatefulSet;
-use k8s_openapi::api::core::v1::{Service, Namespace};
+use k8s_openapi::api::core::v1::{Service};
 use tracing::{debug, warn, info};
 
 const DRAGONFLY_NAMESPACE: &str = "tink";
@@ -11,17 +11,33 @@ const WEBUI_NAMESPACE: &str = "tink";
 const WEBUI_SERVICE: &str = "tink-stack";
 const WEBUI_EXTERNAL_PORT: i32 = 3000;
 
-/// Checks if the Kubernetes API server is reachable by attempting to list namespaces.
+/// Checks if the Kubernetes API server is reachable by attempting to get the 'dragonfly' service in the 'tink' namespace.
 pub async fn check_kubernetes_connectivity() -> Result<()> {
-    debug!("Attempting to connect to Kubernetes API server and list namespaces...");
-    let client = Client::try_default().await.wrap_err("Failed to create Kubernetes client. Is k3s running and KUBECONFIG configured?")?;
-    
-    // Attempt a basic API call to confirm connectivity
-    let namespaces: Api<Namespace> = Api::all(client);
-    let _ = namespaces.list(&Default::default()).await.wrap_err("Failed to list namespaces. Cluster might be unreachable or unresponsive.")?;
+    debug!("Attempting to connect to Kubernetes API server by checking for 'dragonfly' service in 'tink' namespace...");
+    let client = Client::try_default().await
+        .wrap_err("Failed to create Kubernetes client. Is k3s running and KUBECONFIG configured?")?;
 
-    debug!("Successfully connected to Kubernetes API server and listed namespaces.");
-    Ok(())
+    // Get handle for Services in the 'tink' namespace
+    let services: Api<Service> = Api::namespaced(client, "tink");
+
+    // Attempt to get the specific service
+    match services.get("dragonfly").await {
+        Ok(_) => {
+            // Service found, connection is definitely working
+            debug!("Successfully connected to Kubernetes API server and found 'dragonfly' service in 'tink' namespace.");
+            Ok(())
+        }
+        Err(KubeError::Api(ae)) if ae.code == 404 => {
+            // Service not found, but the API server responded, so connection is working
+            debug!("Successfully connected to Kubernetes API server (service 'dragonfly' not found in 'tink', but API responded).");
+            Ok(()) // Treat 404 as success for connectivity check
+        }
+        Err(e) => {
+            // Other errors (network, auth, server error) indicate a connectivity problem
+            debug!("Failed to get 'dragonfly' service: {}", e); // Log the actual KubeError
+            Err(e).wrap_err("Failed to query Kubernetes API server for 'dragonfly' service. Cluster might be unreachable, unresponsive, or permissions insufficient.")
+        }
+    }
 }
 
 /// Checks the status of the Dragonfly StatefulSet.

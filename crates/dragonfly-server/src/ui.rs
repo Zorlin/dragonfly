@@ -382,8 +382,14 @@ pub async fn index(
         let current_mode = mode::get_current_mode().await.unwrap_or(None);
         if current_mode.is_none() {
             // Case B.2: Installed, no mode selected -> Show Welcome Screen
-            info!("Installed, no mode selected, redirecting to /welcome");
-            return Redirect::to("/welcome").into_response();
+            // BUT ONLY if not in installation server mode
+            if !app_state.is_installation_server {
+                info!("Installed, no mode selected, redirecting to /welcome");
+                return Redirect::to("/welcome").into_response();
+            } else {
+                // We're in installation server mode, so we want to show the installation UI
+                info!("Rendering installation UI");
+            }
         } else {
             // Case B.1: Installed, mode selected -> Proceed to normal UI (Dashboard)
             info!("Installed, mode selected, rendering normal dashboard");
@@ -425,7 +431,7 @@ pub async fn index(
     }
 
     // --- Continue with Dashboard/Demo Rendering --- 
-    let installation_in_progress = std::env::var("DRAGONFLY_INSTALL_SERVER_MODE").is_ok();
+    let installation_in_progress = std::env::var("DRAGONFLY_INSTALL_SERVER_MODE").is_ok() || app_state.is_installation_server;
     let mut initial_install_message = String::new();
     let mut initial_animation_class = String::new();
 

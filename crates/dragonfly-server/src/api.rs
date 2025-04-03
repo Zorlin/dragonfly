@@ -34,6 +34,7 @@ use tokio::process::Command;
 use axum::http::header;
 use tokio::fs;
 use std::path::Path as StdPath;
+use std::path::PathBuf;
 
 pub fn api_router() -> Router<crate::AppState> {
     Router::new()
@@ -1417,15 +1418,331 @@ async fn sse_events(
     )
 }
 
-// Make stub functions public
-// Stub for serving iPXE artifacts
-pub async fn serve_ipxe_artifact(Path(path): Path<String>) -> Response {
-    info!("Request to serve iPXE artifact: {}", path);
-    // TODO: Implement logic to serve the actual iPXE files (e.g., hookos.ipxe, dragonfly-agent.ipxe)
-    // This might involve reading files from a specific directory.
-    let content = format!("#!ipxe\\n# Placeholder for {}", path);
-    (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/plain")], content).into_response()
+async fn generate_ipxe_script(script_name: &str) -> Result<String> {
+    info!("Generating IPXE script: {}", script_name);
+ 
+    match script_name {
+        "hookos.ipxe" => {
+            // Get Dragonfly base URL (required)
+            let base_url_str = env::var("DRAGONFLY_BASE_URL")
+                .map_err(|_| {
+                    error!("CRITICAL: DRAGONFLY_BASE_URL environment variable is not set. HookOS iPXE script requires this.");
+                    Error::Internal("Server is missing required DRAGONFLY_BASE_URL configuration.".to_string())
+                })?;
+
+            // --- Derive Tinkerbell defaults from DRAGONFLY_BASE_URL ---
+            let default_tinkerbell_host = Url::parse(&base_url_str)
+                .ok()
+                .and_then(|url| url.host_str().map(String::from))
+                .unwrap_or_else(|| {
+                    warn!("Could not parse DRAGONFLY_BASE_URL host, using fallback '127.0.0.1' for Tinkerbell defaults.");
+                    "127.0.0.1".to_string()
+                });
+            
+            const DEFAULT_GRPC_PORT: u16 = 42113;
+            let default_grpc_authority = format!("{}:{}", default_tinkerbell_host, DEFAULT_GRPC_PORT);
+            let default_syslog_host = default_tinkerbell_host.clone(); // Default syslog host is just the host part
+            // -----------------------------------------------------------
+
+            // Get Tinkerbell config, using derived values as defaults
+            let grpc_authority = env::var("TINKERBELL_GRPC_AUTHORITY")
+                .unwrap_or_else(|_| {
+                    info!("TINKERBELL_GRPC_AUTHORITY not set, deriving default: {}", default_grpc_authority);
+                    default_grpc_authority
+                });
+            let syslog_host = env::var("TINKERBELL_SYSLOG_HOST")
+                .unwrap_or_else(|_| {
+                     info!("TINKERBELL_SYSLOG_HOST not set, deriving default: {}", default_syslog_host);
+                     default_syslog_host
+                 });
+            let tinkerbell_tls = env::var("TINKERBELL_TLS")
+                .map(|s| s.parse().unwrap_or(false))
+                .unwrap_or(false);
+
+            // Format the HookOS iPXE script using Dragonfly URL for artifacts and Tinkerbell details for params
+            Ok(format!(r#"#!ipxe
+
+echo Loading HookOS via Dragonfly...
+
+set arch ${{buildarch}}
+# Dragonfly + Tinkerbell only supports 64 bit archectures.
+# The build architecture does not necessarily represent the architecture of the machine on which iPXE is running.
+# https://ipxe.org/cfg/buildarch
+
+iseq ${{arch}} i386 && set arch x86_64 ||
+iseq ${{arch}} arm32 && set arch aarch64 ||
+iseq ${{arch}} arm64 && set arch aarch64 ||
+set base-url {}
+set retries:int32 0
+set retry_delay:int32 0
+
+set worker_id ${{mac}}
+set grpc_authority {}
+set syslog_host {}
+set tinkerbell_tls {}
+
+echo worker_id=${{mac}}
+echo grpc_authority={}
+echo syslog_host={}
+echo tinkerbell_tls={}
+
+set idx:int32 0
+:retry_kernel
+kernel ${{base-url}}/ipxe/hookos/vmlinuz-${{arch}} \
+syslog_host=${{syslog_host}} grpc_authority=${{grpc_authority}} tinkerbell_tls=${{tinkerbell_tls}} worker_id=${{worker_id}} hw_addr=${{mac}} \
+console=tty1 console=tty2 console=ttyAMA0,115200 console=ttyAMA1,115200 console=ttyS0,115200 console=ttyS1,115200 tink_worker_image=quay.io/tinkerbell/tink-worker:v0.12.1 \
+intel_iommu=on iommu=pt initrd=initramfs-${{arch}} && goto download_initrd || iseq ${{idx}} ${{retries}} && goto kernel-error || inc idx && echo retry in ${{retry_delay}} seconds ; sleep ${{retry_delay}} ; goto retry_kernel
+
+:download_initrd
+set idx:int32 0
+:retry_initrd
+initrd ${{base-url}}/ipxe/hookos/initramfs-${{arch}} && goto boot || iseq ${{idx}} ${{retries}} && goto initrd-error || inc idx && echo retry in ${{retry_delay}} seconds ; sleep ${{retry_delay}} ; goto retry_initrd
+
+:boot
+set idx:int32 0
+:retry_boot
+boot || iseq ${{idx}} ${{retries}} && goto boot-error || inc idx && echo retry in ${{retry_delay}} seconds ; sleep ${{retry_delay}} ; goto retry_boot
+
+:kernel-error
+echo Failed to load kernel
+imgfree
+exit
+
+:initrd-error
+echo Failed to load initrd
+imgfree
+exit
+
+:boot-error
+echo Failed to boot
+imgfree
+exit
+"#, 
+            base_url_str, // Use Dragonfly base URL for artifacts
+            grpc_authority, // Use determined gRPC authority (env var or derived default)
+            syslog_host,    // Use determined syslog host (env var or derived default)
+            tinkerbell_tls, // Use determined TLS setting
+            grpc_authority, // for echo
+            syslog_host,    // for echo
+            tinkerbell_tls  // for echo
+            ))
+        },
+        "dragonfly-agent.ipxe" => {
+            // Get Dragonfly base URL for agent artifacts
+            let base_url = env::var("DRAGONFLY_BASE_URL")
+                .map_err(|_| {
+                    error!("CRITICAL: DRAGONFLY_BASE_URL environment variable is not set. Agent iPXE script requires this.");
+                    Error::Internal("Server is missing required DRAGONFLY_BASE_URL configuration.".to_string())
+                })?;
+                
+            // Format the Dragonfly Agent iPXE script
+            Ok(format!(r#"#!ipxe
+kernel {}/ipxe/dragonfly-agent/vmlinuz \
+  ip=dhcp \
+  alpine_repo=http://dl-cdn.alpinelinux.org/alpine/v3.21/main \
+  modules=loop,squashfs,sd-mod,usb-storage \
+  initrd=initramfs-lts \
+  modloop={}/ipxe/dragonfly-agent/modloop \
+  apkovl={}/ipxe/dragonfly-agent/localhost.apkovl.tar.gz \
+  rw
+initrd {}/ipxe/dragonfly-agent/initramfs-lts
+boot
+"#, 
+            base_url, // for kernel path
+            base_url, // for modloop path
+            base_url, // for apkovl path
+            base_url  // for initrd path
+            ))
+        },
+        _ => {
+            warn!("Cannot generate unknown IPXE script: {}", script_name); // Log the specific script name
+            Err(Error::NotFound) // Use the unit variant correctly
+        },
+    }
 }
+
+// Serve iPXE artifacts (scripts and binaries)
+// Function to serve an iPXE artifact file from a configured directory
+pub async fn serve_ipxe_artifact(headers: HeaderMap, Path(requested_path): Path<String>) -> Response {
+    // Define constants for directories and URLs
+    const DEFAULT_ARTIFACT_DIR: &str = "/var/lib/dragonfly/ipxe-artifacts";
+    const ARTIFACT_DIR_ENV_VAR: &str = "DRAGONFLY_IPXE_ARTIFACT_DIR";
+    const ALLOWED_IPXE_SCRIPTS: &[&str] = &["hookos", "dragonfly-agent"]; // Define allowlist
+    const AGENT_APKOVL_PATH: &str = "dragonfly-agent/localhost.apkovl.tar.gz";
+    const AGENT_BINARY_URL: &str = "https://github.com/Zorlin/dragonfly/raw/refs/heads/main/dragonfly-agent"; // TODO: Make configurable
+    
+    // Get the base directory from env var or use default
+    let base_dir = env::var(ARTIFACT_DIR_ENV_VAR)
+        .unwrap_or_else(|_| {
+            debug!("{} not set, using default: {}", ARTIFACT_DIR_ENV_VAR, DEFAULT_ARTIFACT_DIR);
+            DEFAULT_ARTIFACT_DIR.to_string()
+        });
+    let base_path = PathBuf::from(base_dir);
+    
+    // Path sanitization - Allow '/' but prevent '..'
+    if requested_path.contains("..") || requested_path.contains('\\') {
+        warn!("Attempted iPXE artifact path traversal using '..' or '\': {}", requested_path);
+        return (StatusCode::BAD_REQUEST, "Invalid artifact path").into_response();
+    }
+    
+    let artifact_path = base_path.join(&requested_path);
+
+    // --- Serve from Cache First ---
+    if artifact_path.exists() {
+        // Determine content type AND if it's an IPXE script
+        let (content_type, is_ipxe) = if requested_path.ends_with(".ipxe") {
+            ("text/plain", true)
+        } else if requested_path.ends_with(".tar.gz") {
+            ("application/gzip", false) // Ensure this returns a tuple
+        } else {
+            ("application/octet-stream", false) // Ensure this returns a tuple
+        };
+
+        // Allowlist check for IPXE scripts from cache
+        if is_ipxe { // Check the boolean flag
+            let stem = StdPath::new(&requested_path).file_stem().and_then(|s| s.to_str());
+            if let Some(stem_str) = stem {
+                if !ALLOWED_IPXE_SCRIPTS.contains(&stem_str) {
+                    warn!("Attempt to serve non-allowlisted IPXE script stem from cache: {}", stem_str);
+                    return (StatusCode::NOT_FOUND, "iPXE Script Not Found").into_response();
+                }
+            } else {
+                 warn!("Could not extract stem from IPXE script path: {}", requested_path);
+                 return (StatusCode::BAD_REQUEST, "Invalid IPXE Script Path").into_response();
+            }
+        }
+        
+        // Serve allowed script or binary artifact from cache using streaming
+        match read_file_as_stream(&artifact_path, headers.get(axum::http::header::RANGE)).await { // Pass Range header
+            Ok((stream, file_size, content_range)) => {
+                info!("Streaming cached artifact from disk: {}", requested_path);
+                return create_streaming_response(stream, content_type, file_size, content_range); // Pass content_range
+            },
+            Err(e) => {
+                error!("Failed to stream cached iPXE artifact: {}", e);
+                return (StatusCode::INTERNAL_SERVER_ERROR, "Error reading iPXE artifact").into_response();
+            }
+        }
+    } else {
+        // --- File Not Found: Generate or Download --- 
+        info!("Artifact {} not found locally, attempting to fetch or generate", requested_path);
+        
+        // FIRST check if it is the specific apkovl path that needs generation
+        if requested_path == AGENT_APKOVL_PATH {
+            // --- Special Case: Generate apkovl on demand ---
+            info!("Generating {} on demand...", AGENT_APKOVL_PATH);
+            
+            let base_url = match env::var("DRAGONFLY_BASE_URL") {
+                Ok(url) => url,
+                Err(_) => {
+                    error!("Cannot generate apkovl: DRAGONFLY_BASE_URL environment variable is not set.");
+                    return (StatusCode::INTERNAL_SERVER_ERROR, "Server configuration error for apkovl generation").into_response();
+                }
+            };
+
+            match generate_agent_apkovl(&artifact_path, &base_url, AGENT_BINARY_URL).await {
+                Ok(()) => {
+                    info!("Successfully generated {}, now serving...", AGENT_APKOVL_PATH);
+                    match read_file_as_stream(&artifact_path, None).await { // Pass None for range
+                        Ok((stream, file_size, _)) => { // Adjust pattern match
+                            return create_streaming_response(stream, "application/gzip", file_size, None); // Pass None for content_range
+                        },
+                        Err(e) => {
+                            error!("Failed to stream newly generated apkovl {}: {}", AGENT_APKOVL_PATH, e);
+                            return (StatusCode::INTERNAL_SERVER_ERROR, "Error reading newly generated apkovl").into_response();
+                        }
+                    }
+                },
+                Err(e) => {
+                    error!("Failed to generate {}: {}", AGENT_APKOVL_PATH, e);
+                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to generate {}: {}", AGENT_APKOVL_PATH, e)).into_response();
+                }
+            }
+        } 
+        // NEXT check if it's a generic .ipxe script that needs generation
+        else if requested_path.ends_with(".ipxe") {
+            // --- Generate iPXE scripts on the fly ---
+            match generate_ipxe_script(&requested_path).await {
+                Ok(script) => {
+                    info!("Generated {} script dynamically.", requested_path);
+                    // Cache in background
+                    let path_clone = artifact_path.clone();
+                    let script_clone = script.clone();
+                    tokio::spawn(async move {
+                        // Ensure parent directory exists before writing
+                        if let Some(parent) = path_clone.parent() {
+                             if let Err(e) = fs::create_dir_all(parent).await {
+                                 warn!("Failed to create directory for caching {}: {}", requested_path, e);
+                                 return; 
+                             }
+                         }
+                        if let Err(e) = fs::write(&path_clone, &script_clone).await {
+                             warn!("Failed to cache generated {} script: {}", requested_path, e);
+                        }
+                    });
+                    
+                    // For iPXE scripts, let's build our own response
+                    let content_length = script.len() as u64;
+                    
+                    // Create a response that's optimized for iPXE
+                    return Response::builder()
+                        .status(StatusCode::OK)
+                        .header(axum::http::header::CONTENT_TYPE, "text/plain")
+                        .header(axum::http::header::CONTENT_LENGTH, content_length.to_string())
+                        .header(axum::http::header::CONTENT_ENCODING, "identity") // No compression
+                        .body(Body::from(script))
+                        .unwrap_or_else(|_| {
+                            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build response").into_response()
+                        });
+                },
+                Err(Error::NotFound { .. }) => {
+                    warn!("IPXE script {} not found or could not be generated.", requested_path);
+                    // Fall through to final 404
+                },
+                Err(e) => {
+                    // Other error during generation (e.g., missing env var)
+                    error!("Failed to generate {} script: {}", requested_path, e);
+                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to generate script: {}", e)).into_response();
+                }
+            }
+            // If we fall through here, it means generate_ipxe_script returned NotFound
+        }
+        // FINALLY, assume it's a binary artifact to download/stream
+        else {
+            // --- Download/Stream Other Binary Artifacts ---
+            let remote_url = match requested_path.as_str() {
+                // Alpine Linux netboot artifacts for Dragonfly Agent
+                "dragonfly-agent/vmlinuz" => "https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64/netboot/vmlinuz-lts",
+                "dragonfly-agent/initramfs-lts" => "https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64/netboot/initramfs-lts",
+                "dragonfly-agent/modloop" => "https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64/netboot/modloop-lts",
+                // Ubuntu 22.04
+                "ubuntu/jammy-server-cloudimg-amd64.img" => "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img",
+                _ => {
+                    // If it wasn't an .ipxe script and not a known binary, it's unknown.
+                    warn!("Unknown artifact requested: {}", requested_path);
+                    return (StatusCode::NOT_FOUND, "Unknown iPXE artifact").into_response();
+                }
+            };
+            
+            // Use the efficient streaming download with caching for known artifacts
+            match stream_download_with_caching(remote_url, &artifact_path, headers.get(axum::http::header::RANGE)).await { // Pass Range header
+                Ok((stream, content_length, content_range)) => {
+                    info!("Streaming artifact {} from remote source", requested_path);
+                    return create_streaming_response(stream, "application/octet-stream", content_length, content_range); // Pass content_range
+                },
+                Err(e) => {
+                    error!("Failed to stream artifact {}: {}", requested_path, e);
+                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("Error streaming artifact: {}", e)).into_response();
+                }
+            }
+        }
+
+        // If code reaches here, it means an IPXE script was requested but generate_ipxe_script 
+        // returned NotFound, so return 404.
+        (StatusCode::NOT_FOUND, "Unknown or Ungeneratable IPXE Script").into_response()
+    }
+}
+
 
 // Stub for getting workflow progress
 pub async fn get_workflow_progress(Path(id): Path<Uuid>) -> Response {

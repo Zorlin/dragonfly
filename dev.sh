@@ -7,6 +7,13 @@ if [ "$1" == "redeploy" ]; then
     k3s-uninstall.sh
     cleanip
     cargo run -- install
+elif [ "$1" == "cleanredeploy" ]; then
+    # Remove the existing server data
+    sudo rm -rf /var/lib/dragonfly/
+
+    k3s-uninstall.sh
+    cleanip
+    cargo run -- install
 elif [ "$1" == "server" ]; then
     # Spin down Dragonfly's statefulset so we can replace it temporarily
     KUBECONFIG=k3s.yaml kubectl scale statefulset dragonfly --replicas=0 -n tink

@@ -144,7 +144,6 @@ pub async fn run_install(args: InstallArgs, mut shutdown_rx: watch::Receiver<()>
     // Clone the receiver *before* spawning the task that moves it
     let mut shutdown_rx_clone = shutdown_rx.clone(); 
 
-    // !!! RE-ADD WELCOME MESSAGES HERE !!!
     println!("🐉 Welcome to Dragonfly.");
     println!("🚀 Open http://localhost:3000 to get started. We're ready for you to look around!");
 
@@ -200,9 +199,8 @@ pub async fn run_install(args: InstallArgs, mut shutdown_rx: watch::Receiver<()>
                 install_tinkerbell_stack(bootstrap_ip, network, &kubeconfig_path).await.wrap_err("Failed to install Tinkerbell stack")?;
 
                 // --- 8. Install Dragonfly Helm Chart (if applicable) --- 
-                // TEMPORARILY COMMENTED OUT as requested
-                // update_install_state(InstallationState::DeployingDragonfly).await;
-                // install_dragonfly_chart(bootstrap_ip, &kubeconfig_path).await.wrap_err("Failed to install Dragonfly chart")?;
+                update_install_state(InstallationState::DeployingDragonfly).await;
+                install_dragonfly_chart(bootstrap_ip, &kubeconfig_path).await.wrap_err("Failed to install Dragonfly chart")?;
 
                 // --- 9. Mark as Ready --- 
                 update_install_state(InstallationState::Ready).await;
@@ -849,6 +847,63 @@ async fn install_helm() -> Result<()> {
     Ok(())
 }
 
+async fn install_dragonfly_chart(bootstrap_ip: Ipv4Addr, kubeconfig_path: &PathBuf) -> Result<()> {
+    // --- Clone the GitHub repository for the Helm chart ---
+    info!("Fetching Dragonfly Helm charts from GitHub...");
+    
+    // Create a temporary directory for the repo
+    let repo_dir = std::env::temp_dir().join("dragonfly-charts");
+    
+    // Remove the directory if it already exists
+    if repo_dir.exists() {
+        fs::remove_dir_all(&repo_dir).await
+            .wrap_err_with(|| format!("Failed to clean up previous charts directory: {:?}", repo_dir))?;
+    }
+    
+    // Clone the repository
+    let clone_cmd = format!(
+        "git clone --depth 1 https://github.com/Zorlin/dragonfly-charts.git {}",
+        repo_dir.display()
+    );
+    run_shell_command(&clone_cmd, "clone Dragonfly Helm charts").wrap_err("Failed to clone Helm charts repository")?;
+    
+    // Path to the chart
+    let chart_path = repo_dir.join("dragonfly");
+    
+    // Check if the chart path exists
+    if !chart_path.exists() {
+        bail!("Helm chart not found in expected location: {:?}", chart_path);
+    }
+    
+    // --- Generate values.yaml ---
+    let values_content = format!(
+        r#"global:
+    publicIP: {bootstrap_ip}
+"#,
+        bootstrap_ip = bootstrap_ip,
+    );
+
+    let values_path = PathBuf::from("values.yaml");
+    fs::write(&values_path, values_content).await
+        .wrap_err_with(|| format!("Failed to write Helm values to {:?}", values_path))?;
+    debug!("Generated Helm values file: {:?}", values_path);
+
+    // --- Run Helm Install/Upgrade with the local chart path ---
+    let helm_args = [
+        "upgrade", "--install", "dragonfly",
+        chart_path.to_str().ok_or_else(|| color_eyre::eyre::eyre!("Chart path is not valid UTF-8"))?,
+        "--create-namespace",
+        "--namespace", "tink",
+        "--wait",
+        "--timeout", "10m",
+        "-f", values_path.to_str().ok_or_else(|| color_eyre::eyre::eyre!("values.yaml path is not valid UTF-8"))?
+    ];
+
+    info!("Deploying Dragonfly");
+    run_command("helm", &helm_args, "install/upgrade Dragonfly Helm chart")?;
+    Ok(())
+}
+
 async fn install_tinkerbell_stack(bootstrap_ip: Ipv4Addr, network: Ipv4Network, kubeconfig_path: &PathBuf) -> Result<()> {
     // Check if the Tinkerbell stack is already installed
     let release_exists = {
@@ -1029,73 +1084,6 @@ stack:
     Ok(())
 }
 
-// Install Dragonfly helm chart
-async fn install_dragonfly_chart(bootstrap_ip: Ipv4Addr, kubeconfig_path: &PathBuf) -> Result<()> {
-    info!("Installing Dragonfly helm chart");
-    
-    // Example of creating values.yaml for helm chart
-    let values_yaml = format!(r#"
-service:
-  type: NodePort
-  port: 3000  # Don't bind to port 3000 until handoff
-  readinessPort: 3001  # Use a different port for readiness
-config:
-  bootstrapIp: {}
-  network: auto
-  dnsServers:
-    - 8.8.8.8
-    - 8.8.4.4
-"#, bootstrap_ip);
-
-    // Write the values file
-    let values_path = "/tmp/dragonfly-values.yaml";
-    tokio::fs::write(values_path, values_yaml)
-        .await
-        .wrap_err("Failed to write Dragonfly values file")?;
-    
-    // Add Dragonfly helm repo if it doesn't exist
-    // Note: This is a placeholder; replace with the actual helm repo
-    let output = Command::new("helm")
-        .args(["repo", "add", "dragonfly", "https://charts.example.com/dragonfly"])
-        .output()
-        .wrap_err("Failed to add Dragonfly helm repo")?;
-    
-    if !output.status.success() {
-        warn!("Failed to add Dragonfly helm repo: {}", String::from_utf8_lossy(&output.stderr));
-    }
-    
-    // Update helm repos
-    let output = Command::new("helm")
-        .args(["repo", "update"])
-        .output()
-        .wrap_err("Failed to update helm repos")?;
-    
-    if !output.status.success() {
-        warn!("Failed to update helm repos: {}", String::from_utf8_lossy(&output.stderr));
-    }
-    
-    // Install Dragonfly chart
-    let output = Command::new("helm")
-        .args([
-            "install",
-            "dragonfly",
-            "dragonfly/dragonfly",
-            "-f",
-            values_path,
-            "--wait",
-            "--timeout=10m",
-        ])
-        .output()
-        .wrap_err("Failed to install Dragonfly helm chart")?;
-    
-    if !output.status.success() {
-        bail!("Failed to install Dragonfly helm chart: {}", String::from_utf8_lossy(&output.stderr));
-    }
-    
-    info!("Dragonfly helm chart installed successfully");
-    
-    Ok(())
-}
 
 /// Convert an IP and prefix length to CIDR notation
 fn network_to_cidr(ip: Ipv4Addr, prefix_len: u8) -> Result<String> {
