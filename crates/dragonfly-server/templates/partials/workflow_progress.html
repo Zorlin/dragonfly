@@ -78,11 +78,13 @@
                                 {% elif task.status == "STATE_RUNNING" %}
                                     <div class="relative w-32">
                                         <div class="overflow-hidden h-2 text-xs flex rounded bg-blue-200 dark:bg-blue-700/30">
-                                            <div class="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center bg-blue-500 dark:bg-blue-600 task-progress-bar" 
-                                                 style="width: {{ task.progress }}%">
+                                            <div class="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center bg-blue-500 dark:bg-blue-600 task-progress-bar animate-progress"
+                                                 :style="'width: ' + (taskProgressState[task.name]?.percent || 0) + '%'">
                                             </div>
                                         </div>
-                                        <div class="text-xs mt-1 task-progress-percent">{{ task.progress }}%</div>
+                                        <div class="text-xs mt-1 progress-text"
+                                             x-text="generateProgressText(taskProgressState[task.name])">
+                                        </div>
                                     </div>
                                 {% else %}
                                     Pending
@@ -126,4 +128,5 @@
         </div>
         {% endif %}
     </div>
+</div> 
 </div> 

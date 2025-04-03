@@ -152,11 +152,11 @@
                                                      <div class="relative w-32">
                                                          <div class="overflow-hidden h-2 text-xs flex rounded bg-blue-200 dark:bg-blue-700/30">
                                                              <div class="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center bg-blue-500 dark:bg-blue-600 task-progress-bar"
-                                                                  :style="'width: ' + (taskProgressState[task.name] || 0) + '%;'" 
-                                                                  :data-progress="taskProgressState[task.name] || 0">
+                                                                  :style="'width: ' + (taskProgressState[task.name]?.percent || 0) + '%;'"
+                                                                  :data-progress="taskProgressState[task.name]?.percent || 0">
                                                              </div>
                                                          </div>
-                                                         <div class="text-xs mt-1 progress-text">0%</div> {# JS will update this #}
+                                                         <div class="text-xs mt-1 progress-text" x-text="generateProgressText(taskProgressState[task.name])"></div>
                                                      </div>
                                                  </template>
                                                  <template x-if="task.status !== 'STATE_SUCCESS' && task.status !== 'STATE_RUNNING'">
@@ -479,27 +479,6 @@
         error: null,
 
         // --- Methods --- 
-        updateTaskDisplay(taskRow, ratchetedProgress, bytesDownloaded, totalSize, taskName) { 
-             // Update the reactive state used by the template binding
-             this.taskProgressState[taskName] = ratchetedProgress;
-             console.log("updateTaskDisplay called for:", taskName, "Progress:", ratchetedProgress);
-             // Update visual elements directly (already correct)
-             const progressBar = taskRow.querySelector('.task-progress-bar');
-             const progressText = taskRow.querySelector('.progress-text');
-             if (progressBar) {
-                 progressBar.style.width = `${ratchetedProgress}%`;
-             }
-             if (progressText) {
-                 if (totalSize > 0) {
-                     const downloadedMB = (bytesDownloaded / (1024 * 1024)).toFixed(1);
-                     const totalMB = (totalSize / (1024 * 1024)).toFixed(1);
-                     progressText.textContent = `${ratchetedProgress.toFixed(1)}% (${downloadedMB}/${totalMB} MB)`;
-                 } else {
-                     progressText.textContent = `${ratchetedProgress.toFixed(1)}%`;
-                 }
-             }
-        },
-
         initSSE() {
             console.log("Initializing SSE connection...");
             if (this.evtSource && this.evtSource.readyState !== EventSource.CLOSED) {
@@ -615,6 +594,7 @@
 
             // Add other specific listeners (ip_download_progress, task_progress) here if needed
             this.evtSource.addEventListener('ip_download_progress', (event) => {
+                console.log("[PROGRESS_LISTENER] Listener is active!");
                 console.log("SSE Listener: ip_download_progress received:", event.data);
                 try {
                     const progressData = JSON.parse(event.data);
@@ -622,17 +602,24 @@
                     // Example: Find relevant task and update its progress visually
                     if (progressData.machine_id === this.machineId) {
                          console.log("Matching machine ID for progress update.");
-                         const taskName = progressData.file_name || 'stream image'; // Default task name
+                         const taskName = progressData.file_name || 'stream image'; // Use lowercase default
                          const bytesDownloaded = progressData.bytes_downloaded;
                          const totalSize = progressData.total_size;
                          const calculatedProgress = (totalSize > 0) ? (bytesDownloaded / totalSize * 100) : 0;
 
-                         // Find task row and update display
-                         const taskRow = document.querySelector(`#tasks-table-body tr[data-task-name="${taskName}"]`);
-                         if (taskRow) {
-                             this.updateTaskDisplay(taskRow, calculatedProgress, bytesDownloaded, totalSize, taskName);
+                         // Update the reactive state. Alpine will handle the DOM update.
+                         // Ensure the task exists in the state before updating
+                         if (this.taskProgressState[taskName] !== undefined) {
+                            // Direct assignment for Alpine 3 reactivity
+                            this.taskProgressState[taskName] = {
+                                percent: calculatedProgress,
+                                bytesDownloaded: bytesDownloaded,
+                                totalSize: totalSize
+                            };
+                            console.log(`Updated taskProgressState for ${taskName}:`, JSON.stringify(this.taskProgressState[taskName]));
                          } else {
-                             console.warn(`Task row not found for progress update: ${taskName}`);
+                            // Log if the task name from the event doesn't match any known task
+                            console.warn(`Task state key not found for progress update: ${taskName}`);
                          }
                      }
                 } catch (e) {
@@ -683,20 +670,70 @@
              this.$nextTick(() => {
                  if (this.workflow_info && this.workflow_info.tasks) {
                      this.workflow_info.tasks.forEach(task => {
-                         this.taskProgressState[task.name] = task.progress || 0;
-                         // Update visual progress bars if needed
-                         const taskRow = document.querySelector(`#tasks-table-body tr[data-task-name="${task.name}"]`);
-                         if (taskRow) {
-                             const progressBar = taskRow.querySelector('.task-progress-bar');
-                             if(progressBar) progressBar.style.width = `${this.taskProgressState[task.name]}%`;
+                         // Initialize with the structure expected by the template
+                         if (this.taskProgressState[task.name] === undefined) { // Avoid overwriting if already updated by SSE
+                             this.taskProgressState[task.name] = { 
+                                 percent: task.progress || 0,
+                                 bytesDownloaded: 0, // Assume 0 initially
+                                 totalSize: 0 // Assume 0 initially, update via SSE
+                             };
                          }
                      });
+                     console.log("Initial taskProgressState:", JSON.stringify(this.taskProgressState));
                  }
              });
 
              // Initialize SSE connection AFTER initial data is parsed and properties are set
              this.initSSE(); 
-        }
+        },
+
+        // Helper function to format progress text
+        generateProgressText(progressInfo) {
+            if (!progressInfo) {
+                return '0%'; // Or 'Pending' or whatever default
+            }
+            const percent = progressInfo.percent || 0;
+            if (progressInfo.totalSize > 0) {
+                const downloadedMB = (progressInfo.bytesDownloaded / (1024 * 1024)).toFixed(1);
+                const totalMB = (progressInfo.totalSize / (1024 * 1024)).toFixed(1);
+                return `${percent.toFixed(1)}% (${downloadedMB}/${totalMB} MB)`;
+            } else {
+                return `${percent.toFixed(1)}%`;
+            }
+        },
+
+        fetchMachineData() {
+            if (!this.machineId) return;
+            // ... existing code ...
+            this.evtSource.addEventListener('ip_download_progress', (event) => {
+                console.log("[PROGRESS_LISTENER] Listener is active!"); // Added listener active log
+                console.log("SSE Listener: ip_download_progress received:", event.data);
+                try {
+                    const progressData = JSON.parse(event.data);
+                    // Update logic based on progressData...
+                    // Example: Find relevant task and update its progress visually
+                    if (progressData.machine_id === this.machineId) {
+                         console.log("Matching machine ID for progress update.");
+                         const taskName = progressData.file_name || 'stream image'; // Use lowercase default
+                         const bytesDownloaded = progressData.bytes_downloaded;
+                         const totalSize = progressData.total_size;
+                         const calculatedProgress = (totalSize > 0) ? (bytesDownloaded / totalSize * 100) : 0;
+
+                         // Update the reactive state. Alpine will handle the DOM update.
+                         // Ensure the task exists in the state before updating
+                         if (this.taskProgressState[taskName] !== undefined) {
+                            this.taskProgressState[taskName] = {
+                                percent: calculatedProgress,
+                                bytesDownloaded: bytesDownloaded,
+                                totalSize: totalSize
+                            };
+                         }
+                     }
+                } catch (e) {
+                     console.error('Error processing ip_download_progress event:', e, event.data);
+                }
+            });
+        },
     };
   }
 </script>

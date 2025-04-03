@@ -1368,32 +1368,48 @@ async fn machine_events(
             Ok(event_string) => {
                 // FIX: Correct parsing and variable naming
                 let parts: Vec<&str> = event_string.splitn(2, ':').collect();
-                let (event_type, event_id_str) = if parts.len() == 2 {
+                let (event_type, event_payload_str) = if parts.len() == 2 { // Renamed event_id_str to event_payload_str for clarity
                     (parts[0], Some(parts[1]))
                 } else {
-                    (event_string.as_str(), None) // Assign to event_type, set event_id_str to None
+                    (event_string.as_str(), None)
                 };
 
-                // FIX: Correct logic for creating the simple payload
-                let data_payload = if let Some(id_str) = event_id_str {
-                    json!({ "type": event_type, "id": id_str })
-                } else {
-                    // Ensure there's always a payload, even without ID
-                    json!({ "type": event_type })
-                };
-                
-                // Serialize JSON to string for SSE data field
-                match serde_json::to_string(&data_payload) {
-                    Ok(json_string) => {
+                // Special handling for ip_download_progress to send raw JSON payload
+                if event_type == "ip_download_progress" {
+                    if let Some(payload_str) = event_payload_str {
+                        // Directly use the JSON string as data for this specific event type
                         let sse_event = Event::default()
-                            .event(event_type) 
-                            .data(json_string);
+                            .event(event_type)
+                            .data(payload_str); // Use the payload string directly
                         Some((Ok(sse_event), rx))
-                    },
-                    Err(e) => {
-                        error!("Failed to serialize SSE event data to JSON: {}", e);
-                        let comment_event = Event::default().comment("Internal error: failed to serialize event.");
-                        Some((Ok(comment_event), rx))
+                    } else {
+                         warn!("Received ip_download_progress event without payload: {}", event_string);
+                         // Optionally send a comment or skip
+                         let comment_event = Event::default().comment("Warning: ip_download_progress event received without payload.");
+                         Some((Ok(comment_event), rx))
+                    }
+                } else {
+                    // Existing logic for other events (like machine_updated, machine_discovered, etc.)
+                    let data_payload = if let Some(id_str) = event_payload_str { // Use the renamed variable
+                        json!({ "type": event_type, "id": id_str })
+                    } else {
+                        // Ensure there's always a payload, even without ID
+                        json!({ "type": event_type })
+                    };
+
+                    // Serialize JSON to string for SSE data field
+                    match serde_json::to_string(&data_payload) {
+                        Ok(json_string) => {
+                            let sse_event = Event::default()
+                                .event(event_type)
+                                .data(json_string);
+                            Some((Ok(sse_event), rx))
+                        },
+                        Err(e) => {
+                            error!("Failed to serialize SSE event data to JSON: {}", e);
+                            let comment_event = Event::default().comment("Internal error: failed to serialize event.");
+                            Some((Ok(comment_event), rx))
+                        }
                     }
                 }
             },
@@ -1623,7 +1639,8 @@ fn create_streaming_response(
 async fn read_file_as_stream(
     path: &StdPath,
     range_header: Option<&HeaderValue>, // Add parameter for Range header
-    state: Option<&AppState> // Add optional state for event emission
+    state: Option<&AppState>, // Add optional state for event emission
+    machine_id: Option<Uuid> // Add optional machine ID for tracking
 ) -> Result<(ReceiverStream<Result<Bytes, Error>>, Option<u64>, Option<String>), Error> { // Return size and Content-Range
     let mut file = fs::File::open(path).await.map_err(|e| Error::Internal(format!("Failed to open file {}: {}", path.display(), e)))?; // Added mut back
     let (tx, rx) = mpsc::channel::<Result<Bytes, Error>>(32);
@@ -1663,6 +1680,10 @@ async fn read_file_as_stream(
 
     let response_content_length = Some(response_length);
     let content_range_header_clone = content_range_header.clone(); // Clone for the task
+    // Clone state and machine_id needed for the background task *before* spawning
+    // Ensures owned values are moved into the async block, avoiding lifetime issues.
+    let task_state_owned = state.cloned(); // Creates Option<AppState>
+    let task_machine_id_copied = machine_id; // Copies Option<Uuid>
 
     tokio::spawn(async move {
         // Handle Range requests differently: read the whole range at once
@@ -1699,7 +1720,8 @@ async fn read_file_as_stream(
             // Original streaming logic for full file requests
             let mut buffer = vec![0; 65536]; // 64KB buffer
             let mut remaining = response_length; // For full file, response_length == total_size
-            
+            let mut total_bytes_sent: u64 = 0;
+
             while remaining > 0 {
                 let read_size = std::cmp::min(remaining as usize, buffer.len());
                 match file.read(&mut buffer[..read_size]).await {
@@ -1710,7 +1732,22 @@ async fn read_file_as_stream(
                     Ok(n) => { // Handles n > 0
                         let chunk = Bytes::copy_from_slice(&buffer[0..n]);
                         remaining -= n as u64;
-                        
+
+                        // Use the owned/copied state and machine_id captured by the 'move' closure
+                        // Match against the Option<&AppState> and Option<Uuid> directly
+                        if let (Some(state_ref), Some(machine_id_captured)) = (&task_state_owned, task_machine_id_copied) {
+                            if total_size > 0 { // Avoid division by zero
+                                debug!("[PROGRESS_DEBUG][CACHE_READ] Calling track_download_progress (machine_id: {}, sent: {}, total: {})", machine_id_captured, total_bytes_sent, total_size);
+                                // Clone the AppState here to get an owned value for the inner task.
+                                let owned_state = state_ref.clone(); // <-- Add this line
+                                // Spawn progress tracking in a separate task to avoid blocking the stream
+                                tokio::spawn(async move {
+                                    // Pass the already owned AppState.
+                                    track_download_progress(Some(machine_id_captured), total_bytes_sent, total_size, owned_state).await; // <-- Use owned_state here
+                                });
+                            } // else: Skipping progress track because total_size is 0 (logged elsewhere if needed)
+                        } // else: Skipping progress track because machine_id or state is missing
+
                         if tx.send(Ok(chunk)).await.is_err() {
                             warn!("Client stream receiver dropped for file {}", path_buf.display());
                             break; // Exit loop if receiver is gone
@@ -1752,19 +1789,28 @@ pub async fn serve_ipxe_artifact(
     // --- Get Machine ID from Client IP --- 
     let client_ip = state.client_ip.lock().await.clone();
     let machine_id = if let Some(ip) = &client_ip {
+        // ADDED LOG: Log the IP being looked up
+        info!("[PROGRESS_DEBUG] Looking up machine by IP: {}", ip);
         match db::get_machine_by_ip(ip).await {
-            Ok(Some(machine)) => Some(machine.id),
+            Ok(Some(machine)) => {
+                // ADDED LOG: Log successful lookup
+                info!("[PROGRESS_DEBUG] Found machine ID {} for IP {}", machine.id, ip);
+                Some(machine.id)
+            },
             Ok(None) => {
-                debug!("No machine found for IP {} requesting artifact {}", ip, requested_path);
+                // Changed to INFO for visibility
+                info!("[PROGRESS_DEBUG] No machine found for IP {} requesting artifact {}", ip, requested_path);
                 None
             },
             Err(e) => {
-                warn!("DB error looking up machine by IP {}: {}", ip, e);
+                // Changed to INFO for visibility
+                info!("[PROGRESS_DEBUG] DB error looking up machine by IP {}: {}", ip, e);
                 None
             }
         }
     } else {
-        warn!("Client IP not found in state for artifact request {}", requested_path);
+        // Changed to INFO for visibility
+        info!("[PROGRESS_DEBUG] Client IP not found in state for artifact request {}", requested_path);
         None
     };
     // ----------------------------------
@@ -1812,7 +1858,7 @@ pub async fn serve_ipxe_artifact(
         
         // Serve allowed script or binary artifact from cache using streaming
         // Pass the potentially found machine_id for progress tracking
-        match read_file_as_stream(&artifact_path, headers.get(axum::http::header::RANGE), Some(&state)).await {
+        match read_file_as_stream(&artifact_path, headers.get(axum::http::header::RANGE), Some(&state), machine_id).await {
             Ok((stream, file_size, content_range)) => {
                 info!("Streaming cached artifact from disk: {}", requested_path);
                 return create_streaming_response(stream, content_type, file_size, content_range); // Pass content_range
@@ -1846,7 +1892,7 @@ pub async fn serve_ipxe_artifact(
                 Ok(()) => {
                     info!("Successfully generated {}, now serving...", generation_target_path.display());
                     // Serve the newly generated file (no range needed here as it was just created)
-                    match read_file_as_stream(&generation_target_path, None, None).await { 
+                    match read_file_as_stream(&generation_target_path, None, None, None).await { 
                         Ok((stream, file_size, _)) => {
                             return create_streaming_response(stream, "application/gzip", file_size, None); 
                         },
@@ -1967,16 +2013,17 @@ async fn track_download_progress(
         machine_id = ?machine_id, 
         bytes_downloaded = bytes_downloaded, 
         total_size = total_size, 
-        "Entering track_download_progress"
+        "[PROGRESS_DEBUG] Entering track_download_progress"
     );
 
     if total_size == 0 {
-        debug!("Exiting track_download_progress: total_size is 0");
+        // Changed to INFO
+        info!("[PROGRESS_DEBUG] Exiting track_download_progress early: total_size is 0");
         return; // Skip progress for zero-sized files
     }
     
     let progress_float = (bytes_downloaded as f64 / total_size as f64) * 100.0;
-    let task_name = "Stream image"; // TODO: Can we get the actual filename here?
+    let task_name = "stream image"; // TODO: Can we get the actual filename here?
     
     // If we have a machine ID, send task-specific event
     if let Some(id) = machine_id {
@@ -2037,13 +2084,16 @@ async fn track_download_progress(
         // Construct the event string
         let ip_progress_event_string = format!("ip_download_progress:{}", ip_progress_event_payload.to_string());
 
-        debug!(client_ip = %client_ip, event = %ip_progress_event_string, "Attempting to send ip_download_progress event");
-        if let Err(e) = state.event_manager.send(ip_progress_event_string.clone()) { // Clone for logging
-            warn!(client_ip = %client_ip, error = %e, "Failed to emit IP-based progress event: {}", ip_progress_event_string);
+        info!(client_ip = %client_ip, event_payload = %ip_progress_event_payload, "[PROGRESS_SEND] Attempting to send ip_download_progress event NOW"); // ADDED LOUD LOG
+        let send_result = state.event_manager.send(ip_progress_event_string.clone()); // Clone for logging
+        
+        if let Err(e) = send_result {
+            warn!(client_ip = %client_ip, error = %e, "[PROGRESS_SEND] Failed to emit IP-based progress event: {}", ip_progress_event_string);
+        } else {
+            info!(client_ip = %client_ip, event_payload = %ip_progress_event_payload, "[PROGRESS_SEND] Successfully sent ip_download_progress event"); // ADDED SUCCESS LOG
         }
-    } else {
-        warn!("Could not get client IP from state to send ip_download_progress");
-    }
+    } // End of: if let Some(client_ip) = client_ip_guard.as_ref()
+    
     debug!("Exiting track_download_progress");
 }
 
@@ -2077,7 +2127,7 @@ async fn stream_download_with_caching(
         }
         
         // info!("Serving cached artifact from: {:?}", cache_path); // Commented out log
-        return read_file_as_stream(cache_path, range_header, state).await; // Pass Range header
+        return read_file_as_stream(cache_path, range_header, state, machine_id).await; // Pass Range header
     }
     
     info!("Downloading and caching artifact from: {}", url);
@@ -2093,7 +2143,9 @@ async fn stream_download_with_caching(
     // Get content length if available
     let content_length = response.content_length();
     if let Some(length) = content_length {
-        debug!("Download size: {} bytes", length);
+        info!("[PROGRESS_DEBUG] Download size from Content-Length: {} bytes", length);
+    } else {
+        info!("[PROGRESS_DEBUG] No Content-Length header received from remote server.");
     }
     
     let file = fs::File::create(cache_path).await.map_err(|e| Error::Internal(format!("Failed to create cache file: {}", e)))?;
@@ -2133,6 +2185,8 @@ async fn stream_download_with_caching(
                     total_bytes_downloaded += chunk_size;
                     if let (Some(machine_id), Some(state)) = (tracking_machine_id, &app_state_clone) {
                         if total_size > 0 {
+                            // ADDED LOG: Confirm call to track_download_progress
+                            debug!("[PROGRESS_DEBUG] Calling track_download_progress (machine_id: {}, downloaded: {}, total: {})", machine_id, total_bytes_downloaded, total_size);
                             track_download_progress(Some(machine_id), total_bytes_downloaded, total_size, state.clone()).await;
                         }
                     }
@@ -2227,7 +2281,7 @@ async fn stream_download_with_caching(
     if range_header.is_some() {
         info!("Download complete, now serving range request from cached file: {:?}", cache_path);
         // Re-call read_file_as_stream with the range header on the now-cached file
-        read_file_as_stream(cache_path, range_header, state).await
+        read_file_as_stream(cache_path, range_header, state, machine_id).await // Pass machine_id here too
     } else {
         // No range requested initially, return the full stream we prepared during download
         Ok((stream, content_length, None)) // No Content-Range for full file
