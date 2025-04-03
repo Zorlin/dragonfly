@@ -1642,6 +1642,9 @@ async fn read_file_as_stream(
     state: Option<&AppState>, // Add optional state for event emission
     machine_id: Option<Uuid> // Add optional machine ID for tracking
 ) -> Result<(ReceiverStream<Result<Bytes, Error>>, Option<u64>, Option<String>), Error> { // Return size and Content-Range
+    info!("[STREAM_READ] Beginning read_file_as_stream for path: {}, range: {:?}, machine_id: {:?}", 
+          path.display(), range_header.map(|h| h.to_str().unwrap_or("invalid")), machine_id);
+
     let mut file = fs::File::open(path).await.map_err(|e| Error::Internal(format!("Failed to open file {}: {}", path.display(), e)))?; // Added mut back
     let (tx, rx) = mpsc::channel::<Result<Bytes, Error>>(32);
     let path_buf = path.to_path_buf();
@@ -1705,6 +1708,27 @@ async fn read_file_as_stream(
             // Read the exact range using the limited reader
             match limited_reader.read_to_end(&mut buffer).await {
                 Ok(_) => {
+                    // Track progress for range requests too
+                    // For range requests, we use the start offset as an indicator of download progress
+                    if let (Some(state_ref), Some(machine_id_captured)) = (&task_state_owned, task_machine_id_copied) {
+                        if total_size > 0 {
+                            // Use start position + current range size as effective progress indicator
+                            let bytes_read = buffer.len() as u64;
+                            let effective_progress = start + bytes_read;
+                            
+                            info!("[RANGE_READ] Range request: start={}, bytes_read={}, total_size={}, effective_progress={}",
+                                  start, bytes_read, total_size, effective_progress);
+                                  
+                            // Clone state for progress tracking
+                            let owned_state = state_ref.clone();
+                            
+                            // Spawn progress tracking in a separate task
+                            tokio::spawn(async move {
+                                track_download_progress(Some(machine_id_captured), effective_progress, total_size, owned_state).await;
+                            });
+                        }
+                    }
+                
                     // Send the complete range as a single chunk
                     if tx.send(Ok(Bytes::from(buffer))).await.is_err() {
                         warn!("Client stream receiver dropped for file {} while sending range", path_buf.display());
@@ -1732,6 +1756,10 @@ async fn read_file_as_stream(
                     Ok(n) => { // Handles n > 0
                         let chunk = Bytes::copy_from_slice(&buffer[0..n]);
                         remaining -= n as u64;
+                        total_bytes_sent += n as u64; // Add this line to update total bytes sent!
+
+                        // ADDED LOG: Log bytes read and total sent
+                        debug!(path = %path_buf.display(), bytes_read = n, total_bytes_sent = total_bytes_sent, total_size = total_size, "[STREAM_READ_LOOP] Read chunk");
 
                         // Use the owned/copied state and machine_id captured by the 'move' closure
                         // Match against the Option<&AppState> and Option<Uuid> directly
@@ -1833,6 +1861,7 @@ pub async fn serve_ipxe_artifact(
 
     // --- Serve from Cache First ---
     if artifact_path.exists() {
+        info!("[SERVE_ARTIFACT] Cached artifact exists at {}, will use read_file_as_stream", artifact_path.display());
         // Determine content type AND if it's an IPXE script
         let (content_type, is_ipxe) = if requested_path.ends_with(".ipxe") {
             ("text/plain", true)
@@ -1870,7 +1899,7 @@ pub async fn serve_ipxe_artifact(
         }
     } else {
         // --- File Not Found: Generate or Download --- 
-        info!("Artifact {} not found locally, attempting to fetch or generate", requested_path);
+        info!("[SERVE_ARTIFACT] Artifact {} not found locally, will need to generate or download", requested_path);
         
         // FIRST check if it is the specific apkovl path that needs generation
         // Compare against the RELATIVE path expected from the URL
@@ -2009,6 +2038,14 @@ async fn track_download_progress(
     total_size: u64,
     state: AppState // Changed from Option<&AppState> to AppState
 ) {
+    info!(
+        machine_id = ?machine_id, 
+        bytes_downloaded = bytes_downloaded, 
+        total_size = total_size, 
+        "[PROGRESS_TRACK] CALLED track_download_progress with values: bytes_downloaded={}, total_size={}, machine_id={:?}",
+        bytes_downloaded, total_size, machine_id
+    );
+
     debug!(
         machine_id = ?machine_id, 
         bytes_downloaded = bytes_downloaded, 
@@ -2105,6 +2142,9 @@ async fn stream_download_with_caching(
     machine_id: Option<Uuid>, // Add optional machine ID for tracking
     state: Option<&AppState>, // Add optional state for event emission
 ) -> Result<(ReceiverStream<Result<Bytes, Error>>, Option<u64>, Option<String>), Error> { // Return Content-Range
+    info!("[STREAM_DOWNLOAD] Beginning stream_download_with_caching for URL: {}, cache_path: {}, range: {:?}, machine_id: {:?}",
+          url, cache_path.display(), range_header.map(|h| h.to_str().unwrap_or("invalid")), machine_id);
+
     // Create parent directory if needed
     if let Some(parent) = cache_path.parent() {
         fs::create_dir_all(parent).await.map_err(|e| Error::Internal(format!("Failed to create directory: {}", e)))?;
@@ -2121,7 +2161,16 @@ async fn stream_download_with_caching(
                     
                 if let Some((start, end)) = parse_range_header(range_str, file_size, None, Some(state)).await {
                     let bytes_downloaded = end - start + 1;
-                    tokio::spawn(track_download_progress(Some(machine_id), bytes_downloaded, file_size, state.clone()));
+                    
+                    // Use the start position as a progress indicator for range requests
+                    // This gives a rough approximation of download progress across multiple range requests
+                    let effective_progress = start + bytes_downloaded;
+                    
+                    info!("[RANGE_PROGRESS] Cached file with range: start={}, end={}, bytes={}, total={}, effective_progress={}",
+                          start, end, bytes_downloaded, file_size, effective_progress);
+                          
+                    // Track download progress with the effective bytes downloaded
+                    tokio::spawn(track_download_progress(Some(machine_id), effective_progress, file_size, state.clone()));
                 }
             }
         }
@@ -2183,10 +2232,18 @@ async fn stream_download_with_caching(
 
                     // Update progress tracking
                     total_bytes_downloaded += chunk_size;
+                    
+                    // ADDED LOG: Log chunk size and total downloaded
+                    debug!(url = %url_clone, chunk_size = chunk_size, total_bytes_downloaded = total_bytes_downloaded, total_size = total_size, "[STREAM_DOWNLOAD_LOOP] Downloaded chunk");
+
                     if let (Some(machine_id), Some(state)) = (tracking_machine_id, &app_state_clone) {
                         if total_size > 0 {
                             // ADDED LOG: Confirm call to track_download_progress
                             debug!("[PROGRESS_DEBUG] Calling track_download_progress (machine_id: {}, downloaded: {}, total: {})", machine_id, total_bytes_downloaded, total_size);
+                            
+                            // ADDED LOG: Log before calling track_download_progress function
+                            debug!(url = %url_clone, machine_id = %machine_id, bytes_downloaded = total_bytes_downloaded, total_size = total_size, "[STREAM_DOWNLOAD_LOOP] PRE-PROGRESS CALL");
+                            
                             track_download_progress(Some(machine_id), total_bytes_downloaded, total_size, state.clone()).await;
                         }
                     }
