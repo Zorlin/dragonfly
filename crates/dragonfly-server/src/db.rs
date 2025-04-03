@@ -450,6 +450,96 @@ pub async fn get_machine_by_mac(mac_address: &str) -> Result<Option<Machine>> {
     }
 }
 
+// Get machine by IP address
+pub async fn get_machine_by_ip(ip_address: &str) -> Result<Option<Machine>> {
+    let pool = get_pool().await?;
+    
+    let result = sqlx::query(
+        r#"
+        SELECT id, mac_address, ip_address, hostname, os_choice, os_installed, status, disks, nameservers, created_at, updated_at, bmc_credentials, installation_progress, installation_step 
+        FROM machines 
+        WHERE ip_address = ?
+        "#,
+    )
+    .bind(ip_address)
+    .fetch_optional(pool)
+    .await?;
+    
+    if let Some(row) = result {
+        let id: String = row.get(0);
+        let mac_address: String = row.get(1);
+        let status_str: String = row.get(6);
+        let disks_json: Option<String> = row.get(7);
+        let nameservers_json: Option<String> = row.get(8);
+        let bmc_credentials_json: Option<String> = row.get(11);
+        
+        // Generate memorable name from MAC address
+        let memorable_name = dragonfly_common::mac_to_words::mac_to_words_safe(&mac_address);
+        
+        // Deserialize disks and nameservers from JSON or use empty vectors if null
+        let mut disks = if let Some(json) = disks_json {
+            serde_json::from_str::<Vec<dragonfly_common::models::DiskInfo>>(&json).unwrap_or_else(|_| Vec::new())
+        } else {
+            Vec::new()
+        };
+        
+        // Calculate precise disk sizes with 2 decimal places
+        for disk in &mut disks {
+            if disk.size_bytes > 1099511627776 {
+                disk.calculated_size = Some(format!("{:.2} TB", disk.size_bytes as f64 / 1099511627776.0));
+            } else if disk.size_bytes > 1073741824 {
+                disk.calculated_size = Some(format!("{:.2} GB", disk.size_bytes as f64 / 1073741824.0));
+            } else if disk.size_bytes > 1048576 {
+                disk.calculated_size = Some(format!("{:.2} MB", disk.size_bytes as f64 / 1048576.0));
+            } else if disk.size_bytes > 1024 {
+                disk.calculated_size = Some(format!("{:.2} KB", disk.size_bytes as f64 / 1024.0));
+            } else {
+                disk.calculated_size = Some(format!("{} bytes", disk.size_bytes));
+            }
+        }
+        
+        let nameservers = if let Some(json) = nameservers_json {
+            serde_json::from_str::<Vec<String>>(&json).unwrap_or_else(|_| Vec::new())
+        } else {
+            Vec::new()
+        };
+        
+        // Deserialize BMC credentials if present
+        let bmc_credentials = if let Some(json) = bmc_credentials_json {
+            serde_json::from_str::<dragonfly_common::models::BmcCredentials>(&json).ok()
+        } else {
+            None
+        };
+        
+        // Parse status and ensure os_choice is set when we have ExistingOS
+        let status = parse_status(&status_str);
+        
+        // os_choice is separate from status now
+        let os_choice: Option<String> = row.get(4);
+        
+        Ok(Some(Machine {
+            id: Uuid::parse_str(&id).unwrap_or_default(),
+            mac_address,
+            ip_address: row.get(2),
+            hostname: row.get(3),
+            os_choice,
+            os_installed: row.get(5),
+            status,
+            disks,
+            nameservers,
+            created_at: parse_datetime(&row.get::<String, _>(9)),
+            updated_at: parse_datetime(&row.get::<String, _>(10)),
+            memorable_name: Some(memorable_name),
+            bmc_credentials,
+            installation_progress: row.get::<Option<i64>, _>(12).unwrap_or(0) as u8,
+            installation_step: row.get(13),
+            last_deployment_duration: None,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
 // Assign OS to a machine
 pub async fn assign_os(id: &Uuid, os_choice: &str) -> Result<bool> {
     let pool = get_pool().await?;

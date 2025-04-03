@@ -13,6 +13,7 @@ use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::watch;
 use anyhow::Context;
 use listenfd::ListenFd;
+use axum::middleware; // Import middleware
 
 use crate::auth::{AdminBackend, auth_router, load_credentials, generate_default_credentials, load_settings, Settings, Credentials};
 use crate::db::init_db;
@@ -172,6 +173,8 @@ pub struct AppState {
     pub is_installed: bool,
     pub is_demo_mode: bool, // True if explicitly DEMO or if not installed
     pub is_installation_server: bool, // True if started via install command
+    // Add client IP tracking
+    pub client_ip: Arc<Mutex<Option<String>>>,
 }
 
 // Clean up any existing processes
@@ -443,6 +446,8 @@ pub async fn run() -> anyhow::Result<()> {
         is_installed,
         is_demo_mode,
         is_installation_server,
+        // Initialize client IP tracking
+        client_ip: Arc::new(Mutex::new(None)),
     };
 
     // Session store setup
@@ -485,7 +490,8 @@ pub async fn run() -> anyhow::Result<()> {
         .layer(Extension(db_pool.clone()))
         // Add back a STANDARD TraceLayer if desired for non-install runs (will respect RUST_LOG)
         .layer(TraceLayer::new_for_http()) // Standard layer respects RUST_LOG
-        .with_state(app_state);
+        .with_state(app_state.clone()) // Add the state FIRST
+        .layer(middleware::from_fn_with_state(app_state.clone(), track_client_ip)); // THEN apply state-dependent layers
 
     // Handoff listener setup 
     if let Some(mode) = &current_mode {
@@ -584,7 +590,7 @@ pub async fn run() -> anyhow::Result<()> {
 
     // Start serving with graceful shutdown
     println!("Server started, press Ctrl+C to stop");
-    axum::serve(listener, app) // Essential
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()) // Explicitly add ConnectInfo
         .with_graceful_shutdown(shutdown_signal)
         .await
         .context("Server error")?;
@@ -608,3 +614,6 @@ async fn handle_favicon() -> impl IntoResponse {
 
 // Access functions for main.rs to use
 pub use db::database_exists;
+
+// Bring the middleware function into scope
+use crate::api::track_client_ip;

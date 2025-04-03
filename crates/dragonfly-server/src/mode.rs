@@ -1022,7 +1022,7 @@ pub async fn configure_flight_mode() -> Result<()> {
         info!("Building Dragonfly Agent APK overlay...");
         
         // Create the artifacts directory if it doesn't exist
-        let artifacts_dir = StdPath::new("/var/lib/dragonfly/artifacts");
+        let artifacts_dir = StdPath::new("/var/lib/dragonfly/ipxe-artifacts");
         if !artifacts_dir.exists() {
             match fs::create_dir_all(artifacts_dir).await {
                 Ok(_) => debug!("Created artifacts directory: {:?}", artifacts_dir),

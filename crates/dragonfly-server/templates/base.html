@@ -50,8 +50,6 @@
             document.documentElement.style.display = 'block';
         })();
     </script>
-    <!-- HTMX for server interactions -->
-    <script src="https://cdn.jsdelivr.net/npm/htmx.org@1.9.10"></script>
     <!-- Alpine.js for UI interactivity -->
     <script src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
     <!-- Inter font from Google Fonts -->
@@ -122,152 +120,79 @@
     
     <!-- SSE for live reload during development -->
     <script>
-        // Connect to SSE for real-time updates
         document.addEventListener("DOMContentLoaded", function() {
-            const evtSource = new EventSource("/api/events");
-            
-            // Set up listeners for specific event types
-            evtSource.addEventListener("machine_updated", function(event) {
+            // Make evtSource global and accessible
+            window.globalEvtSource = new EventSource("/api/events"); // Renamed to avoid conflict
+
+            function handleSSEEvent(event, handlerFn) {
                 try {
                     const data = JSON.parse(event.data);
-                    console.log("Machine updated:", data);
-                    
-                    // Only refresh if we're viewing the machines page or the specific machine
+                    handlerFn(data);
+                } catch (e) {
+                    if (event.data !== 'ping') { // Ignore ping messages common in SSE
+                       console.error(`Error parsing ${event.type || 'message'} event:`, e, "Raw data:", event.data);
+                    }
+                }
+            }
+
+            // Use the global source for listeners
+            window.globalEvtSource.addEventListener("machine_updated", function(event) {
+                handleSSEEvent(event, (data) => {
+                    console.log("Global listener: Machine updated:", data);
                     const machineListElement = document.getElementById('machine-list');
                     const currentPath = window.location.pathname;
-                    
+                    const machineIdMatch = currentPath.match(/^\/machines\/([a-f0-9-]+)$/);
+
                     if (machineListElement) {
-                        // We're on the machines page - refresh the list
-                        htmx.trigger(machineListElement, 'refreshMachines');
-                        
-                        // Show toast notification
-                        showToast(`Machine ${data.id} updated`, 'info');
-                    } 
-                    else if (currentPath.match(/^\/machines\/[a-f0-9-]+$/)) {
-                        // We're viewing a specific machine, check if it's the one that was updated
-                        const machineId = currentPath.split('/').pop();
-                        if (machineId === data.id) {
-                            // Refresh just the machine details
-                            const detailsElement = document.querySelector('[hx-trigger="refreshMachineDetails"]');
-                            if (detailsElement) {
-                                htmx.trigger(detailsElement, 'refreshMachineDetails');
-                                showToast("Machine details updated", 'info');
-                            }
-                        }
+                        showToast(`Machine ${data.hostname || data.id} updated`, 'info');
+                        console.log("TODO: Refresh machine list display");
+                    } else if (machineIdMatch && machineIdMatch[1] === data.id) {
+                        // Details page handles its own logic
                     }
-                } catch (e) {
-                    console.error("Error parsing SSE event data:", e, "Raw data:", event.data);
-                }
+                });
             });
-            
-            // Add handler for template_changed event for live reload during development
-            evtSource.addEventListener("template_changed", function(event) {
-                try {
-                    const data = JSON.parse(event.data);
-                    console.log("Template changed, checking if reload needed:", data);
+
+            window.globalEvtSource.addEventListener("template_changed", function(event) {
+                handleSSEEvent(event, (data) => {
+                    console.log("Global listener: Template changed, reloading page...", data);
                     window.location.reload();
-                } catch (e) {
-                    console.error("Error parsing template_changed event data:", e, "Raw data:", event.data);
-                }
+                });
             });
-            
-            evtSource.addEventListener("machine_discovered", function(event) {
-                try {
-                    const data = JSON.parse(event.data);
-                    console.log("Machine discovered:", data);
-                    
-                    // Only refresh if we're viewing the machines page
+
+            window.globalEvtSource.addEventListener("machine_discovered", function(event) {
+                handleSSEEvent(event, (data) => {
+                    console.log("Global listener: Machine discovered:", data);
                     const machineListElement = document.getElementById('machine-list');
                     if (machineListElement) {
-                        htmx.trigger(machineListElement, 'refreshMachines');
-                        showToast("New machine discovered", 'success');
+                        showToast(`New machine ${data.hostname || data.id} discovered`, 'success');
+                        console.log("TODO: Refresh machine list display");
                     }
-                } catch (e) {
-                    console.error("Error parsing machine_discovered event data:", e, "Raw data:", event.data);
-                }
+                });
             });
-            
-            evtSource.addEventListener("machine_deleted", function(event) {
-                try {
-                    const data = JSON.parse(event.data);
-                    console.log("Machine deleted:", data);
-                    
+
+            window.globalEvtSource.addEventListener("machine_deleted", function(event) {
+                handleSSEEvent(event, (data) => {
+                    console.log("Global listener: Machine deleted:", data);
                     const machineListElement = document.getElementById('machine-list');
                     const currentPath = window.location.pathname;
-                    
+                    const machineIdMatch = currentPath.match(/^\/machines\/([a-f0-9-]+)$/);
+
                     if (machineListElement) {
-                        htmx.trigger(machineListElement, 'refreshMachines');
                         showToast(`Machine ${data.id} deleted`, 'warning');
-                    } 
-                    else if (currentPath.match(/^\/machines\/[a-f0-9-]+$/)) {
-                        // If we're viewing the machine that was deleted, redirect to the machines list
-                        const machineId = currentPath.split('/').pop();
-                        if (machineId === data.id) {
-                            showToast("This machine has been deleted", 'error');
-                            // Redirect after a short delay so the user can see the message
-                            setTimeout(() => {
-                                window.location.href = "/machines";
-                            }, 2000);
-                        }
+                        console.log("TODO: Refresh machine list display");
+                    } else if (machineIdMatch && machineIdMatch[1] === data.id) {
+                        showToast("This machine has been deleted", 'error');
+                        setTimeout(() => { window.location.href = "/machines"; }, 2000);
                     }
-                } catch (e) {
-                    console.error("Error parsing machine_deleted event data:", e, "Raw data:", event.data);
-                }
+                });
             });
-            
-            // Handle generic messages (fallback)
-            evtSource.addEventListener("message", function(event) {
-                console.log("Generic event received:", event.data);
-                try {
-                    const data = JSON.parse(event.data);
-                    
-                    // For backward compatibility - reload if type is "reload"
-                    if (data.type === "reload") {
-                        // Try targeted refresh first
-                        const machineListElement = document.getElementById('machine-list');
-                        if (machineListElement) {
-                            htmx.trigger(machineListElement, 'refreshMachines');
-                        } else {
-                            // Fall back to full page reload if needed
-                            console.log("No specific handler for this event, refreshing selected elements or page...");
-                            
-                            // Try to refresh any element with a refreshable trigger
-                            const refreshTargets = document.querySelectorAll('[hx-trigger*="refresh"]');
-                            if (refreshTargets.length > 0) {
-                                refreshTargets.forEach(target => {
-                                    // Extract the refresh trigger from the element
-                                    const triggerAttr = target.getAttribute('hx-trigger');
-                                    const refreshTrigger = triggerAttr.split(',').find(t => t.includes('refresh'));
-                                    if (refreshTrigger) {
-                                        const triggerName = refreshTrigger.trim().split(' ')[0];
-                                        htmx.trigger(target, triggerName);
-                                    }
-                                });
-                            } else {
-                                // If no specific refreshable elements found and it's a UI-changing action
-                                if (data.message && (
-                                    data.message.includes('updated') || 
-                                    data.message.includes('created') || 
-                                    data.message.includes('deleted'))
-                                ) {
-                                    window.location.reload();
-                                }
-                            }
-                        }
-                    }
-                } catch (e) {
-                    console.error("Error parsing SSE generic event:", e, "Raw data:", event.data);
-                }
+
+            window.globalEvtSource.addEventListener("error", function(err) {
+                console.warn("Global SSE connection error, EventSource will attempt to reconnect.");
             });
-            
-            evtSource.onerror = function(err) {
-                console.log("SSE connection error, reconnecting...");
-                // EventSource will automatically try to reconnect
-            };
-            
-            // Clean up the connection when the page is unloaded
-            window.addEventListener("beforeunload", function() {
-                evtSource.close();
+
+            window.addEventListener("beforeunload", function() { 
+                if (window.globalEvtSource) window.globalEvtSource.close(); 
             });
         });
         
@@ -588,11 +513,25 @@
                                     <button
                                         type="button"
                                         class="inline-flex w-full justify-center rounded-md bg-red-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-red-500 sm:ml-3 sm:w-auto"
-                                        @click="htmx.ajax('DELETE', `/api/machines/${currentMachine}`, {
-                                            target: '#machine-list',
-                                            swap: 'innerHTML'
-                                        }).then(() => {
-                                            deleteModal = false;
+                                        @click="fetch(`/api/machines/${currentMachine}`, {
+                                            method: 'DELETE',
+                                            headers: {
+                                                'Content-Type': 'application/json'
+                                            }
+                                        })
+                                        .then((response) => {
+                                            if (!response.ok) {
+                                                throw new Error('Network response was not ok');
+                                            }
+                                            showToast('Machine deleted successfully', 'success');
+                                            // Redirect after a short delay to allow toast visibility
+                                            setTimeout(() => { window.location.href = '/machines'; }, 1000);
+                                            deleteModal = false; // Close modal
+                                        })
+                                        .catch(error => {
+                                            showToast('Failed to delete machine', 'error');
+                                            console.error('Error deleting machine:', error);
+                                            // Keep modal open on error
                                         })"
                                     >
                                         Delete
@@ -725,9 +664,5 @@
     {# ... (existing installation banner) ... #}
     {% endif %}
     {# --- End Installation Progress Banner --- #}
-
-    <!-- Toast Notification Container -->
-    <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col items-end space-y-2"></div>
-    <script src="/static/js/toast.js"></script>
 </body>
 </html>

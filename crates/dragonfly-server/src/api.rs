@@ -1,14 +1,18 @@
 use axum::{
     routing::{get, post, delete, put},
     Router,
-    extract::{State, Path, Json, Form, FromRequest},
-    http::{StatusCode},
+    extract::{
+        State, Path, Json, Form, FromRequest, Query,
+        connect_info::ConnectInfo,
+    },
+    http::{StatusCode, header::HeaderValue, HeaderMap},
     response::{IntoResponse, Html, Response, sse::{Event, Sse, KeepAlive}},
+    middleware::{from_fn_with_state}, // Removed from_fn, kept Next here
 };
 use std::convert::Infallible;
 use serde_json::json;
 use uuid::Uuid;
-use dragonfly_common::models::{MachineStatus, HostnameUpdateRequest, HostnameUpdateResponse, OsInstalledUpdateRequest, OsInstalledUpdateResponse, BmcType, BmcCredentials, StatusUpdateRequest, BmcCredentialsUpdateRequest, InstallationProgressUpdateRequest, RegisterRequest};
+use dragonfly_common::models::{MachineStatus, HostnameUpdateRequest, HostnameUpdateResponse, OsInstalledUpdateRequest, OsInstalledUpdateResponse, BmcType, BmcCredentials, StatusUpdateRequest, BmcCredentialsUpdateRequest, InstallationProgressUpdateRequest, RegisterRequest, Machine};
 use crate::db::{self, RegisterResponse, ErrorResponse, OsAssignmentRequest, get_machine_tags, update_machine_tags as db_update_machine_tags};
 use crate::AppState;
 use crate::auth::AuthSession;
@@ -39,35 +43,34 @@ use url::Url;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use axum::body::{Body, Bytes};
-use axum::http::header::{HeaderMap, HeaderValue};
 use http_body::Frame;
 use http_body_util::{StreamBody, Empty};
 use dragonfly_common::Error;
 use tokio::io::{AsyncSeekExt, AsyncReadExt, AsyncWriteExt};
 use futures::StreamExt; // For .next() on stream
+use crate::ui::WorkflowProgressTemplate;
+use crate::ui; // Import the ui module
+use axum::middleware::Next;
+use axum::http::Request;
+use std::net::SocketAddr;
 
 pub fn api_router() -> Router<crate::AppState> {
     Router::new()
-        .route("/machines", post(register_machine))
-        .route("/machines", get(get_all_machines))
-        .route("/machines/{id}", get(get_machine))
-        .route("/machines/{id}", delete(delete_machine))
-        .route("/machines/{id}", put(update_machine))
-        .route("/machines/{id}/os", get(get_machine_os))
-        .route("/machines/{id}/os", post(assign_os))
-        .route("/machines/{id}/status", get(get_machine_status))
-        .route("/machines/{id}/status", post(update_status))
-        .route("/machines/{id}/hostname", post(update_hostname))
+        .route("/machines", get(get_all_machines).post(register_machine))
+        .route("/machines/install-status", get(get_install_status))
+        .route("/machines/{id}", get(get_machine).put(update_machine).delete(delete_machine))
+        .route("/machines/{id}/os", get(get_machine_os).post(assign_os))
         .route("/machines/{id}/hostname", get(get_hostname_form))
-        .route("/machines/{id}/os_installed", post(update_os_installed))
+        .route("/machines/{id}/status", put(update_status))
+        .route("/machines/{id}/hostname", put(update_hostname))
+        .route("/machines/{id}/os-installed", put(update_os_installed))
         .route("/machines/{id}/bmc", post(update_bmc))
-        .route("/machines/{id}/progress", post(update_installation_progress))
-        .route("/machines/{id}/tags", get(api_get_machine_tags))
-        .route("/machines/{id}/tags", put(api_update_machine_tags))
-        .route("/events", get(sse_events))
         .route("/machines/{id}/workflow-progress", get(get_workflow_progress))
+        .route("/machines/{id}/tags", get(api_get_machine_tags).put(api_update_machine_tags))
+        .route("/machines/{id}/tags/{tag}", delete(api_delete_machine_tag))
+        .route("/installation/progress", put(update_installation_progress))
+        .route("/events", get(machine_events))
         .route("/heartbeat", get(heartbeat))
-        .route("/install/status", get(get_install_status))
 }
 
 // Content constants
@@ -1337,93 +1340,53 @@ pub async fn get_machine_status(Path(id): Path<Uuid>) -> impl IntoResponse {
     Html(html)
 }
 
-// Single SSE handler for all event types
-async fn sse_events(
+// Rename from sse_events to machine_events to match the function name used in the working implementation
+async fn machine_events(
     State(state): State<AppState>,
 ) -> Sse<impl Stream<Item = std::result::Result<Event, Infallible>>> {
-    info!("Client connected to SSE endpoint (/events)");
     let rx = state.event_manager.subscribe();
     
-    // Prepare the initial state event to send immediately
-    let initial_event: Option<Result<Event, Infallible>> = {
-        let state_ref_option = {
-            let guard = INSTALL_STATE_REF.read().unwrap();
-            guard.as_ref().cloned()
-        };
-        
-        if let Some(state_ref) = state_ref_option {
-            // Use tokio::task::block_in_place for the synchronous lock inside the async fn
-            // Or preferably, make INSTALL_STATE_REF use tokio::sync::Mutex if possible
-            // For now, let's assume it's okay or handle potential blocking
-            let current_state = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    state_ref.lock().await.clone()
-                })
-            });
-
-            info!("Preparing initial installation state to send: {:?}", current_state);
-            
-            let payload = serde_json::json!({
-                "message": current_state.get_message(),
-                "animation": current_state.get_animation_class(),
-            });
-            let event_data = payload.to_string(); // Just the data for install_status
-            
-            Some(Ok(Event::default()
-                .event("install_status")
-                .data(event_data)))
-        } else {
-            info!("No initial installation state found to send.");
-            None
-        }
-    };
-
-    // Create the stream, starting with the initial event if available
-    let stream = stream::unfold((rx, initial_event), |(mut rx, mut initial)| async move {
-        // If there's an initial event, yield it first
-        if let Some(event) = initial.take() {
-             info!("Yielding initial state event directly to client.");
-            return Some((event, (rx, None))); // Pass along rx and None for initial
-        }
-
-        // Otherwise, wait for the next event from the broadcast channel
+    let stream = stream::unfold(rx, |mut rx| async move {
         match rx.recv().await {
             Ok(event_string) => {
-                // Parse the event string to extract type and data
-                let event_parts: Vec<&str> = event_string.splitn(2, ':').collect();
-                let event_type = event_parts[0];
-                let event_data = event_parts.get(1).unwrap_or(&"");
-                
-                // Different event types need different formatting
-                let sse_event = match event_type {
-                    // Machine events need the id wrapper JSON format
-                    "machine_discovered" | "machine_updated" | "machine_deleted" => {
-                        let json_data = serde_json::json!({ "id": event_data }).to_string();
-                        Event::default().event(event_type).data(json_data)
-                    },
-                    // Installation events pass the raw data through (already formatted)
-                    "install_status" | "browser_redirect" => {
-                        Event::default().event(event_type).data(*event_data)
-                    },
-                    // Default format for any other event types
-                    _ => {
-                        info!("Unknown SSE event type: {}, using default formatting", event_type);
-                        Event::default().event(event_type).data(*event_data)
-                    }
+                // Parse the incoming string like "event_type:uuid"
+                let parts: Vec<&str> = event_string.splitn(2, ':').collect();
+                let (event_type, event_id_str) = if parts.len() == 2 {
+                    (parts[0], Some(parts[1]))
+                } else {
+                    (event_string.as_str(), None) // Handle cases without an ID, like maybe a generic broadcast
+                };
+
+                // Construct JSON payload
+                let data_payload = if let Some(id_str) = event_id_str {
+                    json!({ "type": event_type, "id": id_str })
+                } else {
+                    json!({ "type": event_type })
                 };
                 
-                Some((Ok(sse_event), (rx, None))) // Pass along rx and None for initial
+                // Serialize JSON to string for SSE data field
+                match serde_json::to_string(&data_payload) {
+                    Ok(json_string) => {
+                        let sse_event = Event::default()
+                            .event(event_type) // Optionally set the event type field too
+                            .data(json_string); 
+                        Some((Ok(sse_event), rx))
+                    },
+                    Err(e) => {
+                        error!("Failed to serialize SSE event data to JSON: {}", e);
+                        // Send a comment event instead of an Infallible error
+                        let comment_event = Event::default().comment("Internal error: failed to serialize event.");
+                        Some((Ok(comment_event), rx))
+                    }
+                }
             },
-            Err(e) => {
-                error!("SSE stream recv error: {:?}. Closing stream.", e);
-                None // End stream on error
-            },
+            Err(_) => None, // Channel closed or lag
         }
     });
 
     Sse::new(stream).keep_alive(
         KeepAlive::new()
-            .interval(Duration::from_secs(15))
+            .interval(Duration::from_secs(1))
             .text("ping")
     )
 }
@@ -1642,7 +1605,8 @@ fn create_streaming_response(
 
 async fn read_file_as_stream(
     path: &StdPath,
-    range_header: Option<&HeaderValue> // Add parameter for Range header
+    range_header: Option<&HeaderValue>, // Add parameter for Range header
+    state: Option<&AppState> // Add optional state for event emission
 ) -> Result<(ReceiverStream<Result<Bytes, Error>>, Option<u64>, Option<String>), Error> { // Return size and Content-Range
     let mut file = fs::File::open(path).await.map_err(|e| Error::Internal(format!("Failed to open file {}: {}", path.display(), e)))?; // Added mut back
     let (tx, rx) = mpsc::channel::<Result<Bytes, Error>>(32);
@@ -1652,10 +1616,15 @@ async fn read_file_as_stream(
     let metadata = fs::metadata(path).await.map_err(|e| Error::Internal(format!("Failed to get metadata {}: {}", path.display(), e)))?;
     let total_size = metadata.len();
     
+    // Get file name for progress tracking
+    let file_name = path.file_name()
+                        .and_then(|name| name.to_str())
+                        .map(String::from);
+    
     let (start, _end, response_length, content_range_header) = // Marked end as unused
         if let Some(range_val) = range_header {
             if let Ok(range_str) = range_val.to_str() {
-                if let Some((start, end)) = parse_range_header(range_str, total_size) {
+                if let Some((start, end)) = parse_range_header(range_str, total_size, file_name.as_deref(), state).await {
                     let length = end - start + 1;
                     let content_range = format!("bytes {}-{}/{}", start, end, total_size);
                     info!("Serving range request: {} for file {}", content_range, path.display());
@@ -1751,12 +1720,16 @@ async fn read_file_as_stream(
 
 // Serve iPXE artifacts (scripts and binaries)
 // Function to serve an iPXE artifact file from a configured directory
-pub async fn serve_ipxe_artifact(headers: HeaderMap, Path(requested_path): Path<String>) -> Response {
+pub async fn serve_ipxe_artifact(
+    headers: HeaderMap,
+    Path(requested_path): Path<String>,
+    State(state): State<AppState>, // Add AppState to access event manager
+) -> Response {
     // Define constants for directories and URLs
     const DEFAULT_ARTIFACT_DIR: &str = "/var/lib/dragonfly/ipxe-artifacts";
     const ARTIFACT_DIR_ENV_VAR: &str = "DRAGONFLY_IPXE_ARTIFACT_DIR";
     const ALLOWED_IPXE_SCRIPTS: &[&str] = &["hookos", "dragonfly-agent"]; // Define allowlist
-    const AGENT_APKOVL_PATH: &str = "dragonfly-agent/localhost.apkovl.tar.gz";
+    const AGENT_APKOVL_PATH: &str = "/var/lib/dragonfly/ipxe-artifacts/dragonfly-agent/localhost.apkovl.tar.gz";
     const AGENT_BINARY_URL: &str = "https://github.com/Zorlin/dragonfly/raw/refs/heads/main/dragonfly-agent-musl"; // TODO: Make configurable
     
     // Get the base directory from env var or use default
@@ -1801,7 +1774,7 @@ pub async fn serve_ipxe_artifact(headers: HeaderMap, Path(requested_path): Path<
         }
         
         // Serve allowed script or binary artifact from cache using streaming
-        match read_file_as_stream(&artifact_path, headers.get(axum::http::header::RANGE)).await { // Pass Range header
+        match read_file_as_stream(&artifact_path, headers.get(axum::http::header::RANGE), Some(&state)).await {
             Ok((stream, file_size, content_range)) => {
                 info!("Streaming cached artifact from disk: {}", requested_path);
                 return create_streaming_response(stream, content_type, file_size, content_range); // Pass content_range
@@ -1816,10 +1789,13 @@ pub async fn serve_ipxe_artifact(headers: HeaderMap, Path(requested_path): Path<
         info!("Artifact {} not found locally, attempting to fetch or generate", requested_path);
         
         // FIRST check if it is the specific apkovl path that needs generation
-        if requested_path == AGENT_APKOVL_PATH {
+        // Compare against the RELATIVE path expected from the URL
+        if requested_path == "dragonfly-agent/localhost.apkovl.tar.gz" {
             // --- Special Case: Generate apkovl on demand ---
-            info!("Generating {} on demand...", AGENT_APKOVL_PATH);
-            
+            // Use the full absolute path for generation logic
+            let generation_target_path = PathBuf::from(AGENT_APKOVL_PATH);
+            info!("Generating {} on demand...", generation_target_path.display());
+
             let base_url = match env::var("DRAGONFLY_BASE_URL") {
                 Ok(url) => url,
                 Err(_) => {
@@ -1828,44 +1804,47 @@ pub async fn serve_ipxe_artifact(headers: HeaderMap, Path(requested_path): Path<
                 }
             };
 
-            match generate_agent_apkovl(&artifact_path, &base_url, AGENT_BINARY_URL).await {
+            match generate_agent_apkovl(&generation_target_path, &base_url, AGENT_BINARY_URL).await {
                 Ok(()) => {
-                    info!("Successfully generated {}, now serving...", AGENT_APKOVL_PATH);
-                    match read_file_as_stream(&artifact_path, None).await { // Pass None for range
-                        Ok((stream, file_size, _)) => { // Adjust pattern match
-                            return create_streaming_response(stream, "application/gzip", file_size, None); // Pass None for content_range
+                    info!("Successfully generated {}, now serving...", generation_target_path.display());
+                    // Serve the newly generated file (no range needed here as it was just created)
+                    match read_file_as_stream(&generation_target_path, None, None).await { 
+                        Ok((stream, file_size, _)) => {
+                            return create_streaming_response(stream, "application/gzip", file_size, None); 
                         },
                         Err(e) => {
-                            error!("Failed to stream newly generated apkovl {}: {}", AGENT_APKOVL_PATH, e);
+                            error!("Failed to stream newly generated apkovl {}: {}", generation_target_path.display(), e);
                             return (StatusCode::INTERNAL_SERVER_ERROR, "Error reading newly generated apkovl").into_response();
                         }
                     }
                 },
                 Err(e) => {
-                    error!("Failed to generate {}: {}", AGENT_APKOVL_PATH, e);
-                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to generate {}: {}", AGENT_APKOVL_PATH, e)).into_response();
+                    error!("Failed to generate {}: {}", generation_target_path.display(), e);
+                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to generate {}: {}", generation_target_path.display(), e)).into_response();
                 }
             }
         } 
         // NEXT check if it's a generic .ipxe script that needs generation
         else if requested_path.ends_with(".ipxe") {
             // --- Generate iPXE scripts on the fly ---
+            // Use the relative path for script generation lookup
             match generate_ipxe_script(&requested_path).await {
                 Ok(script) => {
                     info!("Generated {} script dynamically.", requested_path);
-                    // Cache in background
-                    let path_clone = artifact_path.clone();
+                    // Cache in background using the full artifact_path
+                    let path_clone = artifact_path.clone(); 
                     let script_clone = script.clone();
+                    let requested_path_clone = requested_path.clone(); // Clone for the task
                     tokio::spawn(async move {
                         // Ensure parent directory exists before writing
                         if let Some(parent) = path_clone.parent() {
                              if let Err(e) = fs::create_dir_all(parent).await {
-                                 warn!("Failed to create directory for caching {}: {}", requested_path, e);
+                                 warn!("Failed to create directory for caching {}: {}", requested_path_clone, e);
                                  return; 
                              }
                          }
                         if let Err(e) = fs::write(&path_clone, &script_clone).await {
-                             warn!("Failed to cache generated {} script: {}", requested_path, e);
+                             warn!("Failed to cache generated {} script: {}", requested_path_clone, e);
                         }
                     });
                     
@@ -1913,10 +1892,17 @@ pub async fn serve_ipxe_artifact(headers: HeaderMap, Path(requested_path): Path<
             };
             
             // Use the efficient streaming download with caching for known artifacts
-            match stream_download_with_caching(remote_url, &artifact_path, headers.get(axum::http::header::RANGE)).await { // Pass Range header
+            // Use artifact_path (full path) for caching
+            match stream_download_with_caching(
+                remote_url, 
+                &artifact_path, 
+                headers.get(axum::http::header::RANGE),
+                None,
+                Some(&state)
+            ).await {
                 Ok((stream, content_length, content_range)) => {
                     info!("Streaming artifact {} from remote source", requested_path);
-                    return create_streaming_response(stream, "application/octet-stream", content_length, content_range); // Pass content_range
+                    return create_streaming_response(stream, "application/octet-stream", content_length, content_range);
                 },
                 Err(e) => {
                     error!("Failed to stream artifact {}: {}", requested_path, e);
@@ -1931,10 +1917,87 @@ pub async fn serve_ipxe_artifact(headers: HeaderMap, Path(requested_path): Path<
     }
 }
 
+// Add this function after parse_range_header
+// Helper function to track and report image download progress
+async fn track_download_progress(
+    machine_id: Option<Uuid>, 
+    bytes_downloaded: u64, 
+    total_size: u64,
+    state: AppState
+) {
+    if total_size == 0 {
+        return; // Skip progress for zero-sized files
+    }
+    
+    let progress_float = (bytes_downloaded as f64 / total_size as f64) * 100.0;
+    let task_name = "Stream image";
+    
+    // If we have a machine ID, send task-specific event
+    if let Some(id) = machine_id {
+        // Update the machine's task progress
+        if let Err(e) = db::update_installation_progress(
+            &id,
+            progress_float.min(100.0) as u8, // Convert to u8 for DB, clamped at 100
+            Some(task_name)
+        ).await {
+            warn!("Failed to update download progress for machine {}: {}", id, e);
+        }
+        
+        // For real-time UI updates, emit a more detailed event with floating point precision
+        let progress_event = format!(
+            "task_progress:{}:{}:{:.3}:{}:{}",
+            id,                   // Machine ID
+            task_name,            // Task name
+            progress_float,       // Floating point percentage (with 3 decimal precision)
+            bytes_downloaded,     // Current bytes
+            total_size            // Total bytes
+        );
+        
+        // Emit the detailed task progress event
+        if let Err(e) = state.event_manager.send(progress_event) {
+            warn!("Failed to emit task progress event: {}", e);
+        }
+        
+        // Also emit standard machine updated event for compatibility
+        let _ = state.event_manager.send(format!("machine_updated:{}", id));
+    }
+    
+    // Also send IP-based progress event for any HTTP requests
+    let client_ip_guard = state.client_ip.lock().await;
+    if let Some(client_ip) = client_ip_guard.as_ref() {
+        // Find machine by IP if possible (for cases where we don't have machine_id)
+        let ip_machine_id = if machine_id.is_none() {
+            match db::get_machine_by_ip(client_ip).await {
+                Ok(Some(machine)) => Some(machine.id),
+                _ => None,
+            }
+        } else {
+            machine_id
+        };
+        
+        // Emit IP-based progress event
+        let ip_progress_event = serde_json::json!({
+            "ip": client_ip,
+            "progress": progress_float,
+            "bytes_downloaded": bytes_downloaded,
+            "total_size": total_size,
+            "file_name": "Stream image",
+            "machine_id": ip_machine_id
+        }).to_string();
+        
+        if let Err(e) = state.event_manager.send(format!("ip_download_progress:{}", ip_progress_event)) {
+            warn!("Failed to emit IP-based progress event: {}", e);
+        }
+    }
+}
+
+// Modify stream_download_with_caching to track progress
 async fn stream_download_with_caching(
     url: &str,
     cache_path: &StdPath,
-    range_header: Option<&HeaderValue> // Add parameter for Range header
+    range_header: Option<&HeaderValue>, // Add parameter for Range header
+    machine_id: Option<Uuid>, // Add optional machine ID for tracking
+    state: Option<&AppState>, // Add optional state for event emission
 ) -> Result<(ReceiverStream<Result<Bytes, Error>>, Option<u64>, Option<String>), Error> { // Return Content-Range
     // Create parent directory if needed
     if let Some(parent) = cache_path.parent() {
@@ -1943,8 +2006,22 @@ async fn stream_download_with_caching(
 
     // Check if file is already cached
     if cache_path.exists() {
+        // Even when serving from cache, track progress for range requests
+        if let (Some(machine_id), Some(state), Some(range_val)) = (machine_id, state, range_header) {
+            if let Ok(range_str) = range_val.to_str() {
+                let file_size = fs::metadata(cache_path).await
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                    
+                if let Some((start, end)) = parse_range_header(range_str, file_size, None, Some(state)).await {
+                    let bytes_downloaded = end - start + 1;
+                    tokio::spawn(track_download_progress(Some(machine_id), bytes_downloaded, file_size, state.clone()));
+                }
+            }
+        }
+        
         info!("Serving cached artifact from: {:?}", cache_path);
-        return read_file_as_stream(cache_path, range_header).await; // Pass Range header
+        return read_file_as_stream(cache_path, range_header, state).await; // Pass Range header
     }
     
     info!("Downloading and caching artifact from: {}", url);
@@ -1969,6 +2046,13 @@ async fn stream_download_with_caching(
     
     let url_clone = url.to_string();
     let cache_path_clone = cache_path.to_path_buf();
+    
+    // For tracking download progress
+    let total_size = content_length.unwrap_or(0);
+    let mut total_bytes_downloaded: u64 = 0;
+    let tracking_machine_id = machine_id;
+    let app_state_clone = state.cloned();
+    
     tokio::spawn(async move {
         let mut client_disconnected = false;
         let mut download_error = false;
@@ -1980,6 +2064,7 @@ async fn stream_download_with_caching(
             match chunk_result {
                 Ok(chunk) => {
                     let chunk_clone = chunk.clone();
+                    let chunk_size = chunk.len() as u64;
                     
                     // Write chunk to cache file concurrently
                     let file_clone = Arc::clone(&file);
@@ -1988,6 +2073,14 @@ async fn stream_download_with_caching(
                         file.write_all(&chunk_clone).await
                     });
 
+                    // Update progress tracking
+                    total_bytes_downloaded += chunk_size;
+                    if let (Some(machine_id), Some(state)) = (tracking_machine_id, &app_state_clone) {
+                        if total_size > 0 {
+                            track_download_progress(Some(machine_id), total_bytes_downloaded, total_size, state.clone()).await;
+                        }
+                    }
+                    
                     // Attempt to send to client only if not already disconnected
                     if !client_disconnected {
                         if tx.send(Ok(chunk)).await.is_err() {
@@ -2037,6 +2130,13 @@ async fn stream_download_with_caching(
         // Explicitly drop the response stream to release network resources potentially sooner
         drop(stream);
 
+        // Report final progress on successful download
+        if !download_error && total_size > 0 {
+            if let (Some(machine_id), Some(state)) = (tracking_machine_id, &app_state_clone) {
+                track_download_progress(Some(machine_id), total_size, total_size, state.clone()).await;
+            }
+        }
+
         // Ensure file is flushed and closed first
         if let Ok(mut file) = Arc::try_unwrap(file).map_err(|_| "Failed to unwrap Arc").and_then(|mutex| Ok(mutex.into_inner())) {
             if let Err(e) = file.flush().await {
@@ -2071,53 +2171,130 @@ async fn stream_download_with_caching(
     if range_header.is_some() {
         info!("Download complete, now serving range request from cached file: {:?}", cache_path);
         // Re-call read_file_as_stream with the range header on the now-cached file
-        read_file_as_stream(cache_path, range_header).await
+        read_file_as_stream(cache_path, range_header, state).await
     } else {
         // No range requested initially, return the full stream we prepared during download
         Ok((stream, content_length, None)) // No Content-Range for full file
     }
 }
 
-// Helper to parse Range header (e.g., "bytes=0-1023")
-fn parse_range_header(range_str: &str, total_size: u64) -> Option<(u64, u64)> {
-    if !range_str.starts_with("bytes=") { return None; }
-    let ranges = &range_str[6..];
-    // For now, only support single range like "0-1023" or "1024-"
-    let parts: Vec<&str> = ranges.split('-').collect();
-    if parts.len() != 2 { return None; }
+// Helper to parse Range header. Returns (start, end)
+async fn parse_range_header(
+    range_str: &str,
+    total_size: u64,
+    file_name: Option<&str>,
+    state: Option<&AppState>,
+) -> Option<(u64, u64)> {
+    if !range_str.starts_with("bytes=") {
+        return None;
+    }
+    let range_val = &range_str[6..]; // Skip "bytes="
+    let parts: Vec<&str> = range_val.split('-').collect();
+    if parts.len() != 2 {
+        return None;
+    }
 
     let start_str = parts[0].trim();
     let end_str = parts[1].trim();
 
     let start = if start_str.is_empty() {
-        // Handle "bytes=-500" (last 500 bytes)
-        let len = end_str.parse::<u64>().ok()?;
-        total_size.saturating_sub(len)
+        // Suffix range: "-<length>"
+        if end_str.is_empty() { return None; } // Invalid: "-"
+        let suffix_len = end_str.parse::<u64>().ok()?;
+        if suffix_len >= total_size { 0 } else { total_size - suffix_len }
     } else {
+        // Normal range: "start-" or "start-end"
         start_str.parse::<u64>().ok()?
     };
 
     let end = if end_str.is_empty() {
-        // Handle "bytes=1024-" (from 1024 to end)
+        // Range "start-" means start to end of file
         total_size.saturating_sub(1)
     } else {
+        // Range "start-end"
         end_str.parse::<u64>().ok()?
     };
 
-    // Validate range
+    // Validate range: start <= end < total_size
     if start > end || end >= total_size {
-        None // Invalid range
-    } else {
-        Some((start, end))
+        warn!("Invalid range request: start={}, end={}, total_size={}", start, end, total_size);
+        return None;
+    }
+
+    // Optional: Emit progress event for the range being served
+    if let Some(s) = state { // Check if state exists before trying to use it
+        let bytes_downloaded = end - start + 1;
+        let event_data = serde_json::json!({
+            "progress": 100.0, // A single range request is considered 100% of that range
+            "bytes_downloaded": bytes_downloaded,
+            "total_size": total_size,
+            "file_name": file_name.unwrap_or("unknown")
+        }).to_string();
+
+        // Prefer emitting IP-based progress if possible
+        let client_ip_guard = s.client_ip.lock().await;
+        if let Some(client_ip) = client_ip_guard.as_ref() {
+             let ip_progress_event = format!("ip_download_progress:{{ \"ip\": \"{}\", {} }}", client_ip, &event_data[1..]); // Construct JSON manually
+             let _ = s.event_manager.send(ip_progress_event);
+        } else if let Some(f_name) = file_name {
+            // Fallback to file-based progress if IP is unavailable
+            let file_progress_event = format!("file_progress:{}:{}:{}", f_name, 100.0, event_data);
+            let _ = s.event_manager.send(file_progress_event);
+        }
+    }
+
+    Some((start, end))
+}
+
+// Restore original function name and intended purpose (returning HTML partial)
+pub async fn get_workflow_progress(
+    State(app_state): State<AppState>, // Add AppState
+    Path(id): Path<Uuid>
+) -> Response { 
+    info!("Request for workflow progress HTML partial for machine {}", id);
+
+    let machine = match db::get_machine_by_id(&id).await {
+        Ok(Some(m)) => m,
+        Ok(None) => {
+            error!("Machine not found: {}", id);
+            return (StatusCode::NOT_FOUND, Html("<div>Machine not found</div>")).into_response();
+        },
+        Err(e) => {
+            error!("Error fetching machine {}: {}", id, e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, Html("<div>Database error</div>")).into_response();
+        }
+    };
+
+    if machine.status != MachineStatus::InstallingOS {
+        info!("Machine {} is not installing OS, status: {:?}", id, machine.status);
+        return (StatusCode::OK, Html("<div></div>")).into_response(); // Return empty div if not installing
+    }
+
+    match crate::tinkerbell::get_workflow_info(&machine).await {
+        Ok(Some(info)) => {
+            info!("Successfully got workflow info for machine {}: state={}, progress={}", id, info.state, info.progress);
+
+            // Create the context struct (as defined in ui.rs)
+            let context = ui::WorkflowProgressTemplate { 
+                machine_id: id,
+                workflow_info: info,
+            };
+            
+            // Render the partial using MiniJinja
+            ui::render_minijinja(&app_state, "partials/workflow_progress.html", context)
+        },
+        Ok(None) => {
+            info!("No workflow found for machine {}", id);
+            (StatusCode::OK, Html("<div></div>")).into_response()
+        },
+        Err(e) => {
+            error!("Error fetching workflow for machine {}: {}", id, e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Html("<div>Error fetching workflow</div>")).into_response()
+        }
     }
 }
 
-// Stub for getting workflow progress
-pub async fn get_workflow_progress(Path(id): Path<Uuid>) -> Response {
-    info!("Request for workflow progress for machine {}", id);
-    // TODO: Implement logic to fetch actual workflow progress
-    (StatusCode::OK, Json(json!({ "machine_id": id, "progress": 0, "step": "Not Implemented" }))).into_response()
-}
+// ... (rest of api.rs) ...
 
 // Stub for heartbeat
 pub async fn heartbeat() -> Response {
@@ -2319,25 +2496,25 @@ pub fn get_os_info(os: &str) -> OsInfo {
 }
 
 async fn update_installation_progress(
-    auth_session: AuthSession,
+    State(state): State<AppState>, // State is used for event manager
+    _auth_session: AuthSession, // Mark as unused - updates come from agent/tinkerbell
     Path(id): Path<Uuid>,
-    // Use db::InstallationProgressUpdateRequest
     Json(payload): Json<InstallationProgressUpdateRequest>,
 ) -> Response {
-    // Ensure admin authentication
-    // Use the imported require_admin function
+    // Remove admin check - allow agent/tinkerbell to post updates
+    /*
     if let Err(response) = crate::auth::require_admin(&auth_session) {
         return response;
     }
+    */
 
     info!("Updating installation progress for machine {} to {}% (step: {:?})",
           id, payload.progress, payload.step);
 
-    // Update progress in the database
     match db::update_installation_progress(&id, payload.progress, payload.step.as_deref()).await {
         Ok(true) => {
-            // Emit machine updated event - Consider adding progress info?
-            // state.event_manager.send(format!("machine_updated:{}", id));
+            // Emit machine updated event so the UI fetches new progress HTML
+            let _ = state.event_manager.send(format!("machine_updated:{}", id));
             (StatusCode::OK, Json(json!({ "status": "progress_updated", "machine_id": id }))).into_response()
         },
         Ok(false) => {
@@ -2348,7 +2525,7 @@ async fn update_installation_progress(
             (StatusCode::NOT_FOUND, Json(error_response)).into_response()
         },
         Err(e) => {
-            error!("Failed to update installation progress for {}: {}", id, e);
+            error!("Failed to update installation progress for machine {}: {}", id, e);
             let error_response = ErrorResponse {
                 error: "Database Error".to_string(),
                 message: e.to_string(),
@@ -2444,4 +2621,82 @@ async fn get_install_status() -> Response {
             (StatusCode::OK, Json(payload)).into_response()
         }
     }
+}
+
+// Middleware to track client IP address - fixed with proper state extraction
+pub async fn track_client_ip(
+    State(state): State<AppState>,             // State first
+    ConnectInfo(addr): ConnectInfo<SocketAddr>, // Then other FromRequestParts extractors
+    request: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> { // Return Result based on example
+    // Store the client IP address in the AppState
+    let ip = addr.ip().to_string();
+    debug!("Tracking client IP: {}", ip);
+    *state.client_ip.lock().await = Some(ip); // Store the IP
+
+    // Continue processing the request
+    Ok(next.run(request).await) // Wrap response in Ok
+}
+
+// Function to add machine IP tracking to API router helpers
+async fn api_get_machine_by_ip(ip: &str) -> Option<Machine> {
+    match db::get_machine_by_ip(ip).await {
+        Ok(Some(machine)) => Some(machine),
+        _ => None,
+    }
+}
+
+// Add handler for deleting a specific machine tag
+#[axum::debug_handler]
+async fn api_delete_machine_tag(
+    State(state): State<AppState>,
+    auth_session: AuthSession,
+    Path((id, tag)): Path<(Uuid, String)>,
+) -> Response {
+    // Check if user is authenticated as admin
+    if auth_session.user.is_none() {
+        return (StatusCode::UNAUTHORIZED, Json(json!({
+            "error": "Unauthorized",
+            "message": "Admin authentication required for this operation"
+        }))).into_response();
+    }
+
+    // Get current tags for the machine
+    let result = match db::get_machine_tags(&id).await {
+        Ok(tags) => {
+            // Filter out the tag to delete
+            let new_tags: Vec<String> = tags.into_iter()
+                .filter(|t| t != &tag)
+                .collect();
+            
+            // Update with the filtered tags
+            match db::update_machine_tags(&id, &new_tags).await {
+                Ok(true) => {
+                    // Emit machine updated event
+                    let _ = state.event_manager.send(format!("machine_updated:{}", id));
+                    (StatusCode::OK, Json(json!({"success": true, "message": "Tag deleted"})))
+                },
+                Ok(false) => {
+                    (StatusCode::NOT_FOUND, Json(json!({"error": "Machine not found"})))
+                },
+                Err(e) => {
+                    error!("Failed to update tags after deletion for machine {}: {}", id, e);
+                    (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
+                        "error": "Database error", 
+                        "message": format!("Failed to update tags: {}", e)
+                    })))
+                }
+            }
+        },
+        Err(e) => {
+            error!("Failed to get tags for machine {}: {}", id, e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
+                "error": "Database error", 
+                "message": format!("Failed to retrieve tags: {}", e)
+            })))
+        }
+    };
+
+    result.into_response()
 }

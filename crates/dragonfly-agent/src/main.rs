@@ -1,7 +1,6 @@
 use reqwest::Client;
 use anyhow::{Result, Context};
 use dragonfly_common::models::{MachineStatus, DiskInfo, Machine, RegisterRequest, RegisterResponse, StatusUpdateRequest, OsInstalledUpdateRequest};
-use dragonfly_common::mac_to_words;
 use std::env;
 use std::fs;
 use std::path::Path;
@@ -445,7 +444,7 @@ async fn main() -> Result<()> {
     let existing_machine = existing_machines.iter().find(|m| m.mac_address == mac_address);
     
     // Process registration/update as before
-    let machine_id = match existing_machine {
+    let _machine_id = match existing_machine {
         Some(machine) => {
             // Machine exists, update its status
             tracing::info!("Machine already exists with ID: {}", machine.id);
@@ -457,7 +456,7 @@ async fn main() -> Result<()> {
                 message: None,
             };
             
-            let status_response = client.post(format!("{}/api/machines/{}/status", api_url, machine.id))
+            let status_response = client.put(format!("{}/api/machines/{}/status", api_url, machine.id))
                 .json(&status_update)
                 .send()
                 .await
@@ -477,7 +476,7 @@ async fn main() -> Result<()> {
                     os_installed: os_name.to_string(),
                 };
                 
-                let os_installed_response = client.post(format!("{}/api/machines/{}/os_installed", api_url, machine.id))
+                let os_installed_response = client.put(format!("{}/api/machines/{}/os_installed", api_url, machine.id))
                     .json(&os_installed_update)
                     .send()
                     .await
@@ -532,7 +531,7 @@ async fn main() -> Result<()> {
                 message: None,
             };
             
-            let status_response = client.post(format!("{}/api/machines/{}/status", api_url, register_response.machine_id))
+            let status_response = client.put(format!("{}/api/machines/{}/status", api_url, register_response.machine_id))
                 .json(&status_update)
                 .send()
                 .await
@@ -552,7 +551,7 @@ async fn main() -> Result<()> {
                     os_installed: os_name.to_string(),
                 };
                 
-                let os_installed_response = client.post(format!("{}/api/machines/{}/os_installed", api_url, register_response.machine_id))
+                let os_installed_response = client.put(format!("{}/api/machines/{}/os_installed", api_url, register_response.machine_id))
                     .json(&os_installed_update)
                     .send()
                     .await

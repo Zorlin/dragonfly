@@ -47,13 +47,11 @@
         {% if machine.status == "InstallingOS" %}
           {% if workflow_info %}
             <div class="border-t border-gray-200 dark:border-gray-700 p-4 sm:p-6 bg-yellow-50 dark:bg-yellow-900/10"
-                 id="workflow-progress-container"
-                 hx-sse="connect:/api/events"
-                 hx-sse-swap="machine_updated:{{ machine.id }}">
+                 id="workflow-progress-container">
                 <div class="mb-4">
                     <h3 class="text-lg font-medium leading-6 text-gray-900 dark:text-yellow-100">Deployment Progress</h3>
                     <p class="mt-1 text-sm text-gray-500 dark:text-gray-300">
-                        Template: <span class="font-semibold">{{ workflow_info.template_name }}</span> 
+                        Template: <span class="font-semibold">{{ workflow_info.template_name }}</span>
                         {% if workflow_info.current_action %}
                             • Current action: {{ workflow_info.current_action }}
                             {% if workflow_info.current_action == "Completed via kexec detection" %}
@@ -62,11 +60,11 @@
                         {% endif %}
                     </p>
                 </div>
-                
+
                 <div class="relative pt-1">
                     <div class="flex mb-2 items-center justify-between">
                         <div>
-                            <span class="text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full 
+                            <span class="text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full
                                 {% if workflow_info.state == "STATE_FAILED" %}
                                     text-red-600 bg-red-200 dark:text-red-200 dark:bg-red-800/30
                                 {% else %}
@@ -80,18 +78,20 @@
                             </span>
                         </div>
                         <div class="text-right">
-                            <span class="text-xs font-semibold inline-block text-yellow-600 dark:text-yellow-200">
+                            <span class="text-xs font-semibold inline-block text-yellow-600 dark:text-yellow-200 workflow-progress-percent">
                                 {{ workflow_info.progress }}% Complete
                             </span>
                         </div>
                     </div>
                     <div class="overflow-hidden h-2 mb-4 text-xs flex rounded bg-yellow-200 dark:bg-yellow-700/30">
-                        <div class="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center {% if workflow_info.state == "STATE_FAILED" %}bg-red-500 dark:bg-red-600{% else %}bg-yellow-500 dark:bg-yellow-600{% endif %}" 
-                             style="width:{{ workflow_info.progress }}%">
+                        <div
+                            class="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center workflow-overall-progress {% if workflow_info.state == 'STATE_FAILED' %}bg-red-500 dark:bg-red-600{% else %}bg-yellow-500 dark:bg-yellow-600{% endif %}"
+                            style="width: {{ workflow_info.progress }}%;"
+                            data-progress="{{ workflow_info.progress }}">
                         </div>
                     </div>
                 </div>
-                
+
                 <div class="mt-4">
                     <h4 class="text-sm font-medium leading-6 text-gray-700 dark:text-gray-200 mb-2">Task Timeline</h4>
                     <div class="overflow-x-auto">
@@ -107,14 +107,25 @@
                             </thead>
                             <tbody class="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                                 {% for task in workflow_info.tasks %}
-                                    <tr>
+                                    <tr data-task-name="{{ task.name }}"
+                                        data-task-status="{{ task.status }}"
+                                        data-started-at="{{ task.started_at }}"
+                                        data-estimated-duration="{{ task.estimated_duration }}">
                                         <td class="px-3 py-2 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-white">{{ task.name }}</td>
                                         <td class="px-3 py-2 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{{ task.started_at }}</td>
                                         <td class="px-3 py-2 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
                                             {% if task.status == "STATE_SUCCESS" %}
                                                 {{ task.reported_duration }}s
                                             {% elif task.status == "STATE_RUNNING" %}
-                                                <span class="animate-pulse">In progress</span>
+                                                {# JS will fill this with animated progress #}
+                                                <div class="relative w-32">
+                                                    <div class="overflow-hidden h-2 text-xs flex rounded bg-blue-200 dark:bg-blue-700/30">
+                                                        <div class="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center bg-blue-500 dark:bg-blue-600 task-progress-bar"
+                                                             style="width: 0%;"> {# Initial width set by JS #}
+                                                        </div>
+                                                    </div>
+                                                    <div class="text-xs mt-1 task-progress-percent">0%</div>
+                                                </div>
                                             {% else %}
                                                 Pending
                                             {% endif %}
@@ -132,7 +143,7 @@
                                             {% endif %}
                                         </td>
                                         <td class="px-3 py-2 whitespace-nowrap text-sm">
-                                            <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full 
+                                            <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full
                                                 {% if task.status == "STATE_SUCCESS" %}
                                                     bg-green-100 text-green-800 dark:bg-green-400/10 dark:text-green-300
                                                 {% elif task.status == "STATE_FAILED" %}
@@ -150,7 +161,7 @@
                             </tbody>
                         </table>
                     </div>
-                    
+
                     {% if workflow_info.estimated_completion %}
                     <div class="mt-4 text-sm text-gray-600 dark:text-gray-300">
                         <p>Estimated completion: {{ workflow_info.estimated_completion }}</p>
@@ -158,20 +169,125 @@
                     {% endif %}
                 </div>
             </div>
-            
+
             <script>
               // Server-sent events handling with robust reconnection
               let evtSource = null;
               let reconnectAttempts = 0;
-              
+
               // Progress tracking variables
               let taskStartTimes = {}; // Track when each task started
               let taskEstimatedDurations = {}; // Track estimated duration of each task
               let highestProgress = 0; // Track highest overall progress (ratchet)
               let highestTaskProgress = {}; // Track highest progress per task (ratchet)
               let animationFrameId = null;
-              const FPS = 24; // Target 24fps for smooth updates
+              const FPS = 60; // Target 60fps for smooth updates
+              let downloadStats = {}; // Track download stats by IP and task
+
+              // Track download by IP
+              function trackDownloadByIp(ip, taskName, progressPercent, bytesDownloaded, totalSize) {
+                if (!ip) return;
+                
+                // Initialize tracking for this IP if needed
+                if (!downloadStats[ip]) {
+                  downloadStats[ip] = {};
+                }
+                
+                // Update task info
+                if (!downloadStats[ip][taskName] || progressPercent > downloadStats[ip][taskName].progress) {
+                  downloadStats[ip][taskName] = {
+                    progress: progressPercent,
+                    bytesDownloaded: bytesDownloaded,
+                    totalSize: totalSize,
+                    lastUpdated: Date.now()
+                  };
+                }
+                
+                // Find all tasks that might match this download
+                const matchingTasks = findMatchingStreamTasks(taskName);
+                if (matchingTasks.length > 0) {
+                  matchingTasks.forEach(task => {
+                    updateTaskDisplay(task, progressPercent, bytesDownloaded, totalSize);
+                  });
+                }
+              }
               
+              // Find tasks that might be associated with a specific download
+              function findMatchingStreamTasks(taskName) {
+                const allTasks = document.querySelectorAll('tr[data-task-name]');
+                const matchingTasks = [];
+                
+                allTasks.forEach(task => {
+                  const taskNameAttr = task.getAttribute('data-task-name');
+                  if (taskNameAttr && 
+                      (taskNameAttr.toLowerCase().includes('stream') || 
+                       taskNameAttr.toLowerCase().includes('download') ||
+                       taskName.toLowerCase().includes(taskNameAttr.toLowerCase()))) {
+                    matchingTasks.push(task);
+                  }
+                });
+                
+                return matchingTasks;
+              }
+              
+              // Update a task's display with download information
+              function updateTaskDisplay(taskElement, progressPercent, bytesDownloaded, totalSize) {
+                const taskStatus = taskElement.getAttribute('data-task-status');
+                if (taskStatus !== 'STATE_RUNNING') return;
+                
+                const taskName = taskElement.getAttribute('data-task-name');
+                const firstCell = taskElement.querySelector('td:first-child');
+                const progressBar = taskElement.querySelector('.task-progress-bar');
+                const progressText = taskElement.querySelector('.task-progress-percent');
+                
+                // Update task name with file size information in first cell
+                if (firstCell && totalSize > 0) {
+                  const totalMB = (totalSize / (1024 * 1024)).toFixed(1);
+                  if (bytesDownloaded > 0) {
+                    const downloadedMB = (bytesDownloaded / (1024 * 1024)).toFixed(1);
+                    // Format: "Task Name (X/Y MB)"
+                    if (taskName.toLowerCase().includes('stream')) {
+                      firstCell.textContent = `Stream image (${downloadedMB}/${totalMB} MB)`;
+                    }
+                  } else if (taskName.toLowerCase().includes('stream')) {
+                    firstCell.textContent = `Stream image (0/${totalMB} MB)`;
+                  }
+                }
+                
+                // Update progress bar if it exists
+                if (progressBar) {
+                  // Use precise float values for smoother animation
+                  progressBar.style.width = `${progressPercent}%`;
+                }
+                
+                // Update progress text with download size
+                if (progressText) {
+                  const progressRounded = Math.round(progressPercent);
+                  if (totalSize > 0) {
+                    const totalMB = (totalSize / (1024 * 1024)).toFixed(1);
+                    if (bytesDownloaded > 0) {
+                      const downloadedMB = (bytesDownloaded / (1024 * 1024)).toFixed(1);
+                      progressText.textContent = `${progressRounded}% (${downloadedMB}/${totalMB} MB)`;
+                    } else {
+                      progressText.textContent = `${progressRounded}% (${totalMB} MB)`;
+                    }
+                  } else {
+                    progressText.textContent = `${progressRounded}%`;
+                  }
+                }
+                
+                // Update stored progress tracking data for animation
+                highestTaskProgress[taskName] = Math.max(
+                  highestTaskProgress[taskName] || 0,
+                  progressPercent
+                );
+                
+                // Make sure animation is running
+                if (!animationFrameId) {
+                  startProgressAnimation();
+                }
+              }
+
               // Initialize progress tracking from initial page load
               function initializeProgressTracking() {
                 // Extract task data from the DOM
@@ -180,71 +296,76 @@
                   const status = el.getAttribute('data-task-status');
                   const startedAt = el.getAttribute('data-started-at');
                   const estimatedDuration = parseInt(el.getAttribute('data-estimated-duration'), 10) || 0;
-                  
+
                   // Store task data
                   taskStartTimes[taskName] = startedAt;
                   taskEstimatedDurations[taskName] = estimatedDuration;
-                  highestTaskProgress[taskName] = 0;
+                  highestTaskProgress[taskName] = 0; // Reset highest task progress on init
                 });
-                
+
                 // Get overall progress
                 const overallProgressEl = document.querySelector('.workflow-overall-progress');
                 if (overallProgressEl) {
                   highestProgress = parseInt(overallProgressEl.getAttribute('data-progress'), 10) || 0;
                 }
-                
+
                 // Start the animation loop
                 startProgressAnimation();
               }
-              
+
               // Calculate progress for a running task based on elapsed time
               function calculateTaskProgress(taskName) {
                 const startedAt = taskStartTimes[taskName];
                 const estimatedDuration = taskEstimatedDurations[taskName];
-                
+
                 // Skip if we don't have necessary data
-                if (!startedAt || !estimatedDuration) return 0;
-                
+                if (!startedAt || !estimatedDuration || estimatedDuration <= 0) return 0;
+
                 // Parse the start time
-                const startTime = new Date(startedAt).getTime();
+                let startTime;
+                try {
+                    startTime = new Date(startedAt).getTime();
+                    if (isNaN(startTime)) throw new Error("Invalid date");
+                } catch(e) {
+                    return 0; // Return 0 if date is invalid
+                }
+
                 const now = Date.now();
                 const elapsedMs = now - startTime;
                 const elapsedSeconds = elapsedMs / 1000;
-                
+
                 // Calculate raw progress as a percentage
                 let progress = (elapsedSeconds / estimatedDuration) * 100;
-                
+
                 // Cap at 100%
                 progress = Math.min(progress, 100);
-                
+
                 // Apply ratchet - never go backwards
-                if (highestTaskProgress[taskName]) {
-                  progress = Math.max(progress, highestTaskProgress[taskName]);
-                }
-                
+                progress = Math.max(progress, highestTaskProgress[taskName] || 0);
+
                 // Store new highest
                 highestTaskProgress[taskName] = progress;
-                
+
                 return progress;
               }
-              
-              // Calculate overall workflow progress
+
+              // Calculate overall workflow progress based on task weights
               function calculateOverallProgress() {
                 let completedWeight = 0;
                 let totalWeight = 0;
-                
-                // Process each task
-                document.querySelectorAll('[data-task-name]').forEach(el => {
-                  const taskName = el.getAttribute('data-task-name');
-                  const status = el.getAttribute('data-task-status');
+
+                // Process each task from stored data
+                Object.keys(taskEstimatedDurations).forEach(taskName => {
                   const estimatedDuration = taskEstimatedDurations[taskName] || 0;
-                  
+                  const taskRow = document.querySelector(`tr[data-task-name="${taskName}"]`);
+                  const status = taskRow ? taskRow.getAttribute('data-task-status') : 'UNKNOWN'; // Get current status from DOM
+
                   // Skip tasks with no estimated duration
                   if (estimatedDuration <= 0) return;
-                  
+
                   // Add to total weight
                   totalWeight += estimatedDuration;
-                  
+
                   // Calculate task's contribution to overall progress
                   if (status === 'STATE_SUCCESS') {
                     // Completed tasks contribute 100% of their weight
@@ -254,189 +375,319 @@
                     const taskProgress = calculateTaskProgress(taskName);
                     completedWeight += (taskProgress / 100) * estimatedDuration;
                   }
-                  // Pending tasks contribute nothing
+                  // Pending or failed tasks contribute nothing
                 });
-                
+
                 // Calculate overall percentage
                 let overallProgress = totalWeight > 0 ? (completedWeight / totalWeight) * 100 : 0;
-                
+
                 // Apply ratchet - never go backwards
                 overallProgress = Math.max(overallProgress, highestProgress);
                 highestProgress = overallProgress;
-                
+
                 return overallProgress;
               }
-              
+
               // Start animation loop for smooth progress updates
               function startProgressAnimation() {
                 if (animationFrameId) {
-                  cancelAnimationFrame(animationFrameId);
+                  // Already running
+                  return;
                 }
-                
+
                 let lastFrameTime = performance.now();
                 const frameInterval = 1000 / FPS;
-                
+
                 function updateFrame(now) {
                   // Throttle to target FPS
                   if (now - lastFrameTime < frameInterval) {
                     animationFrameId = requestAnimationFrame(updateFrame);
                     return;
                   }
-                  
+
                   lastFrameTime = now;
-                  
-                  // Get running tasks
-                  const runningTasks = document.querySelectorAll('[data-task-status="STATE_RUNNING"]');
+
+                  // Get running tasks from DOM
+                  const runningTasks = document.querySelectorAll('tr[data-task-status="STATE_RUNNING"]');
                   let needsUpdate = runningTasks.length > 0;
-                  
-                  // Update each running task's progress
-                  runningTasks.forEach(el => {
-                    const taskName = el.getAttribute('data-task-name');
+
+                  // Update each running task's progress UI
+                  runningTasks.forEach(taskRow => {
+                    const taskName = taskRow.getAttribute('data-task-name');
                     const progress = calculateTaskProgress(taskName);
                     
-                    // Update UI - progress bar 
-                    const progressBar = el.querySelector('.task-progress-bar');
+                    // Use precise float values for smoother animation
+                    const progressBar = taskRow.querySelector('.task-progress-bar');
                     if (progressBar) {
-                      progressBar.style.width = `${Math.round(progress)}%`;
+                      progressBar.style.width = `${progress}%`;
                     }
-                    
-                    // Update progress text
-                    const progressText = el.querySelector('.task-progress-percent');
+
+                    // Update progress text (round only for display)
+                    const progressText = taskRow.querySelector('.task-progress-percent');
                     if (progressText) {
-                      progressText.textContent = `${Math.round(progress)}%`;
+                      const progressRounded = Math.round(progress);
+                      progressText.textContent = `${progressRounded}%`;
                     }
                   });
-                  
+
                   // Update overall progress if there are running tasks
                   if (needsUpdate) {
                     const overallProgress = calculateOverallProgress();
                     const overallBar = document.querySelector('.workflow-overall-progress');
-                    
+
                     if (overallBar) {
-                      overallBar.style.width = `${Math.round(overallProgress)}%`;
-                      
-                      // Update overall progress text
+                      // Use precise float for smoother animation
+                      overallBar.style.width = `${overallProgress}%`;
+
+                      // Round only for text display
                       const percentText = document.querySelector('.workflow-progress-percent');
                       if (percentText) {
-                        percentText.textContent = `${Math.round(overallProgress)}% Complete`;
+                        const overallRounded = Math.round(overallProgress);
+                        percentText.textContent = `${overallRounded}% Complete`;
                       }
                     }
-                    
+
                     // Continue the animation loop
                     animationFrameId = requestAnimationFrame(updateFrame);
                   } else {
-                    // No running tasks, pause the animation
+                    // No running tasks, stop the animation
                     animationFrameId = null;
                   }
                 }
-                
+
                 // Start the loop
                 animationFrameId = requestAnimationFrame(updateFrame);
               }
 
-              function connectEventSource() {
-                if (evtSource) {
-                  evtSource.close();
-                }
+              // Attaches listener to the GLOBAL EventSource - Retries if not found initially
+              function attachDetailsListener(retryCount = 0) {
+                const MAX_RETRIES = 5;
+                const RETRY_DELAY_MS = 200;
 
-                console.log("Connecting to EventSource...");
-                evtSource = new EventSource('/api/events');
-                
-                evtSource.onmessage = function(event) {
-                  console.log('Event received:', event.data);
-                  if (event.data.startsWith('machine_updated:{{ machine.id }}')) {
-                    console.log('This machine was updated, fetching new workflow data');
-                    fetch('/api/machines/{{ machine.id }}/workflow-progress')
-                      .then(response => response.text())
-                      .then(html => {
-                        // Create temporary container to parse HTML
-                        const temp = document.createElement('div');
-                        temp.innerHTML = html;
-                        
-                        // Check if any task states have changed
-                        let hasStateChanges = false;
-                        
-                        // Extract and update task data
-                        temp.querySelectorAll('[data-task-name]').forEach(newEl => {
-                          const taskName = newEl.getAttribute('data-task-name');
-                          const newStatus = newEl.getAttribute('data-task-status');
-                          const newStartedAt = newEl.getAttribute('data-started-at');
-                          const newEstimatedDuration = parseInt(newEl.getAttribute('data-estimated-duration'), 10);
-                          
-                          // Get current element if it exists
-                          const currentEl = document.querySelector(`[data-task-name="${taskName}"]`);
-                          
-                          if (currentEl) {
-                            const currentStatus = currentEl.getAttribute('data-task-status');
-                            
-                            // Check if state changed
-                            if (currentStatus !== newStatus) {
-                              hasStateChanges = true;
-                              
-                              // Update task data
-                              taskStartTimes[taskName] = newStartedAt;
-                              taskEstimatedDurations[taskName] = newEstimatedDuration;
-                              
-                              // For newly completed tasks, set progress to 100%
-                              if (newStatus === 'STATE_SUCCESS') {
-                                highestTaskProgress[taskName] = 100;
-                              }
-                            }
-                          } else {
-                            // New task appeared
-                            hasStateChanges = true;
-                            taskStartTimes[taskName] = newStartedAt;
-                            taskEstimatedDurations[taskName] = newEstimatedDuration;
-                          }
-                        });
-                        
-                        // Only replace the HTML when task states change or new tasks appear
-                        if (hasStateChanges) {
-                          const container = document.getElementById('workflow-progress-container');
-                          if (container) {
-                            container.outerHTML = html;
-                            // Restart progress tracking with new data
-                            initializeProgressTracking();
+                if (window.globalEvtSource && window.globalEvtSource.readyState !== EventSource.CLOSED) {
+                    // Attach the specific listener for this page TO THE SPECIFIC EVENT TYPE
+                    window.globalEvtSource.addEventListener('machine_updated', handleDetailsMessage);
+                    
+                    // Add listener for IP-based download tracking
+                    window.globalEvtSource.addEventListener('ip_download_progress', function(event) {
+                      try {
+                        const data = JSON.parse(event.data);
+                        if (data.ip && data.progress) {
+                          // Check if this IP matches our machine
+                          const machineIp = "{{ machine.ip_address }}";
+                          if (data.ip === machineIp) {
+                            trackDownloadByIp(
+                              data.ip, 
+                              data.file_name || "Stream image", 
+                              data.progress, 
+                              data.bytes_downloaded || 0, 
+                              data.total_size || 0
+                            );
                           }
                         }
-                      })
-                      .catch(err => {
-                        console.error("Error fetching workflow progress:", err);
-                      });
-                  }
-                };
-                
-                evtSource.onopen = function() {
-                  console.log('EventSource connected successfully');
-                  reconnectAttempts = 0; // Reset reconnect attempts on successful connection
-                };
-                
-                evtSource.onerror = function(err) {
-                  console.error("EventSource failed:", err);
-                  evtSource.close();
+                      } catch (e) {
+                        console.error("Error processing IP download progress", e);
+                      }
+                    });
+                } else {
+                    if (retryCount < MAX_RETRIES) {
+                        setTimeout(() => attachDetailsListener(retryCount + 1), RETRY_DELAY_MS);
+                    }
+                }
+              }
+
+              // Separate handler function for clarity 
+              function handleDetailsMessage(event) {
+                  const rawData = event.data;
                   
-                  // Keep trying to reconnect indefinitely with exponential backoff
-                  reconnectAttempts++;
-                  // Exponential backoff with jitter and max of 30 seconds
-                  const delay = Math.min(1000 * Math.pow(1.5, Math.min(reconnectAttempts, 10)) * (0.9 + Math.random() * 0.2), 30000);
-                  console.log(`Reconnecting in ${Math.round(delay)}ms (attempt ${reconnectAttempts})`);
-                  setTimeout(connectEventSource, delay);
-                };
+                  // Get machine ID from the template context
+                  const machineId = "{{ machine.id }}";
+                  
+                  // Parse event data as JSON
+                  let eventData;
+                  try {
+                      eventData = JSON.parse(rawData);
+                  } catch (e) {
+                      return;
+                  }
+                  
+                  // Check if this event is for our machine
+                  if (eventData.type === "machine_updated" && eventData.id === machineId) {
+                    fetch(`/api/machines/${machineId}/workflow-progress`)
+                          .then(response => {
+                              if (!response.ok) {
+                                  throw new Error(`HTTP error! status: ${response.status}`);
+                              }
+                              return response.text();
+                          })
+                      .then(html => {
+                              const container = document.getElementById('workflow-progress-container');
+                              if (container) {
+                                  // Directly replace the container's outerHTML with the new content
+                                  container.outerHTML = html;
+                                  
+                                  // Re-initialize progress tracking if needed (assuming relevant elements are in the new HTML)
+                                  initializeProgressTracking(); 
+                              }
+                          })
+                          .catch(err => {
+                              // Error fetching or processing workflow progress
+                          });
+                  }
               }
 
               // Start connection when DOM is loaded
               document.addEventListener('DOMContentLoaded', function() {
-                connectEventSource();
                 initializeProgressTracking();
+                attachDetailsListener();      // Attempt to attach listener to global SSE source
                 
+                // Listen for image progress events from HTTP range requests
+                if (window.globalEvtSource) {
+                  window.globalEvtSource.addEventListener('task_progress', function(event) {
+                    try {
+                      const rawData = event.data;
+                      
+                      // Format: "machine_id:task_name:percentage:bytes_downloaded:total_size"
+                      const parts = rawData.split(':');
+                      if (parts.length >= 5) {
+                        const machineId = parts[0];
+                        const taskName = parts[1];
+                        const progressPercent = parseFloat(parts[2]);
+                        const bytesDownloaded = parseInt(parts[3], 10);
+                        const totalSize = parseInt(parts[4], 10);
+                        
+                        // Only process if this is for our machine
+                        const currentMachineId = "{{ machine.id }}";
+                        if (machineId === currentMachineId) {
+                          // Find the task in the task list by name
+                          updateTaskProgress(taskName, progressPercent, bytesDownloaded, totalSize);
+                        }
+                      }
+                    } catch (e) {
+                      // Error processing task progress event
+                    }
+                  });
+                  
+                  // Listen for file-specific progress events (more granular)
+                  window.globalEvtSource.addEventListener('file_progress', function(event) {
+                    try {
+                      const rawData = event.data;
+                      
+                      // Format: "filename:percentage:bytes_downloaded:total_size"
+                      const parts = rawData.split(':');
+                      if (parts.length >= 4) {
+                        const fileName = parts[0];
+                        const progressPercent = parseFloat(parts[1]);
+                        const bytesDownloaded = parseInt(parts[2], 10);
+                        const totalSize = parseInt(parts[3], 10);
+                        
+                        // Track by IP directly
+                        const machineIp = "{{ machine.ip_address }}";
+                        trackDownloadByIp(machineIp, fileName, progressPercent, bytesDownloaded, totalSize);
+                        
+                        // Determine task type based on filename
+                        let taskName = "Download file";
+                        if (fileName.includes("vmlinuz")) {
+                          taskName = "Download kernel";
+                        } else if (fileName.includes("initrd") || fileName.includes("initramfs")) {
+                          taskName = "Download initramfs";
+                        } else if (fileName.includes(".img") || fileName.includes(".iso") || fileName.includes("cloudimg")) {
+                          taskName = "Download OS image";
+                        }
+                        
+                        // Update task progress in UI
+                        updateTaskProgress(taskName, progressPercent, bytesDownloaded, totalSize);
+                      }
+                    } catch (e) {
+                      // Error processing file progress event
+                    }
+                  });
+                  
+                  // For backward compatibility
+                  window.globalEvtSource.addEventListener('image_progress', function(event) {
+                    try {
+                      const rawData = event.data;
+                      
+                      // Format: "image_file:percent:total_size"
+                      const parts = rawData.split(':');
+                      if (parts.length >= 3) {
+                        const imageFile = parts[0];
+                        const progressPercent = parseFloat(parts[1]);
+                        const totalSize = parseInt(parts[2], 10);
+                        
+                        // Fall back to generic task name
+                        updateTaskProgress("Download OS image", progressPercent, 0, totalSize);
+                      }
+                    } catch (e) {
+                      // Error processing image progress event
+                    }
+                  });
+                }
+                
+                // Helper function to update task progress in the UI
+                function updateTaskProgress(taskName, progressPercent, bytesDownloaded, totalSize) {
+                  // Also update our IP tracking system
+                  const machineIp = "{{ machine.ip_address }}";
+                  if (machineIp) {
+                    trackDownloadByIp(machineIp, taskName, progressPercent, bytesDownloaded, totalSize);
+                  }
+                  
+                  // Look for "Downloading" tasks in the task list
+                  const taskRows = document.querySelectorAll('tr[data-task-name]');
+                  let matched = false;
+                  
+                  // First try to find exact task name match
+                  taskRows.forEach(task => {
+                    const rowTaskName = task.getAttribute('data-task-name');
+                    const taskStatus = task.getAttribute('data-task-status');
+                    
+                    // If task name contains our target and is in RUNNING state
+                    if (rowTaskName && rowTaskName.includes(taskName) && taskStatus === 'STATE_RUNNING') {
+                      updateTaskDisplay(task, progressPercent, bytesDownloaded, totalSize);
+                      matched = true;
+                    }
+                  });
+                  
+                  // If we didn't find a specific task match, try to update any streaming or download task
+                  if (!matched) {
+                    // Find any "stream" or "download" task that's running
+                    const streamTasks = findMatchingStreamTasks(taskName);
+                    streamTasks.forEach(task => {
+                      updateTaskDisplay(task, progressPercent, bytesDownloaded, totalSize);
+                      matched = true;
+                    });
+                  }
+                  
+                  // If still no match but progress info exists, update the overall progress
+                  if (!matched && progressPercent > 0) {
+                    // Update the overall progress bar if it exists
+                    const overallBar = document.querySelector('.workflow-overall-progress');
+                    if (overallBar) {
+                      const currentProgress = parseFloat(overallBar.getAttribute('data-progress') || '0');
+                      if (progressPercent > currentProgress) {
+                        overallBar.style.width = `${progressPercent}%`;
+                        overallBar.setAttribute('data-progress', progressPercent.toString());
+                        
+                        // Update the overall progress text
+                        const percentText = document.querySelector('.workflow-progress-percent');
+                        if (percentText) {
+                          percentText.textContent = `${Math.round(progressPercent)}% Complete`;
+                        }
+                      }
+                    }
+                  }
+                }
+
                 // Clean up when leaving the page
                 window.addEventListener('beforeunload', () => {
-                  if (evtSource) {
-                    console.log("Closing EventSource connection");
-                    evtSource.close();
+                    if (window.globalEvtSource) {
+                       console.log("DEBUG: Removing machine_details 'machine_updated' listener.");
+                       window.globalEvtSource.removeEventListener('machine_updated', handleDetailsMessage);
                   }
                   if (animationFrameId) {
+                    console.log("Cancelling animation frame");
                     cancelAnimationFrame(animationFrameId);
+                    animationFrameId = null;
                   }
                 });
               });

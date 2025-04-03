@@ -18,6 +18,8 @@ use crate::mode;
 use minijinja::{Error as MiniJinjaError, ErrorKind as MiniJinjaErrorKind};
 use std::sync::Arc;
 use std::net::{IpAddr, Ipv4Addr};
+use crate::tinkerbell::WorkflowInfo;
+use uuid::Uuid;
 
 // Import global state
 use crate::{AppState, INSTALL_STATE_REF, InstallationState};
@@ -39,6 +41,14 @@ pub fn get_theme_from_cookie(headers: &HeaderMap) -> String {
         }
     }
     "light".to_string()
+}
+
+// Update struct for MiniJinja context, matching data from api.rs handler
+#[derive(Serialize)] // Use Serialize for MiniJinja
+pub struct WorkflowProgressTemplate {
+    // Fields provided by get_workflow_progress in api.rs
+    pub machine_id: Uuid,
+    pub workflow_info: WorkflowInfo, // Not Option<> as api.rs ensures it exists before calling render
 }
 
 #[derive(Serialize)]
@@ -94,16 +104,6 @@ pub struct SettingsTemplate {
 }
 
 #[derive(Serialize)]
-pub struct WorkflowProgressTemplate {
-    pub id: String,
-    pub current_task_name: String,
-    pub current_action_index: i64,
-    pub current_action_name: String,
-    pub current_action_status: String,
-    pub total_number_of_actions: i64,
-}
-
-#[derive(Serialize)]
 pub struct WelcomeTemplate {
     pub theme: String,
     pub is_authenticated: bool,
@@ -124,7 +124,7 @@ pub struct ErrorTemplate {
 }
 
 // Updated render_minijinja function
-fn render_minijinja<T: Serialize>(
+pub fn render_minijinja<T: Serialize>(
     app_state: &crate::AppState,
     template_name: &str, 
     context: T
@@ -946,6 +946,15 @@ pub async fn update_settings(
             error!("Failed to save settings: {}", e);
             // Handle error, maybe return an error message to the user
             // For now, just log and continue
+        } else {
+            // Update settings in app state ONLY after successful save
+            if let Ok(mut guard) = app_state.settings.try_lock() {
+                *guard = new_settings.clone(); // Update the in-memory state
+                info!("In-memory AppState settings updated.");
+            } else {
+                error!("Failed to acquire lock to update in-memory AppState settings.");
+                // The settings are saved in DB, but the live state might be stale until restart/reload
+            }
         }
 
         // Update admin password if provided and confirmed

@@ -21,6 +21,7 @@
     fieldChanges: {}, // Track changes to fields
     originalValues: {}, // Track original values for fields
     pendingChanges: false, // Whether there are unsaved changes
+    errorMessage: null, // Added for modals that might need it
     
     // Just Type functionality
     startEditing(machineId, fieldName, currentValue) {
@@ -120,10 +121,9 @@
             showToast(`Machine ${machineId} updated: ${data.message}`, 'success');
             
             // Refresh the machine list
-            htmx.trigger(document.querySelector('tbody'), 'refreshMachines');
+            refreshMachineList();
         })
         .catch(error => {
-            console.error('Error:', error);
             showToast(`Failed to update machine: ${error.message}`, 'error');
         });
     },
@@ -162,7 +162,7 @@
         this.pendingChanges = Object.keys(this.fieldChanges).length > 0;
         
         // Refresh the display
-        htmx.trigger(document.querySelector('tbody'), 'refreshMachines');
+        refreshMachineList();
         
         this.macConfirmModal = false;
     },
@@ -216,6 +216,41 @@
         
         // For debugging
         console.log('Select OS ' + os + ' for machine ' + id);
+    },
+    
+    // Function to delete a machine
+    deleteMachine(machineId) {
+        if (!this.isAuthenticated) {
+            showToast('Authentication required to delete machines.', 'error');
+            return;
+        }
+        this.errorMessage = null; // Clear previous errors
+        fetch(`/api/machines/${machineId}`, {
+            method: 'DELETE',
+            headers: {
+                // Add any necessary headers like CSRF token if required by your backend
+            }
+        })
+        .then(response => {
+            if (!response.ok) {
+                // Try to get error message from response body
+                return response.text().then(text => {
+                    throw new Error(text || `HTTP error! status: ${response.status}`);
+                });
+            }
+            return response.text(); // Or response.json() if your API returns JSON
+        })
+        .then(data => {
+            showToast(`Machine ${machineId} deleted successfully.`, 'success');
+            this.deleteModal = false; // Close the modal
+            this.currentMachineId = null;
+            // Refresh the machine list using the new function
+            refreshMachineList();
+        })
+        .catch(error => {
+            this.errorMessage = `Failed to delete machine: ${error.message}`;
+            showToast(this.errorMessage, 'error');
+        });
     }
 }" x-init="window.isAuthenticated = isAuthenticated"
    @close-tag-modal.window="tagModal = false"
@@ -254,18 +289,11 @@
                                 </th>
                             </tr>
                         </thead>
-                        <tbody 
-                            id="machine-list" 
-                            class="divide-y divide-gray-200 dark:divide-gray-700/60 bg-white dark:bg-black" 
-                            hx-get="/machines"
-                            hx-select="#machine-list > tr"
-                            hx-target="#machine-list"
-                            hx-trigger="load, refreshMachines from:body"
-                            hx-swap="morph:innerHTML"
-                            hx-indicator=".htmx-indicator"
-                        >
+                        <tbody id="machine-list" class="divide-y divide-gray-200 dark:divide-gray-700/60 bg-white dark:bg-black">
                             {% for machine in machines %}
-                            <tr class="hover:ring-1 hover:ring-purple-500 dark:hover:ring-purple-700/60 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer" @click="window.location='/machines/{{ machine.id }}'">
+                            <tr class="hover:ring-purple-500 dark:hover:ring-purple-700/60 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer" 
+                                @click="window.location='/machines/{{ machine.id }}'"
+                                data-machine-id="{{ machine.id }}">
                                 <td class="px-6 py-4 whitespace-nowrap">
                                     <div class="text-sm font-medium text-gray-900 dark:text-white">
                                         <div x-on:click.stop="startEditing('{{ machine.id }}', 'hostname', '{{ machine.hostname|default('') }}')" 
@@ -439,7 +467,7 @@
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
                                     {% if machine.status == "InstallingOS" %}
                                         {% if workflow_infos[machine.id] %}
-                                            <div class="flex flex-col space-y-1">
+                                            <div class="flex flex-col space-y-1 pointer-events-none">
                                                 <div class="flex justify-between text-xs">
                                                     <span>{{ workflow_infos[machine.id].progress }}%</span>
                                                     {% if workflow_infos[machine.id].current_action %}
@@ -453,7 +481,7 @@
                                                 </div>
                                             </div>
                                         {% else %}
-                                            <span class="text-xs italic text-gray-400">Awaiting progress data...</span>
+                                            <span class="text-xs italic text-gray-400 pointer-events-none">Awaiting progress data...</span>
                                         {% endif %}
                                     {% else %}
                                         {% if is_admin %} {# Wrap all actions in is_admin check #}
@@ -462,13 +490,7 @@
                                             <button 
                                                 @click="openTagModal(
                                                     '{{ machine.id }}', 
-                                                    '{% if machine.hostname %}
-                                                         {{ machine.hostname }}
-                                                     {% elif machine.memorable_name %}
-                                                         {{ machine.memorable_name }}
-                                                     {% else %}
-                                                         {{ machine.id }}
-                                                     {% endif %}'
+                                                    `{% if machine.hostname %}{{ machine.hostname }}{% elif machine.memorable_name %}{{ machine.memorable_name }}{% else %}{{ machine.id }}{% endif %}`.trim()
                                                 )"
                                                 class="inline-flex items-center px-3 py-1 border border-transparent text-sm leading-5 font-medium rounded text-purple-700 bg-purple-100 hover:bg-purple-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 dark:bg-purple-900 dark:text-purple-200 dark:hover:bg-purple-800"
                                             >
@@ -774,10 +796,6 @@
 {% endblock %}
 
 {% block scripts %}
-{# Add the idiomorph script BEFORE your main script block if possible #}
-{# Ideally, move this to your base.html head or before the main htmx script #}
-<script src="https://unpkg.com/idiomorph/dist/idiomorph-ext.min.js"></script> 
-
 <script>
     // Check if user is authenticated before allowing admin actions
     function requireAdmin(callback) {
@@ -795,304 +813,155 @@
             tags: [],
             newTag: '',
             isLoading: false,
-            errorMessage: null,
-            currentMachineId: null, // To store the machine ID when loading
-
-            loadTags(machineId) {
-                if (!machineId) return;
-                this.currentMachineId = machineId;
-                this.isLoading = true;
-                this.errorMessage = null;
-                fetch(`/api/machines/${machineId}/tags`)
-                    .then(response => {
-                        if (!response.ok) {
-                            throw new Error(`HTTP error! status: ${response.status}`);
-                        }
-                        return response.json();
-                    })
-                    .then(data => {
-                        this.tags = Array.isArray(data) ? data : []; // Ensure it's an array
-                    })
-                    .catch(error => {
-                        console.error("Error loading tags:", error);
-                        this.errorMessage = "Could not load tags. " + error.message;
-                        this.tags = []; // Clear tags on error
-                    })
-                    .finally(() => {
-                        this.isLoading = false;
-                    });
+            machineId: null,
+            
+            init() {
+                // Initial tags will be loaded when the modal is opened
             },
-
             addTag() {
-                const tagToAdd = this.newTag.trim();
-                if (tagToAdd && !this.tags.includes(tagToAdd)) {
-                    this.tags.push(tagToAdd);
+                if (!this.newTag.trim()) return;
+                if (this.tags.includes(this.newTag.trim())) {
+                    this.newTag = '';
+                    return;
                 }
-                this.newTag = ''; // Clear input
-            },
-
-            removeTag(index) {
-                this.tags.splice(index, 1);
-            },
-
-            saveTags() {
-                if (!this.currentMachineId) return;
                 this.isLoading = true;
-                this.errorMessage = null;
-                fetch(`/api/machines/${this.currentMachineId}/tags`, {
-                    method: 'PUT',
+                
+                // Make API call to add tag
+                fetch(`/api/machines/${this.machineId}/tags`, {
+                    method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify(this.tags)
+                    body: JSON.stringify({ tag: this.newTag.trim() })
                 })
                 .then(response => {
-                    if (!response.ok) {
-                         // Try to parse error message from backend
-                        return response.json().then(err => {
-                            throw new Error(err.message || `HTTP error! status: ${response.status}`);
-                        }).catch(() => {
-                             throw new Error(`HTTP error! status: ${response.status}`); // Fallback error
-                        });
-                    }
-                    return response.json(); 
+                    if (!response.ok) throw new Error('Failed to add tag');
+                    return response.json();
                 })
                 .then(data => {
-                    // Optionally handle success response data if needed
-                    this.$dispatch('close-tag-modal');
-                    // Trigger refresh - relying on SSE if backend emits event
-                     // htmx.trigger(document.body, 'refreshMachines'); 
+                    this.tags.push(this.newTag.trim());
+                    this.newTag = '';
+                    this.isLoading = false;
                 })
                 .catch(error => {
-                    console.error("Error saving tags:", error);
-                    this.errorMessage = "Could not save tags. " + error.message;
-                })
-                .finally(() => {
                     this.isLoading = false;
+                    alert('Failed to add tag. Please try again.');
+                });
+            },
+            removeTag(tag) {
+                this.isLoading = true;
+                
+                // Make API call to remove tag
+                fetch(`/api/machines/${this.machineId}/tags/${encodeURIComponent(tag)}`, {
+                    method: 'DELETE'
+                })
+                .then(response => {
+                    if (!response.ok) throw new Error('Failed to remove tag');
+                    this.tags = this.tags.filter(t => t !== tag);
+                    this.isLoading = false;
+                })
+                .catch(error => {
+                    this.isLoading = false;
+                    alert('Failed to remove tag. Please try again.');
+                });
+            },
+            openModal(machineId) {
+                this.machineId = machineId;
+                this.isLoading = true;
+                
+                // Fetch existing tags for this machine
+                fetch(`/api/machines/${machineId}/tags`)
+                .then(response => {
+                    if (!response.ok) throw new Error('Failed to fetch tags');
+                    return response.json();
+                })
+                .then(data => {
+                    this.tags = data.tags || [];
+                    this.isLoading = false;
+                })
+                .catch(error => {
+                    this.isLoading = false;
+                    alert('Failed to load tags. Please try again.');
                 });
             }
         };
     }
 
-    // Initialize Alpine.js
-    document.addEventListener('alpine:init', () => {
-        Alpine.data('tagEditorData', tagEditorData);
-    });
-
-    // Make sure loadTags is called when the modal becomes visible
-    // We added this to the x-init on the modal div itself: x-init="if (tagModal) loadTags(currentMachineId)"
-    // Need to also watch currentMachineId changes if the modal stays open and ID changes (unlikely here)
-
-    // Debounced refresh function (if needed)
-    function debouncedRefresh() {
-        clearTimeout(window._updateDebounceTimer);
-        window._updateDebounceTimer = setTimeout(() => {
-            htmx.trigger(document.body, 'refreshMachines');
-        }, 250); // 250ms debounce
-    }
-
-    // Server-sent events handling
-    let evtSource = null;
-    let reconnectAttempts = 0;
-    const MAX_RECONNECT_ATTEMPTS = 5;
-    
-    // Map to track progress bars on the page
-    let progressBars = {};
+    // Progress animation variables
+    let machineProgressData = {};
     let animationFrameId = null;
-    
-    // --- Helper functions for color ---
-    function getProgressColorName(progress) {
-        if (progress <= 40) {
-            return 'orange';
-        } else if (progress <= 80) {
-            return 'cyan';
-        } else {
-            return 'green';
+    const FPS = 60; // Target 60fps for smooth updates
+
+    // Start the progress animation loop
+    function startProgressAnimation() {
+        if (animationFrameId) {
+            // Already running
+            return;
         }
-    }
 
-    // Map color names to Tailwind classes
-    const colorClasses = {
-        orange: ['bg-orange-500', 'dark:bg-orange-600'],
-        cyan: ['bg-cyan-500', 'dark:bg-cyan-600'],
-        green: ['bg-green-500', 'dark:bg-green-600']
-    };
-    // --- End Helper functions ---
+        let lastFrameTime = performance.now();
+        const frameInterval = 1000 / FPS;
 
-    // Function to update progress bars with smooth animation
-    function updateProgressBarsAnimation() {
-        let needsUpdate = false;
-        
-        // Update each progress bar
-        for (const machineId in progressBars) {
-            const barData = progressBars[machineId];
-            const {current, target} = barData;
+        function updateFrame(now) {
+            // Throttle to target FPS
+            if (now - lastFrameTime < frameInterval) {
+                animationFrameId = requestAnimationFrame(updateFrame);
+                return;
+            }
+            lastFrameTime = now;
 
-            if (Math.abs(current - target) > 0.1 || target === 0 && current !== 0 /* Ensure it animates back to 0 if needed */ ) {
-                // Smoothly animate towards target
-                const delta = (target - current) * 0.1; // Adjust multiplier for faster/slower animation
-                barData.current += delta;
-                // Ensure current doesn't overshoot target significantly in one step
-                if ((delta > 0 && barData.current > target) || (delta < 0 && barData.current < target)) {
-                     barData.current = target;
-                }
-                needsUpdate = true;
+            // Update progress for all machines that have progress data
+            let needsUpdate = false;
+            
+            Object.keys(machineProgressData).forEach(machineId => {
+                const data = machineProgressData[machineId];
+                if (!data || !data.targetProgress) return;
                 
-                // Update the DOM
-                const progressBar = document.querySelector(`.workflow-progress-bar[data-machine-id="${machineId}"]`);
-                if (progressBar) {
-                    const currentProgressRounded = Math.round(barData.current);
-                    // Update width
-                    progressBar.style.width = `${currentProgressRounded}%`;
+                // Find the machine row
+                const machineRow = document.querySelector(`tr[data-machine-id="${machineId}"]`);
+                if (!machineRow) return;
+                
+                // Get the progress bar
+                const progressBar = machineRow.querySelector('.workflow-progress-bar');
+                if (!progressBar) return;
+                
+                // Get current progress value
+                const currentWidth = progressBar.style.width || '0%';
+                const currentProgress = parseFloat(currentWidth) || 0;
+                
+                // Smoothly interpolate towards target progress
+                if (currentProgress < data.targetProgress) {
+                    needsUpdate = true;
+                    // Increment by small amount each frame for smooth animation
+                    const newProgress = Math.min(data.targetProgress, currentProgress + 0.5);
                     
-                    // Update text
-                    const textDisplay = progressBar.closest('div.w-full').previousElementSibling?.querySelector('span:first-child');
-                    if (textDisplay) {
-                        textDisplay.textContent = `${currentProgressRounded}%`;
+                    // Update the progress bar width - don't trigger row repaint
+                    progressBar.style.width = `${newProgress}%`;
+                    
+                    // Update progress text if it exists - only update text content, not the entire row
+                    const progressText = machineRow.querySelector('.flex.justify-between.text-xs span:first-child');
+                    if (progressText) {
+                        progressText.textContent = `${Math.round(newProgress)}%`;
                     }
-
-                    // --- Update Color ---
-                    const newColorName = getProgressColorName(currentProgressRounded);
-                    if (newColorName !== barData.currentColorName) {
-                        // Remove old classes
-                        if (barData.currentColorName && colorClasses[barData.currentColorName]) {
-                            progressBar.classList.remove(...colorClasses[barData.currentColorName]);
-                        }
-                        // Add new classes
-                        if (colorClasses[newColorName]) {
-                            progressBar.classList.add(...colorClasses[newColorName]);
-                        }
-                        barData.currentColorName = newColorName; // Update stored color name
-                    }
-                    // --- End Update Color ---
                 }
-            } else if (Math.abs(current - target) <= 0.1 && current !== target) {
-                 // Snap to final target value if very close
-                 barData.current = target;
-                 // Update DOM one last time for pixel perfection
-                 const progressBar = document.querySelector(`.workflow-progress-bar[data-machine-id="${machineId}"]`);
-                 if (progressBar) {
-                     const finalProgress = Math.round(barData.current);
-                     progressBar.style.width = `${finalProgress}%`;
-                     const textDisplay = progressBar.closest('div.w-full').previousElementSibling?.querySelector('span:first-child');
-                     if (textDisplay) { textDisplay.textContent = `${finalProgress}%`; }
-                     
-                     // Ensure final color is set
-                     const finalColorName = getProgressColorName(finalProgress);
-                     if (finalColorName !== barData.currentColorName) {
-                         if (barData.currentColorName && colorClasses[barData.currentColorName]) { progressBar.classList.remove(...colorClasses[barData.currentColorName]); }
-                         if (colorClasses[finalColorName]) { progressBar.classList.add(...colorClasses[finalColorName]); }
-                         barData.currentColorName = finalColorName;
-                     }
-                 }
-            }
-        }
-        
-        // Continue animation if needed
-        if (needsUpdate) {
-            animationFrameId = requestAnimationFrame(updateProgressBarsAnimation);
-        } else {
-            console.log('Progress animation loop stopped.');
-            animationFrameId = null;
-        }
-    }
-    
-    // Initialize progress tracking
-    function initializeProgressBars() {
-        // Intentionally simple: just find existing bars. 
-        // Let htmx:afterSwap handle the main initialization/update logic.
-        if (document.querySelector('.workflow-progress-bar') && !animationFrameId) {
-             console.log('Initial progress bars found, starting animation loop.');
-             animationFrameId = requestAnimationFrame(updateProgressBarsAnimation);
-        }
-    }
-    
-    // Update progress targets when the machine list refreshes
-    document.addEventListener('htmx:afterSwap', function(event) {
-        if (event.detail.target.id === 'machine-list') {
-            console.log('htmx:afterSwap detected for machine-list');
-            
-            const oldProgressBars = {...progressBars}; // Keep track of previous state
-            const currentMachineIds = new Set(); // Track IDs present in the new HTML
-            
-            // Re-initialize map with new elements and target values from data-progress
-            let hasProgressBars = false;
-            document.querySelectorAll('.workflow-progress-bar').forEach(bar => {
-                hasProgressBars = true;
-                const machineId = bar.getAttribute('data-machine-id');
-                currentMachineIds.add(machineId); // Mark this ID as present
-                const newTargetProgress = parseInt(bar.getAttribute('data-progress'), 10);
-                
-                let currentProgress;
-                let currentColorName;
-
-                if (oldProgressBars[machineId]) {
-                    // Existing bar: Use old current value, update target
-                    currentProgress = oldProgressBars[machineId].current;
-                    currentColorName = oldProgressBars[machineId].currentColorName; 
-                    // Ensure the initial color class matches the stored name
-                     const expectedColorName = getProgressColorName(Math.round(currentProgress));
-                     if (expectedColorName !== currentColorName) {
-                          console.warn(`Correcting stored color for ${machineId}. Was ${currentColorName}, should be ${expectedColorName}`);
-                          currentColorName = expectedColorName;
-                     }
-
-                } else {
-                    // New bar: Start animation from 0, set target
-                    currentProgress = 0; 
-                    currentColorName = getProgressColorName(0); // Should be 'orange'
-                }
-
-                progressBars[machineId] = {
-                    current: currentProgress, 
-                    target: newTargetProgress,
-                    currentColorName: currentColorName 
-                };
-
-                // --- Ensure Initial Color Classes are Set ---
-                // Remove potentially incorrect classes from previous renders/states
-                Object.values(colorClasses).flat().forEach(cls => bar.classList.remove(cls));
-                // Add the correct initial classes based on *current* state
-                const initialColorName = getProgressColorName(Math.round(currentProgress)); // Use current for initial display
-                if(initialColorName !== currentColorName) {
-                    console.warn(`Mismatch initial color name for ${machineId}, using ${initialColorName}`);
-                    progressBars[machineId].currentColorName = initialColorName; // Correct the state too
-                }
-                if (colorClasses[initialColorName]) {
-                    bar.classList.add(...colorClasses[initialColorName]);
-                }
-                 // Set initial width
-                 bar.style.width = `${Math.round(currentProgress)}%`;
-                // --- End Initial Color ---
-
-                console.log(`Updated progressBars[${machineId}]: current=${currentProgress.toFixed(1)}, target=${newTargetProgress}, color=${progressBars[machineId].currentColorName}`);
             });
-
-            // Remove data for machines no longer in the list
-            for (const machineId in progressBars) {
-                if (!currentMachineIds.has(machineId)) {
-                    console.log(`Removing progress data for disappeared machine: ${machineId}`);
-                    delete progressBars[machineId];
-                }
-            }
             
-            // Start animation loop ONLY if there are progress bars and it's not already running
-            if (hasProgressBars && !animationFrameId) {
-                console.log('Starting progress animation loop.');
-                animationFrameId = requestAnimationFrame(updateProgressBarsAnimation);
-            } else if (!hasProgressBars && animationFrameId) {
-                // Stop animation if no bars are left
-                console.log('No progress bars found, stopping animation loop.');
-                cancelAnimationFrame(animationFrameId);
+            // Continue animation if any updates are needed
+            if (needsUpdate) {
+                animationFrameId = requestAnimationFrame(updateFrame);
+            } else {
                 animationFrameId = null;
             }
         }
-    });
+        
+        // Start the animation loop
+        animationFrameId = requestAnimationFrame(updateFrame);
+    }
 
+    // SSE connection setup
     function connectEventSource() {
         // Check if already connected
         if (window.dragonflyEvtSource && window.dragonflyEvtSource.readyState !== EventSource.CLOSED) {
-            console.log('EventSource already open.');
             return; 
         }
 
@@ -1100,115 +969,285 @@
             evtSource.close();
         }
 
-        console.log("Connecting to EventSource...");
         evtSource = new EventSource('/api/events');
         window.dragonflyEvtSource = evtSource; // Store globally to check existence
+        window.globalEvtSource = evtSource; // Also store as globalEvtSource for compatibility
         
         evtSource.onmessage = function(event) {
-            console.log('Event received:', event.data);
-            const [type, id] = event.data.split(':');
-            
-            switch(type) {
-                case 'machine_discovered':
-                    console.log('New machine discovered!');
-                    debouncedRefresh();
-                    break;
-                case 'machine_updated':
-                    console.log('Machine updated!');
-                    debouncedRefresh();
-                    break;
-                case 'machine_deleted':
-                    console.log('Machine deleted!');
-                    debouncedRefresh();
-                    break;
+            try {
+                // Parse the JSON data
+                const data = JSON.parse(event.data);
+                
+                // Find the machine row in the table
+                const machineRow = document.querySelector(`tr[data-machine-id="${data.id}"]`);
+                if (!machineRow) return; // Not found in this table
+                
+                // Find the status badge within the row
+                const statusBadge = machineRow.querySelector('.machine-status-badge');
+                if (!statusBadge) return;
+                
+                // Update the status indicator
+                if (data.state) {
+                    if (data.state === 'STATE_FAILED') {
+                        statusBadge.textContent = 'Failed';
+                        statusBadge.classList.remove('bg-yellow-100', 'text-yellow-800', 'dark:bg-yellow-400/10', 'dark:text-yellow-300', 
+                                                   'bg-green-100', 'text-green-800', 'dark:bg-green-400/10', 'dark:text-green-300');
+                        statusBadge.classList.add('bg-red-100', 'text-red-800', 'dark:bg-red-400/10', 'dark:text-red-300');
+                    } else if (data.state === 'STATE_SUCCESS') {
+                        statusBadge.textContent = 'Success';
+                        statusBadge.classList.remove('bg-yellow-100', 'text-yellow-800', 'dark:bg-yellow-400/10', 'dark:text-yellow-300',
+                                                   'bg-red-100', 'text-red-800', 'dark:bg-red-400/10', 'dark:text-red-300');
+                        statusBadge.classList.add('bg-green-100', 'text-green-800', 'dark:bg-green-400/10', 'dark:text-green-300');
+                    }
+                }
+                
+                // Update progress if machine is installing OS
+                if (statusBadge.textContent === 'Installing OS' || data.state === 'STATE_RUNNING') {
+                    const progressBar = machineRow.querySelector('.workflow-progress-bar');
+                    const progressText = machineRow.querySelector('.flex.justify-between.text-xs span:first-child');
+                    
+                    if (progressBar && typeof data.progress === 'number') {
+                        // Use ratcheting to prevent progress going backwards
+                        const currentWidth = progressBar.style.width || '0%';
+                        const currentProgress = parseInt(currentWidth.replace('%', ''), 10) || 0;
+                        const newProgress = Math.max(currentProgress, data.progress);
+                        
+                        progressBar.style.width = `${newProgress}%`;
+                        if (progressText) {
+                            progressText.textContent = `${newProgress}%`;
+                        }
+                        
+                        // Show the container if it was hidden
+                        const progressContainer = machineRow.querySelector('.progress-container');
+                        if (progressContainer) {
+                            progressContainer.classList.remove('hidden');
+                        }
+                    }
+                    
+                    // Update current action text if available
+                    const actionText = machineRow.querySelector('.flex.justify-between.text-xs span:last-child');
+                    if (actionText && data.current_action) {
+                        actionText.textContent = data.current_action;
+                        actionText.parentElement.classList.remove('hidden');
+                    }
+                }
+                
+                // If installation is complete, refresh the table
+                if (data.status && data.status !== 'InstallingOS') {
+                    refreshMachineList();
+                }
+            } catch (error) {
+                // Silent error handling
             }
         };
-
-        evtSource.onopen = function() {
-            console.log('EventSource connected');
-            reconnectAttempts = 0;
-        };
-
-        evtSource.onerror = function(err) {
-            console.error("EventSource failed:", err);
-            evtSource.close();
-            
-            if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-                reconnectAttempts++;
-                const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
-                console.log(`Reconnecting in ${delay}ms (attempt ${reconnectAttempts})`);
-                setTimeout(connectEventSource, delay);
+        
+        evtSource.onerror = function(error) {
+            if (evtSource) {
+                evtSource.close();
             }
+            
+            // Try to reconnect after a delay
+            setTimeout(connectEventSource, 2000);
         };
+        
+        // Attach event handlers for 'machine_updated' event
+        evtSource.addEventListener('machine_updated', function(event) {
+            try {
+                const data = JSON.parse(event.data);
+                if (data.type === "machine_updated") {
+                    // Refresh the machine list after a short delay to allow state to update
+                    setTimeout(refreshMachineList, 200);
+                }
+            } catch (e) {
+                // Silent error handling
+            }
+        });
     }
 
-    // Initial connection
-    connectEventSource();
+    let evtSource = null;
     
-    // Initialize progress bars on page load (will start animation if bars exist)
     document.addEventListener('DOMContentLoaded', function() {
-        // Populate the progressBars map initially based on DOM state
-        progressBars = {}; // Clear just in case
-         document.querySelectorAll('.workflow-progress-bar').forEach(bar => {
-            const machineId = bar.getAttribute('data-machine-id');
-            const initialProgress = parseInt(bar.getAttribute('data-progress'), 10);
-            const initialColorName = getProgressColorName(initialProgress);
-            
-            progressBars[machineId] = {
-                current: initialProgress, // Start current at the initial target for first load
-                target: initialProgress,
-                currentColorName: initialColorName
-            };
-             // Set initial color and width explicitly
-             Object.values(colorClasses).flat().forEach(cls => bar.classList.remove(cls)); // Clear first
-             if (colorClasses[initialColorName]) {
-                bar.classList.add(...colorClasses[initialColorName]);
-             }
-             bar.style.width = `${initialProgress}%`;
-        });
-        initializeProgressBars(); // This will check if bars exist and start the animation loop if needed
-    });
-
-    // Clean up when leaving the page
-    window.addEventListener('beforeunload', () => {
-        if (evtSource) {
-            evtSource.close();
-        }
-        if (animationFrameId) {
-            cancelAnimationFrame(animationFrameId);
-        }
-    });
-
-    function deleteMachine(id) {
-        // Find the component controlling the delete modal *before* the fetch
-        // let componentRoot = document.getElementById('delete-modal')?.closest('[x-data]'); // No longer needed
-
-        requireAdmin(() => {
-            fetch(`/api/machines/${id}`, {
-                method: 'DELETE',
-            })
-            .then(response => {
-                if (response.ok) {
-                    // Dispatch an event to close the modal
-                    window.dispatchEvent(new CustomEvent('close-delete-modal'));
+        // Initialize SSE connection
+        connectEventSource();
+        
+        // Listen for image progress events and update UI
+        if (window.globalEvtSource) {
+            // Handler for task-specific progress events
+            window.globalEvtSource.addEventListener('task_progress', function(event) {
+                try {
+                    const rawData = event.data;
                     
-                    // Trigger table refresh via SSE (already handled by backend event)
-                    // htmx.trigger(document.querySelector('tbody#machine-list'), 'refreshMachines'); // Redundant if SSE works
+                    // Format: "machine_id:task_name:percentage:bytes_downloaded:total_size"
+                    const parts = rawData.split(':');
+                    if (parts.length >= 5) {
+                        const machineId = parts[0];
+                        const taskName = parts[1];
+                        const progressPercent = parseFloat(parts[2]);
+                        const bytesDownloaded = parseInt(parts[3], 10);
+                        const totalSize = parseInt(parts[4], 10);
+                        
+                        // Update the machine's progress bar in the machine list
+                        updateMachineProgress(machineId, progressPercent, taskName, bytesDownloaded, totalSize);
+                    }
+                } catch (e) {
+                    // Error processing task progress event
+                }
+            });
+            
+            // Handler for file-specific progress events
+            window.globalEvtSource.addEventListener('file_progress', function(event) {
+                try {
+                    const rawData = event.data;
+                    
+                    // Format: "filename:percentage:bytes_downloaded:total_size"
+                    const parts = rawData.split(':');
+                    if (parts.length >= 4) {
+                        const fileName = parts[0];
+                        const progressPercent = parseFloat(parts[1]);
+                        const bytesDownloaded = parseInt(parts[2], 10);
+                        const totalSize = parseInt(parts[3], 10);
+                        
+                        // Determine task name based on filename
+                        let taskName = "Downloading file";
+                        if (fileName.includes("vmlinuz")) {
+                            taskName = "Downloading kernel";
+                        } else if (fileName.includes("initrd") || fileName.includes("initramfs")) {
+                            taskName = "Downloading initramfs";
+                        } else if (fileName.includes(".img") || fileName.includes(".iso") || fileName.includes("cloudimg")) {
+                            taskName = "Downloading OS image";
+                        }
+                        
+                        // Update progress for all machines that are installing OS
+                        // (We don't know which machine this is for from this event type)
+                        const installingMachines = document.querySelectorAll('tr span:contains("Installing OS")');
+                        installingMachines.forEach(statusEl => {
+                            const machineRow = statusEl.closest('tr');
+                            if (machineRow) {
+                                const machineId = machineRow.getAttribute('data-machine-id');
+                                if (machineId) {
+                                    updateMachineProgress(machineId, progressPercent, taskName, bytesDownloaded, totalSize);
+                                }
+                            }
+                        });
+                    }
+                } catch (e) {
+                    // Error processing file progress event
+                }
+            });
+            
+            // For backward compatibility
+            window.globalEvtSource.addEventListener('image_progress', function(event) {
+                try {
+                    const rawData = event.data;
+                    
+                    // Format: "image_file:percent:total_size"
+                    const parts = rawData.split(':');
+                    if (parts.length >= 3) {
+                        const imageFile = parts[0];
+                        const progressPercent = parseFloat(parts[1]);
+                        const totalSize = parseInt(parts[2], 10);
+                        
+                        // Update any machines that are in "Installing OS" state
+                        const installingMachines = document.querySelectorAll('tr span:contains("Installing OS")');
+                        installingMachines.forEach(statusElement => {
+                            const machineRow = statusElement.closest('tr');
+                            if (machineRow) {
+                                const machineId = machineRow.getAttribute('data-machine-id');
+                                if (machineId) {
+                                    updateMachineProgress(machineId, progressPercent, "Downloading OS image", 0, totalSize);
+                                }
+                            }
+                        });
+                    }
+                } catch (e) {
+                    // Error processing image progress event
+                }
+            });
+        }
+        
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', function() {
+            if (evtSource) {
+                evtSource.close();
+            }
+            if (animationFrameId) {
+                cancelAnimationFrame(animationFrameId);
+            }
+        });
+    });
+
+    // Helper function to update machine progress
+    function updateMachineProgress(machineId, progressPercent, taskName, bytesDownloaded, totalSize) {
+        // Store progress info for animation
+        if (!machineProgressData[machineId]) {
+            machineProgressData[machineId] = {};
+        }
+        // Ensure progress never goes backwards (ratcheting)
+        machineProgressData[machineId].targetProgress = Math.max(
+            progressPercent,
+            machineProgressData[machineId].targetProgress || 0
+        );
+        
+        // Find the machine row by data-machine-id
+        const machineRow = document.querySelector(`tr[data-machine-id="${machineId}"]`);
+        if (!machineRow) return;
+        
+        // Update task and file information - isolate updates to minimize DOM changes
+        const actionText = machineRow.querySelector('.flex.justify-between.text-xs span:last-child');
+        if (actionText) {
+            if (totalSize > 0) {
+                const totalMB = (totalSize / (1024 * 1024)).toFixed(1);
+                if (bytesDownloaded > 0) {
+                    const downloadedMB = (bytesDownloaded / (1024 * 1024)).toFixed(1);
+                    // Format with MB values
+                    actionText.textContent = `${taskName} (${downloadedMB}/${totalMB} MB)`;
                 } else {
-                    // Handle error response from server potentially
-                    response.json().then(err => {
-                         console.error('Error deleting machine:', err);
-                         alert(`Error deleting machine: ${err.message || 'Unknown error'}`);
-                    }).catch(() => {
-                         alert('Error deleting machine and failed to parse error response.');
-                    });
+                    actionText.textContent = `${taskName} (${totalMB} MB)`;
+                }
+            } else {
+                actionText.textContent = taskName;
+            }
+            
+            // Ensure the container is visible but don't affect click events
+            const container = actionText.closest('.flex.flex-col.space-y-1');
+            if (container && container.classList.contains('hidden')) {
+                container.classList.remove('hidden');
+                container.classList.add('pointer-events-none');
+            }
+        }
+        
+        // Start/continue the animation
+        startProgressAnimation();
+    }
+    
+    // Function to refresh the machine list
+    function refreshMachineList() {
+        fetch('/machines')
+            .then(response => response.text())
+            .then(html => {
+                // Create a temporary element to parse the HTML
+                const tempDiv = document.createElement('div');
+                tempDiv.innerHTML = html;
+                
+                // Extract the machine list rows
+                const newMachineList = tempDiv.querySelector('#machine-list');
+                if (newMachineList) {
+                    // Get the current machine list
+                    const currentMachineList = document.getElementById('machine-list');
+                    if (currentMachineList) {
+                        // Replace the content
+                        currentMachineList.innerHTML = newMachineList.innerHTML;
+                        
+                        // Re-initialize Alpine.js if needed
+                        if (window.Alpine) {
+                            window.Alpine.initTree(currentMachineList);
+                        }
+                    }
                 }
             })
             .catch(error => {
-                 console.error('Network or other error deleting machine:', error);
-                 alert('Network error deleting machine. See console.');
+                // Handle error silently
             });
-        });
     }
 </script>
 {% endblock %}
