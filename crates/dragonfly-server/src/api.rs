@@ -13,7 +13,7 @@ use crate::db::{self, RegisterResponse, ErrorResponse, OsAssignmentRequest, get_
 use crate::AppState;
 use crate::auth::AuthSession;
 use std::collections::HashMap;
-use tracing::{info, error, warn};
+use tracing::{info, error, warn, debug};
 use std::env;
 use std::time::Duration;
 use serde::Deserialize;
@@ -35,6 +35,16 @@ use axum::http::header;
 use tokio::fs;
 use std::path::Path as StdPath;
 use std::path::PathBuf;
+use url::Url;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
+use axum::body::{Body, Bytes};
+use axum::http::header::{HeaderMap, HeaderValue};
+use http_body::Frame;
+use http_body_util::{StreamBody, Empty};
+use dragonfly_common::Error;
+use tokio::io::{AsyncSeekExt, AsyncReadExt, AsyncWriteExt};
+use futures::StreamExt; // For .next() on stream
 
 pub fn api_router() -> Router<crate::AppState> {
     Router::new()
@@ -1418,7 +1428,7 @@ async fn sse_events(
     )
 }
 
-async fn generate_ipxe_script(script_name: &str) -> Result<String> {
+async fn generate_ipxe_script(script_name: &str) -> Result<String, dragonfly_common::Error> {
     info!("Generating IPXE script: {}", script_name);
  
     match script_name {
@@ -1559,6 +1569,184 @@ boot
             Err(Error::NotFound) // Use the unit variant correctly
         },
     }
+}
+
+fn create_streaming_response(
+    stream: ReceiverStream<Result<Bytes, Error>>,
+    content_type: &str,
+    content_length: Option<u64>,
+    content_range: Option<String>
+) -> Response {
+    // Map the stream from Result<Bytes> to Result<Frame<Bytes>, BoxError>
+    let mapped_stream = stream.map(|result| {
+        match result {
+            Ok(bytes) => {
+                // Removed check for empty EOF marker
+                // Simply map non-empty bytes to a data frame
+                Ok(Frame::data(bytes))
+            },
+            Err(e) => Err(Box::new(e) as Box<dyn std::error::Error + Send + Sync>),
+        }
+    });
+    
+    // Create a stream body with explicit end signal
+    let body = StreamBody::new(mapped_stream);
+    
+    // Determine status code based on whether it's a partial response
+    let status_code = if content_range.is_some() {
+        StatusCode::PARTIAL_CONTENT
+    } else {
+        StatusCode::OK
+    };
+    
+    // Start building the response
+    let mut builder = Response::builder()
+        .status(status_code)
+        .header(axum::http::header::CONTENT_TYPE, content_type)
+        // Always accept ranges
+        .header(axum::http::header::ACCEPT_RANGES, "bytes")
+        // Always set no compression
+        .header(axum::http::header::CONTENT_ENCODING, "identity");
+
+    if let Some(length) = content_length {
+        // If Content-Length is known, set it and DO NOT use chunked encoding.
+        // This applies to both 200 OK and 206 Partial Content.
+        builder = builder.header(axum::http::header::CONTENT_LENGTH, length.to_string());
+    } else {
+        // Only use chunked encoding if length is truly unknown (should typically only be for 200 OK).
+        // It's an error to have a 206 response without Content-Length.
+        if status_code == StatusCode::OK { 
+            builder = builder.header(axum::http::header::TRANSFER_ENCODING, "chunked");
+        } else {
+            // This case (206 without Content-Length) ideally shouldn't happen with our logic.
+            // Log a warning if it does.
+            warn!("Attempting to create 206 response without Content-Length!");
+        }
+    }
+    
+    // Include Content-Range if it's a partial response
+    if let Some(range_header_value) = content_range {
+        builder = builder.header(axum::http::header::CONTENT_RANGE, range_header_value);
+    }
+    
+    // Build the final response
+    builder.body(Body::new(body))
+        .unwrap_or_else(|_| {
+            Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::new(Empty::new()))
+                .unwrap()
+        })
+}
+
+
+async fn read_file_as_stream(
+    path: &StdPath,
+    range_header: Option<&HeaderValue> // Add parameter for Range header
+) -> Result<(ReceiverStream<Result<Bytes, Error>>, Option<u64>, Option<String>), Error> { // Return size and Content-Range
+    let mut file = fs::File::open(path).await.map_err(|e| Error::Internal(format!("Failed to open file {}: {}", path.display(), e)))?; // Added mut back
+    let (tx, rx) = mpsc::channel::<Result<Bytes, Error>>(32);
+    let path_buf = path.to_path_buf();
+    
+    // Get total file size
+    let metadata = fs::metadata(path).await.map_err(|e| Error::Internal(format!("Failed to get metadata {}: {}", path.display(), e)))?;
+    let total_size = metadata.len();
+    
+    let (start, _end, response_length, content_range_header) = // Marked end as unused
+        if let Some(range_val) = range_header {
+            if let Ok(range_str) = range_val.to_str() {
+                if let Some((start, end)) = parse_range_header(range_str, total_size) {
+                    let length = end - start + 1;
+                    let content_range = format!("bytes {}-{}/{}", start, end, total_size);
+                    info!("Serving range request: {} for file {}", content_range, path.display());
+                    (start, end, length, Some(content_range))
+                } else {
+                    warn!("Invalid Range header format: {}", range_str);
+                    // Invalid range, serve the whole file
+                    (0, total_size.saturating_sub(1), total_size, None)
+                }
+            } else {
+                warn!("Invalid Range header value (not UTF-8)");
+                // Invalid range, serve the whole file
+                (0, total_size.saturating_sub(1), total_size, None)
+            }
+        } else {
+            // No range header, serve the whole file
+            (0, total_size.saturating_sub(1), total_size, None)
+        };
+
+    let response_content_length = Some(response_length);
+    let content_range_header_clone = content_range_header.clone(); // Clone for the task
+
+    tokio::spawn(async move {
+        // Handle Range requests differently: read the whole range at once
+        if content_range_header_clone.is_some() { // Use the clone
+            if start > 0 {
+                if let Err(e) = file.seek(std::io::SeekFrom::Start(start)).await {
+                    error!("Failed to seek file {}: {}", path_buf.display(), e);
+                    let _ = tx.send(Err(Error::Internal(format!("File seek error: {}", e)))).await;
+                    return;
+                }
+            }
+            
+            // Allocate buffer for the exact range size
+            let mut buffer = Vec::with_capacity(response_length as usize); // Use with_capacity
+            
+            // Create a reader limited to the exact range size
+            let mut limited_reader = file.take(response_length);
+            
+            // Read the exact range using the limited reader
+            match limited_reader.read_to_end(&mut buffer).await {
+                Ok(_) => {
+                    // Send the complete range as a single chunk
+                    if tx.send(Ok(Bytes::from(buffer))).await.is_err() {
+                        warn!("Client stream receiver dropped for file {} while sending range", path_buf.display());
+                    }
+                    // Task finishes, tx is dropped, stream closes.
+                },
+                Err(e) => {
+                    error!("Failed to read exact range for file {}: {}", path_buf.display(), e);
+                    let _ = tx.send(Err(Error::Internal(format!("File read_exact error: {}", e)))).await;
+                }
+            }
+        } else {
+            // Original streaming logic for full file requests
+            let mut buffer = vec![0; 65536]; // 64KB buffer
+            let mut remaining = response_length; // For full file, response_length == total_size
+            
+            while remaining > 0 {
+                let read_size = std::cmp::min(remaining as usize, buffer.len());
+                match file.read(&mut buffer[..read_size]).await {
+                    Ok(0) => {
+                        info!("Reached EOF while serving file {} (remaining: {} bytes)", path_buf.display(), remaining);
+                        break; // EOF reached
+                    },
+                    Ok(n) => { // Handles n > 0
+                        let chunk = Bytes::copy_from_slice(&buffer[0..n]);
+                        remaining -= n as u64;
+                        
+                        if tx.send(Ok(chunk)).await.is_err() {
+                            warn!("Client stream receiver dropped for file {}", path_buf.display());
+                            break; // Exit loop if receiver is gone
+                        }
+                    },
+                    Err(e) => {
+                        let err = Error::Internal(format!("File read error for {}: {}", path_buf.display(), e));
+                        if tx.send(Err(err)).await.is_err() {
+                            warn!("Client stream receiver dropped while sending error for {}", path_buf.display());
+                        }
+                        break; // Exit loop on read error
+                    }
+                }
+            }
+        }
+        
+        // Task finishes, tx is dropped, stream closes.
+        debug!("Finished streaming task for: {}", path_buf.display());
+    });
+    
+    // Return the stream, the length of the *content being sent*, and the *original* Content-Range header string
+    Ok((tokio_stream::wrappers::ReceiverStream::new(rx), response_content_length, content_range_header))
 }
 
 // Serve iPXE artifacts (scripts and binaries)
@@ -1743,6 +1931,186 @@ pub async fn serve_ipxe_artifact(headers: HeaderMap, Path(requested_path): Path<
     }
 }
 
+async fn stream_download_with_caching(
+    url: &str,
+    cache_path: &StdPath,
+    range_header: Option<&HeaderValue> // Add parameter for Range header
+) -> Result<(ReceiverStream<Result<Bytes, Error>>, Option<u64>, Option<String>), Error> { // Return Content-Range
+    // Create parent directory if needed
+    if let Some(parent) = cache_path.parent() {
+        fs::create_dir_all(parent).await.map_err(|e| Error::Internal(format!("Failed to create directory: {}", e)))?;
+    }
+
+    // Check if file is already cached
+    if cache_path.exists() {
+        info!("Serving cached artifact from: {:?}", cache_path);
+        return read_file_as_stream(cache_path, range_header).await; // Pass Range header
+    }
+    
+    info!("Downloading and caching artifact from: {}", url);
+    
+    // Start HTTP request with reqwest feature for streaming
+    let client = reqwest::Client::new();
+    let response = client.get(url).send().await.map_err(|e| Error::Internal(format!("HTTP request failed: {}", e)))?;
+    
+    if !response.status().is_success() {
+        return Err(Error::Internal(format!("HTTP error: {}", response.status())));
+    }
+    
+    // Get content length if available
+    let content_length = response.content_length();
+    if let Some(length) = content_length {
+        debug!("Download size: {} bytes", length);
+    }
+    
+    let file = fs::File::create(cache_path).await.map_err(|e| Error::Internal(format!("Failed to create cache file: {}", e)))?;
+    let file = Arc::new(tokio::sync::Mutex::new(file));
+    let (tx, rx) = mpsc::channel::<Result<Bytes, Error>>(32);
+    
+    let url_clone = url.to_string();
+    let cache_path_clone = cache_path.to_path_buf();
+    tokio::spawn(async move {
+        let mut client_disconnected = false;
+        let mut download_error = false;
+
+        // Get the stream. `bytes_stream` consumes the response object.
+        let mut stream = response.bytes_stream(); 
+
+        while let Some(chunk_result) = stream.next().await {
+            match chunk_result {
+                Ok(chunk) => {
+                    let chunk_clone = chunk.clone();
+                    
+                    // Write chunk to cache file concurrently
+                    let file_clone = Arc::clone(&file);
+                    let write_handle = tokio::spawn(async move {
+                        let mut file = file_clone.lock().await;
+                        file.write_all(&chunk_clone).await
+                    });
+
+                    // Attempt to send to client only if not already disconnected
+                    if !client_disconnected {
+                        if tx.send(Ok(chunk)).await.is_err() {
+                            warn!("Client stream receiver dropped for {}. Continuing download in background.", url_clone);
+                            client_disconnected = true;
+                            // DO NOT break here - let download continue for caching
+                        }
+                    }
+
+                    // Await the write operation regardless of client connection status
+                    match write_handle.await { // Await the JoinHandle itself
+                        Ok(Ok(())) => {
+                            // Write successful, continue loop
+                        },
+                        Ok(Err(e)) => {
+                            // Write operation failed
+                            warn!("Failed to write chunk to cache file {}: {}", cache_path_clone.display(), e);
+                            download_error = true;
+                            break; // Abort download if we can't write to cache
+                        },
+                        Err(e) => {
+                            // Task failed (e.g., panicked)
+                            warn!("Cache write task failed (join error) for {}: {}", cache_path_clone.display(), e);
+                            download_error = true;
+                            break; // Abort download if write task fails
+                        }
+                    }
+                },
+                Err(e) => { // e is reqwest::Error here
+                    error!("Download stream error for {}: {}", url_clone, e);
+                    // Send error to client if still connected
+                    if !client_disconnected {
+                        let err = Error::Internal(format!("Download stream error: {}", e));
+                        if tx.send(Err(err)).await.is_err() {
+                             warn!("Client stream receiver dropped while sending download error for {}", url_clone);
+                             // Client disconnected while we were trying to send an error
+                             client_disconnected = true;
+                        }
+                    }
+                    download_error = true;
+                    break; // Stop processing on download error
+                }
+            }
+            // If download_error is true, the inner match already broke, so we'll exit.
+        }
+        
+        // Explicitly drop the response stream to release network resources potentially sooner
+        drop(stream);
+
+        // Ensure file is flushed and closed first
+        if let Ok(mut file) = Arc::try_unwrap(file).map_err(|_| "Failed to unwrap Arc").and_then(|mutex| Ok(mutex.into_inner())) {
+            if let Err(e) = file.flush().await {
+                warn!("Failed to flush cache file {}: {}", cache_path_clone.display(), e);
+            }
+            // File is closed when it goes out of scope here
+        }
+        
+        // Only send EOF signal if the download completed without error AND the client is still connected
+        if !download_error && !client_disconnected {
+            info!("Download complete for {}, client still connected.", url_clone);
+            // Removed explicit EOF signal
+            // debug!("Sending EOF signal for {}", url_clone);
+            // let _ = tx.send(Ok(Bytes::new())).await;
+        } else if !download_error && client_disconnected {
+            info!("Download complete and cached for {} after client disconnected.", url_clone);
+        } else {
+            // An error occurred during download or caching
+            warn!("Download for {} did not complete successfully due to errors.", url_clone);
+            // Optionally remove the potentially incomplete cache file
+            // if let Err(e) = fs::remove_file(&cache_path_clone).await {
+            //     warn!("Failed to remove incomplete cache file {}: {}", cache_path_clone.display(), e);
+            // }
+        }
+    });
+    
+    // After download completes or if error, handle the stream
+    let (stream, content_length) = (tokio_stream::wrappers::ReceiverStream::new(rx), content_length);
+
+    // We cached the full file, but the *initial* request might have been a range request.
+    // If so, we need to read the *cached* file with range support now.
+    if range_header.is_some() {
+        info!("Download complete, now serving range request from cached file: {:?}", cache_path);
+        // Re-call read_file_as_stream with the range header on the now-cached file
+        read_file_as_stream(cache_path, range_header).await
+    } else {
+        // No range requested initially, return the full stream we prepared during download
+        Ok((stream, content_length, None)) // No Content-Range for full file
+    }
+}
+
+// Helper to parse Range header (e.g., "bytes=0-1023")
+fn parse_range_header(range_str: &str, total_size: u64) -> Option<(u64, u64)> {
+    if !range_str.starts_with("bytes=") { return None; }
+    let ranges = &range_str[6..];
+    // For now, only support single range like "0-1023" or "1024-"
+    let parts: Vec<&str> = ranges.split('-').collect();
+    if parts.len() != 2 { return None; }
+
+    let start_str = parts[0].trim();
+    let end_str = parts[1].trim();
+
+    let start = if start_str.is_empty() {
+        // Handle "bytes=-500" (last 500 bytes)
+        let len = end_str.parse::<u64>().ok()?;
+        total_size.saturating_sub(len)
+    } else {
+        start_str.parse::<u64>().ok()?
+    };
+
+    let end = if end_str.is_empty() {
+        // Handle "bytes=1024-" (from 1024 to end)
+        total_size.saturating_sub(1)
+    } else {
+        end_str.parse::<u64>().ok()?
+    };
+
+    // Validate range
+    if start > end || end >= total_size {
+        None // Invalid range
+    } else {
+        Some((start, end))
+    }
+}
 
 // Stub for getting workflow progress
 pub async fn get_workflow_progress(Path(id): Path<Uuid>) -> Response {
