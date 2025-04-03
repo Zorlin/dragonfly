@@ -887,74 +887,84 @@
         };
     }
 
-    // Progress animation variables
-    let machineProgressData = {};
+    // --- MODIFIED Progress Animation Logic --- 
+    let machineProgressData = {}; // Stores { targetProgress, realProgress, lastTaskName }
     let animationFrameId = null;
-    const FPS = 60; // Target 60fps for smooth updates
+    const FPS = 60;
 
-    // Start the progress animation loop
     function startProgressAnimation() {
-        if (animationFrameId) {
-            // Already running
-            return;
-        }
-
+        if (animationFrameId) return; // Already running
         let lastFrameTime = performance.now();
         const frameInterval = 1000 / FPS;
 
         function updateFrame(now) {
-            // Throttle to target FPS
             if (now - lastFrameTime < frameInterval) {
                 animationFrameId = requestAnimationFrame(updateFrame);
                 return;
             }
             lastFrameTime = now;
+            let needsMoreFrames = false;
 
-            // Update progress for all machines that have progress data
-            let needsUpdate = false;
-            
             Object.keys(machineProgressData).forEach(machineId => {
                 const data = machineProgressData[machineId];
-                if (!data || !data.targetProgress) return;
-                
-                // Find the machine row
-                const machineRow = document.querySelector(`tr[data-machine-id="${machineId}"]`);
+                // Ensure data exists AND has the new realProgress field
+                if (!data || data.realProgress === undefined) return; 
+                const machineRow = document.querySelector(`tr[data-machine-id=\"${machineId}\"]`);
                 if (!machineRow) return;
-                
-                // Get the progress bar
                 const progressBar = machineRow.querySelector('.workflow-progress-bar');
-                if (!progressBar) return;
-                
-                // Get current progress value
-                const currentWidth = progressBar.style.width || '0%';
-                const currentProgress = parseFloat(currentWidth) || 0;
-                
-                // Smoothly interpolate towards target progress
-                if (currentProgress < data.targetProgress) {
-                    needsUpdate = true;
-                    // Increment by small amount each frame for smooth animation
-                    const newProgress = Math.min(data.targetProgress, currentProgress + 0.5);
-                    
-                    // Update the progress bar width - don't trigger row repaint
-                    progressBar.style.width = `${newProgress}%`;
-                    
-                    // Update progress text if it exists - only update text content, not the entire row
-                    const progressText = machineRow.querySelector('.flex.justify-between.text-xs span:first-child');
-                    if (progressText) {
-                        progressText.textContent = `${Math.round(newProgress)}%`;
+                const progressTextElement = machineRow.querySelector('.flex.justify-between.text-xs span:first-child');
+                if (!progressBar || !progressTextElement) return;
+
+                let currentProgress = parseFloat(progressBar.style.width) || 0;
+                let targetVisualProgress = currentProgress; // What we aim for this frame
+
+                // --- Prioritize Real Progress --- 
+                if (data.realProgress !== null) { // Check if realProgress has a value
+                    targetVisualProgress = data.realProgress; // Jump directly
+                    // Only update DOM if significantly different to avoid thrashing
+                    if (Math.abs(currentProgress - targetVisualProgress) > 0.1) { 
+                        progressBar.style.width = `${targetVisualProgress}%`;
+                        progressTextElement.textContent = `${Math.round(targetVisualProgress)}%`;
+                        // console.log(`Jumped ${machineId} to real progress: ${targetVisualProgress.toFixed(1)}%`);
+                    }
+                    data.realProgress = null; // Consume the real progress value
+                    needsMoreFrames = true; // Might need to animate towards target later if target > real
+                } 
+                // --- Fallback to Interpolation --- 
+                else if (data.targetProgress !== undefined) {
+                    // Use targetVisualProgress from potential real jump above as starting point
+                    currentProgress = targetVisualProgress; 
+                    if (currentProgress < data.targetProgress) {
+                        const increment = (data.targetProgress - currentProgress) * 0.1; // Adjust for speed
+                        targetVisualProgress = Math.min(data.targetProgress, currentProgress + increment);
+                        progressBar.style.width = `${targetVisualProgress}%`;
+                        progressTextElement.textContent = `${Math.round(targetVisualProgress)}%`;
+                        needsMoreFrames = true; // Continue animating
+                        // console.log(`Interpolating ${machineId} towards ${data.targetProgress.toFixed(1)}% (current: ${targetVisualProgress.toFixed(1)}%)`);
+                    } else if (currentProgress > data.targetProgress) {
+                       // If current visual > target (e.g., after a real jump), 
+                       // just hold the current visual progress. Don't regress.
+                       targetVisualProgress = currentProgress; 
+                       // Check if target still needs update
+                       if (data.targetProgress > 0) needsMoreFrames = true; 
+                    } else {
+                       // currentProgress == data.targetProgress, potentially stop animating
+                       if (data.targetProgress < 100 && data.targetProgress > 0) {
+                           // Keep checking if new data comes in
+                           needsMoreFrames = true; 
+                       }
                     }
                 }
             });
-            
-            // Continue animation if any updates are needed
-            if (needsUpdate) {
+
+            if (needsMoreFrames) {
                 animationFrameId = requestAnimationFrame(updateFrame);
             } else {
+                // console.log("Animation loop stopping.");
                 animationFrameId = null;
             }
         }
-        
-        // Start the animation loop
+        // console.log("Animation loop starting.");
         animationFrameId = requestAnimationFrame(updateFrame);
     }
 
@@ -1060,6 +1070,56 @@
                 }
             } catch (e) {
                 // Silent error handling
+            }
+        });
+
+        // Attach event handlers for 'ip_download_progress' event
+        evtSource.addEventListener('ip_download_progress', function(event) {
+            try {
+                const data = JSON.parse(event.data);
+                const machineIp = data.ip;
+                
+                // Find machine row by IP (more robust if multiple machines share IP initially?)
+                // For now, assume IP is unique enough during installation
+                const machineRows = document.querySelectorAll(`td:nth-child(3) > div > span:first-child:not([x-show])`); // Find IP address spans
+                let targetMachineId = null;
+                machineRows.forEach(span => {
+                    if (span.textContent.trim() === machineIp) {
+                        const row = span.closest('tr');
+                        if(row) {
+                            targetMachineId = row.getAttribute('data-machine-id');
+                        }
+                    }
+                });
+
+                if (targetMachineId && data.bytes_downloaded !== undefined && data.total_size !== undefined) {
+                    const fileName = data.file_name || "File Download";
+                    const bytesDownloaded = parseInt(data.bytes_downloaded) || 0;
+                    const totalSize = parseInt(data.total_size) || 0;
+                    
+                    // *** Calculate the actual file download percentage ***
+                    const fileProgressPercent = (totalSize > 0) ? (bytesDownloaded / totalSize * 100) : 0;
+                    
+                    // Only update progress if the task seems related to downloading/streaming
+                    // We infer this if the filename suggests an image or kernel/initrd
+                    let taskName = "Unknown Download";
+                    const lowerFileName = fileName.toLowerCase();
+                    if (lowerFileName.includes("vmlinuz") || lowerFileName.includes("kernel")) {
+                        taskName = "Downloading kernel";
+                    } else if (lowerFileName.includes("initrd") || lowerFileName.includes("initramfs")) {
+                        taskName = "Downloading initramfs";
+                    } else if (lowerFileName.includes(".img") || lowerFileName.includes(".iso") || lowerFileName.includes("cloudimg") || lowerFileName.includes("stream image")) {
+                        taskName = "Streaming image"; // Use a consistent name
+                    } else {
+                        // If filename doesn't match known patterns, don't update progress bar based on this event
+                        return; 
+                    }
+                    
+                    // Use the CALCULATED percentage for the update
+                    updateMachineProgress(targetMachineId, fileProgressPercent, taskName, bytesDownloaded, totalSize);
+                }
+            } catch (e) {
+                console.error("Error processing ip_download_progress:", e, event.data);
             }
         });
     }
@@ -1176,51 +1236,66 @@
         });
     });
 
-    // Helper function to update machine progress
+    // MODIFIED Helper function to update machine progress data
     function updateMachineProgress(machineId, progressPercent, taskName, bytesDownloaded, totalSize) {
-        // Store progress info for animation
+        // Initialize data structure if needed, adding realProgress
         if (!machineProgressData[machineId]) {
-            machineProgressData[machineId] = {};
+            machineProgressData[machineId] = { targetProgress: 0, realProgress: null, lastTaskName: null };
         }
-        // Ensure progress never goes backwards (ratcheting)
-        machineProgressData[machineId].targetProgress = Math.max(
+        const data = machineProgressData[machineId];
+
+        // Reset progress if task name changes
+        if (data.lastTaskName !== taskName) {
+            console.log(`Task changed for ${machineId}: '${data.lastTaskName}' -> '${taskName}'. Resetting progress.`);
+            data.targetProgress = 0; 
+            data.realProgress = null;
+            data.lastTaskName = taskName;
+        }
+
+        // Update Target Progress (using existing logic)
+        data.targetProgress = Math.max(
             progressPercent,
-            machineProgressData[machineId].targetProgress || 0
+            data.targetProgress || 0
         );
+
+        // --- ADDED: Calculate and Store Real Progress --- 
+        if (bytesDownloaded !== undefined && bytesDownloaded !== null && totalSize !== undefined && totalSize !== null) {
+            const realPercent = (totalSize > 0) ? (bytesDownloaded / totalSize * 100) : 0;
+            data.realProgress = Math.max(
+                 realPercent,
+                 (data.realProgress !== null ? data.realProgress : 0) 
+             ); 
+            // console.log(`Real progress update stored for ${machineId} (${taskName}): ${data.realProgress.toFixed(1)}%`);
+        } // else: Don't overwrite realProgress if it's just an estimated update
         
-        // Find the machine row by data-machine-id
-        const machineRow = document.querySelector(`tr[data-machine-id="${machineId}"]`);
+        // Find the machine row and update static text (action/byte counts)
+        const machineRow = document.querySelector(`tr[data-machine-id=\"${machineId}\"]`);
         if (!machineRow) return;
-        
-        // Update task and file information - isolate updates to minimize DOM changes
-        const actionText = machineRow.querySelector('.flex.justify-between.text-xs span:last-child');
-        if (actionText) {
-            if (totalSize > 0) {
+        const actionTextElement = machineRow.querySelector('.flex.justify-between.text-xs span:last-child');
+        const progressContainer = machineRow.querySelector('.flex.flex-col.space-y-1');
+
+        if (actionTextElement && progressContainer) {
+            progressContainer.classList.remove('hidden');
+            progressContainer.classList.add('pointer-events-none');
+            // --- ADDED: Update Action Text with MB/Total MB --- 
+            if (totalSize !== undefined && totalSize !== null && totalSize > 0) {
                 const totalMB = (totalSize / (1024 * 1024)).toFixed(1);
-                if (bytesDownloaded > 0) {
+                if (bytesDownloaded !== undefined && bytesDownloaded !== null && bytesDownloaded >= 0) {
                     const downloadedMB = (bytesDownloaded / (1024 * 1024)).toFixed(1);
-                    // Format with MB values
-                    actionText.textContent = `${taskName} (${downloadedMB}/${totalMB} MB)`;
+                    actionTextElement.textContent = `${taskName} (${downloadedMB}/${totalMB} MB)`;
                 } else {
-                    actionText.textContent = `${taskName} (${totalMB} MB)`;
+                    actionTextElement.textContent = `${taskName} (${totalMB} MB)`;
                 }
             } else {
-                actionText.textContent = taskName;
-            }
-            
-            // Ensure the container is visible but don't affect click events
-            const container = actionText.closest('.flex.flex-col.space-y-1');
-            if (container && container.classList.contains('hidden')) {
-                container.classList.remove('hidden');
-                container.classList.add('pointer-events-none');
+                actionTextElement.textContent = taskName;
             }
         }
         
-        // Start/continue the animation
+        // Start/continue the animation loop
         startProgressAnimation();
     }
     
-    // Function to refresh the machine list
+    // Function to refresh the machine list (Keep this)
     function refreshMachineList() {
         fetch('/machines')
             .then(response => response.text())

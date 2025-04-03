@@ -1205,19 +1205,25 @@ pub async fn get_app_settings() -> Result<Settings> {
     .fetch_optional(pool)
     .await?;
     
+    // Start with default settings and make it mutable
+    let mut settings = Settings::default();
+    
     if let Some(row) = row {
-        let require_login: bool = row.get(0);
-        let default_os: Option<String> = row.get(1);
-        let setup_completed: bool = row.try_get(2).unwrap_or(false);
+        // Update settings from the fetched row
+        settings.require_login = row.get::<bool, _>("require_login");
+        settings.default_os = row.get::<Option<String>, _>("default_os");
+        settings.setup_completed = row.get::<bool, _>("setup_completed");
         
-        Ok(Settings {
-            require_login,
-            default_os,
-            setup_completed,
-        })
+        // Load admin credentials separately to populate those fields in the default settings struct
+        // Note: This might introduce a small inconsistency if DB ops fail between here and AppState creation,
+        // but it resolves the immediate panic. A better approach might involve restructuring Settings.
+        if let Ok(Some(creds)) = get_admin_credentials().await {
+            settings.admin_username = creds.username;
+            settings.admin_password_hash = creds.password_hash;
+        }
     } else {
-        // No settings found, insert default settings
-        let default_settings = Settings::default();
+        // No settings found, insert defaults for app_settings table
+        info!("No settings found in app_settings table, inserting defaults.");
         let now = Utc::now();
         let now_str = now.to_rfc3339();
         
@@ -1227,16 +1233,17 @@ pub async fn get_app_settings() -> Result<Settings> {
             VALUES (1, ?, ?, ?, ?, ?)
             "#,
         )
-        .bind(default_settings.require_login)
-        .bind(&default_settings.default_os)
-        .bind(default_settings.setup_completed)
+        .bind(settings.require_login)    // Use defaults (now accessible)
+        .bind(&settings.default_os)       // Use defaults (now accessible)
+        .bind(settings.setup_completed)  // Use defaults (now accessible)
         .bind(&now_str)
         .bind(&now_str)
         .execute(pool)
         .await?;
-        
-        Ok(default_settings)
     }
+    
+    // Return the potentially modified settings struct
+    Ok(settings)
 }
 
 // Save application settings to database

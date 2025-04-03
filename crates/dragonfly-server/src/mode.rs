@@ -5,19 +5,41 @@ use tokio::signal::unix::{signal, SignalKind};
 use anyhow::{Result, Context, anyhow, bail};
 use tracing::{info, error, warn, debug};
 use tracing_appender;
-use tracing_subscriber;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use dirs;
 use std::os::unix::fs::PermissionsExt;
 use nix::libc;
 use std::str;
-use crate::status::{check_kubernetes_connectivity, check_dragonfly_statefulset_status, get_webui_address};
 use tokio::fs;
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::Row;
 use serde_yaml;
 use std::path::Path as StdPath;
-use url;
+use crate::{
+    INSTALL_STATE_REF,
+    db::{self, get_machine_by_ip},
+    auth::{Settings, AuthSession},
+    AppState,
+    InstallationState
+};
+use dragonfly_common::models::{Machine, MachineStatus, DiskInfo};
+use std::env;
+use tokio::time::{sleep, Duration};
+use uuid::Uuid;
+use async_trait::async_trait;
+use axum::{
+    extract::{FromRef, FromRequestParts, State},
+    http::{request::Parts, HeaderMap, StatusCode},
+    response::{IntoResponse, Response, Html as AxumHtml},
+    routing::get,
+    Router,
+};
+use thiserror::Error;
+use tower_http::trace::TraceLayer;
+use minijinja::AutoEscape::Html as MinijinjaHtml;
+use crate::event_manager::EventManager;
+use crate::status::{check_kubernetes_connectivity, get_webui_address};
+use crate::TemplateEnv;
 
 // The different deployment modes
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

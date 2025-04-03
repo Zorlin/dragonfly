@@ -1,9 +1,52 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+{# Remove data attributes, embed JSON in script tags #}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8"
+     x-data="machineDetailsData()" 
+     x-init="initializeComponent()">
+
+    {# Embed JSON data using script tags #}
+    <script id="machine-data-json" type="application/json">
+        {{ machine_json | safe }} {# Use safe within script tag #}
+    </script>
+    <script id="workflow-data-json" type="application/json">
+        {{ workflow_info_json | safe }} {# Use safe within script tag #}
+    </script>
+
+    {# --- Breadcrumbs --- #}
+    <nav class="flex mb-4" aria-label="Breadcrumb">
+        <ol class="inline-flex items-center space-x-1 md:space-x-3">
+            <li class="inline-flex items-center">
+                <a href="/" class="inline-flex items-center text-sm font-medium text-gray-700 hover:text-blue-600 dark:text-gray-400 dark:hover:text-white">
+                    <svg class="w-3 h-3 mr-2.5" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="currentColor" viewBox="0 0 20 20">
+                        <path d="m19.707 9.293-2-2-7-7a1 1 0 0 0-1.414 0l-7 7-2 2a1 1 0 0 0 1.414 1.414L2 10.414V18a2 2 0 0 0 2 2h3a1 1 0 0 0 1-1v-4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v4a1 1 0 0 0 1 1h3a2 2 0 0 0 2-2v-7.586l.293.293a1 1 0 0 0 1.414-1.414Z"/>
+                    </svg>
+                    Dashboard
+                </a>
+            </li>
+            <li>
+                <div class="flex items-center">
+                    <svg class="w-3 h-3 text-gray-400 mx-1" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 6 10">
+                        <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m1 9 4-4-4-4"/>
+                    </svg>
+                    <a href="/machines" class="ml-1 text-sm font-medium text-gray-700 hover:text-blue-600 md:ml-2 dark:text-gray-400 dark:hover:text-white">Machines</a>
+                </div>
+            </li>
+            <li aria-current="page">
+                <div class="flex items-center">
+                    <svg class="w-3 h-3 text-gray-400 mx-1" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 6 10">
+                        <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m1 9 4-4-4-4"/>
+                    </svg>
+                    {# Use Jinja's default filter for fallbacks #}
+                    <span class="ml-1 text-sm font-medium text-gray-500 md:ml-2 dark:text-gray-400">{{ machine.hostname | default(machine.memorable_name | default(machine.ip_address)) }}</span>
+                </div>
+            </li>
+        </ol>
+    </nav>
+
     <div class="flex justify-between items-center mb-8">
-        <h2 class="text-2xl font-bold leading-7 text-gray-900 dark:text-white">Machine Details</h2>
+        <h2 class="text-2xl font-bold leading-7 text-gray-900 dark:text-white" x-text="machine.hostname || machine.ip_address || 'Loading...'">Machine Details</h2> 
         <a href="/machines" class="inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
             Back to Machines
         </a>
@@ -11,712 +54,189 @@
 
     <div class="bg-white dark:bg-[#1e293b] shadow overflow-hidden sm:rounded-lg mb-6 border border-transparent dark:border-white dark:border-opacity-5 dark:shadow-lg">
         <div class="px-4 py-5 sm:px-6 flex justify-between items-center">
-            <h3 class="text-lg leading-6 font-medium text-gray-900 dark:text-white">
-                {% if machine.hostname %}
-                    {{ machine.hostname }}
-                {% else %}
-                    {{ machine.ip_address }}
-                {% endif %}
+            {# Use Alpine data #}
+            <h3 class="text-lg leading-6 font-medium text-gray-900 dark:text-white" x-text="machine.hostname || machine.ip_address">
             </h3>
             <div class="flex items-center">
                 <span class="font-bold text-gray-900 dark:text-white mr-2">Status:</span>
-                <span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full 
-                    {% if machine.status == "Ready" %}
-                        bg-green-100 text-green-800 dark:bg-green-400/10 dark:text-green-300 dark:border dark:border-green-500/20
-                    {% elif machine.status == "InstallingOS" %}
-                        bg-yellow-100 text-yellow-800 dark:bg-yellow-400/10 dark:text-yellow-300 dark:border dark:border-yellow-500/20
-                    {% elif machine.status == "ExistingOS" %}
-                        bg-sky-100 text-sky-800 dark:bg-sky-400/10 dark:text-sky-300 dark:border dark:border-sky-500/20
-                    {% else %}
-                        bg-red-100 text-red-800 dark:bg-red-400/10 dark:text-red-300 dark:border dark:border-red-500/20
-                    {% endif %}">
-                    {% if machine.status == "Ready" %}
-                        Provisioned
-                    {% elif machine.status == "InstallingOS" %}
-                        Installing OS
-                    {% elif machine.status == "AwaitingAssignment" %}
-                        Awaiting OS Selection
-                    {% else %}
-                        {{ machine.status }}
-                    {% endif %}
+                 {# Bind classes and text to Alpine data #}
+                <span id="machine-status-indicator" class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full" 
+                      :class="{
+                          'bg-green-100 text-green-800 dark:bg-green-400/10 dark:text-green-300 dark:border dark:border-green-500/20': machine.status === 'Ready',
+                          'bg-yellow-100 text-yellow-800 dark:bg-yellow-400/10 dark:text-yellow-300 dark:border dark:border-yellow-500/20': machine.status === 'InstallingOS',
+                          'bg-sky-100 text-sky-800 dark:bg-sky-400/10 dark:text-sky-300 dark:border dark:border-sky-500/20': machine.status === 'ExistingOS',
+                          'bg-blue-100 text-blue-800 dark:bg-blue-400/10 dark:text-blue-300 dark:border dark:border-blue-500/20': machine.status === 'AwaitingAssignment',
+                          'bg-red-100 text-red-800 dark:bg-red-400/10 dark:text-red-300 dark:border dark:border-red-500/20': !['Ready', 'InstallingOS', 'ExistingOS', 'AwaitingAssignment'].includes(machine.status)
+                      }">
+                    <span x-text="
+                        machine.status === 'Ready' ? 'Provisioned' :
+                        machine.status === 'InstallingOS' ? 'Installing OS' :
+                        machine.status === 'AwaitingAssignment' ? 'Awaiting OS Selection' :
+                        machine.status"></span>
                 </span>
             </div>
         </div>
 
-        <!-- Deployment Progress Section - Only shown when machine is installing OS -->
-        {% if machine.status == "InstallingOS" %}
-          {% if workflow_info %}
-            <div class="border-t border-gray-200 dark:border-gray-700 p-4 sm:p-6 bg-yellow-50 dark:bg-yellow-900/10"
-                 id="workflow-progress-container">
-                <div class="mb-4">
-                    <h3 class="text-lg font-medium leading-6 text-gray-900 dark:text-yellow-100">Deployment Progress</h3>
-                    <p class="mt-1 text-sm text-gray-500 dark:text-gray-300">
-                        Template: <span class="font-semibold">{{ workflow_info.template_name }}</span>
-                        {% if workflow_info.current_action %}
-                            • Current action: {{ workflow_info.current_action }}
-                            {% if workflow_info.current_action == "Completed via kexec detection" %}
+        <!-- Deployment Progress Section - Use x-if based on Alpine data -->
+        <template x-if="machine.status === 'InstallingOS'">
+            <template x-if="workflow_info">
+                <div class="border-t border-gray-200 dark:border-gray-700 p-4 sm:p-6 bg-yellow-50 dark:bg-yellow-900/10"
+                     id="workflow-progress-container"> {# Keep ID for potential direct targeting? #}
+                    <div class="mb-4">
+                        <h3 class="text-lg font-medium leading-6 text-gray-900 dark:text-yellow-100">Deployment Progress</h3>
+                        <p class="mt-1 text-sm text-gray-500 dark:text-gray-300">
+                            Template: <span class="font-semibold" x-text="workflow_info.template_name"></span>
+                             <template x-if="workflow_info.current_action"> • Current action: <span x-text="workflow_info.current_action"></span></template>
+                             <template x-if="workflow_info.current_action == 'Completed via kexec detection'">
                                 <span class="ml-2 italic">(Auto-detected successful deployment)</span>
-                            {% endif %}
-                        {% endif %}
-                    </p>
-                </div>
-
-                <div class="relative pt-1">
-                    <div class="flex mb-2 items-center justify-between">
-                        <div>
-                            <span class="text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full
-                                {% if workflow_info.state == "STATE_FAILED" %}
-                                    text-red-600 bg-red-200 dark:text-red-200 dark:bg-red-800/30
-                                {% else %}
-                                    text-yellow-600 bg-yellow-200 dark:text-yellow-200 dark:bg-yellow-800/30
-                                {% endif %}">
-                                {% if workflow_info.state == "STATE_FAILED" %}
-                                    Failed
-                                {% else %}
-                                    In Progress
-                                {% endif %}
-                            </span>
+                            </template>
+                        </p>
+                    </div>
+                    
+                    {# ... rest of the progress section, binding to workflow_info ... #}
+                    <div class="relative pt-1">
+                        <div class="flex mb-2 items-center justify-between">
+                             <div>
+                                <span id="workflow-state-badge" class="text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full"
+                                     :class="{
+                                        'text-red-600 bg-red-200 dark:text-red-200 dark:bg-red-800/30': workflow_info.state === 'STATE_FAILED',
+                                        'text-yellow-600 bg-yellow-200 dark:text-yellow-200 dark:bg-yellow-800/30': workflow_info.state !== 'STATE_FAILED'
+                                     }">
+                                     <span x-text="workflow_info.state === 'STATE_FAILED' ? 'Failed' : 'In Progress'"></span>
+                                </span>
+                            </div>
+                             <div class="text-right">
+                                <span id="workflow-progress-percent-text" class="text-xs font-semibold inline-block text-yellow-600 dark:text-yellow-200 workflow-progress-percent"
+                                      x-text="workflow_info.progress + '% Complete'">
+                                </span>
+                            </div>
                         </div>
-                        <div class="text-right">
-                            <span class="text-xs font-semibold inline-block text-yellow-600 dark:text-yellow-200 workflow-progress-percent">
-                                {{ workflow_info.progress }}% Complete
-                            </span>
+                        <div class="overflow-hidden h-2 mb-4 text-xs flex rounded bg-yellow-200 dark:bg-yellow-700/30">
+                            <div
+                                id="workflow-progress-bar"
+                                class="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center workflow-overall-progress"
+                                :class="workflow_info.state === 'STATE_FAILED' ? 'bg-red-500 dark:bg-red-600' : 'bg-yellow-500 dark:bg-yellow-600'"
+                                :style="'width: ' + (workflow_info.progress || 0) + '%;'"
+                                :data-progress="workflow_info.progress || 0">
+                            </div>
                         </div>
                     </div>
-                    <div class="overflow-hidden h-2 mb-4 text-xs flex rounded bg-yellow-200 dark:bg-yellow-700/30">
-                        <div
-                            class="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center workflow-overall-progress {% if workflow_info.state == 'STATE_FAILED' %}bg-red-500 dark:bg-red-600{% else %}bg-yellow-500 dark:bg-yellow-600{% endif %}"
-                            style="width: {{ workflow_info.progress }}%;"
-                            data-progress="{{ workflow_info.progress }}">
-                        </div>
-                    </div>
-                </div>
 
-                <div class="mt-4">
-                    <h4 class="text-sm font-medium leading-6 text-gray-700 dark:text-gray-200 mb-2">Task Timeline</h4>
-                    <div class="overflow-x-auto">
-                        <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-600">
-                            <thead class="bg-gray-50 dark:bg-gray-700">
-                                <tr>
-                                    <th scope="col" class="px-3 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Action</th>
-                                    <th scope="col" class="px-3 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Started At</th>
-                                    <th scope="col" class="px-3 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Duration</th>
-                                    <th scope="col" class="px-3 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Est. Duration</th>
-                                    <th scope="col" class="px-3 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Status</th>
-                                </tr>
-                            </thead>
-                            <tbody class="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-                                {% for task in workflow_info.tasks %}
-                                    <tr data-task-name="{{ task.name }}"
-                                        data-task-status="{{ task.status }}"
-                                        data-started-at="{{ task.started_at }}"
-                                        data-estimated-duration="{{ task.estimated_duration }}">
-                                        <td class="px-3 py-2 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-white">{{ task.name }}</td>
-                                        <td class="px-3 py-2 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{{ task.started_at }}</td>
-                                        <td class="px-3 py-2 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-                                            {% if task.status == "STATE_SUCCESS" %}
-                                                {{ task.reported_duration }}s
-                                            {% elif task.status == "STATE_RUNNING" %}
-                                                {# JS will fill this with animated progress #}
-                                                <div class="relative w-32">
-                                                    <div class="overflow-hidden h-2 text-xs flex rounded bg-blue-200 dark:bg-blue-700/30">
-                                                        <div class="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center bg-blue-500 dark:bg-blue-600 task-progress-bar"
-                                                             style="width: 0%;"> {# Initial width set by JS #}
-                                                        </div>
-                                                    </div>
-                                                    <div class="text-xs mt-1 task-progress-percent">0%</div>
-                                                </div>
-                                            {% else %}
-                                                Pending
-                                            {% endif %}
-                                        </td>
-                                        <td class="px-3 py-2 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-                                            {{ task.estimated_duration }}s
-                                            {% if task.reported_duration != task.estimated_duration %}
-                                                {% if task.status == "STATE_SUCCESS" %}
-                                                    {% if task.reported_duration > task.estimated_duration %}
-                                                        <span class="text-red-500 ml-1">(+{{ task.reported_duration - task.estimated_duration }}s)</span>
-                                                    {% else %}
-                                                        <span class="text-green-500 ml-1">(-{{ task.estimated_duration - task.reported_duration }}s)</span>
-                                                    {% endif %}
-                                                {% endif %}
-                                            {% endif %}
-                                        </td>
-                                        <td class="px-3 py-2 whitespace-nowrap text-sm">
-                                            <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full
-                                                {% if task.status == "STATE_SUCCESS" %}
-                                                    bg-green-100 text-green-800 dark:bg-green-400/10 dark:text-green-300
-                                                {% elif task.status == "STATE_FAILED" %}
-                                                    bg-red-100 text-red-800 dark:bg-red-400/10 dark:text-red-300
-                                                {% elif task.status == "STATE_RUNNING" %}
-                                                    bg-yellow-100 text-yellow-800 dark:bg-yellow-400/10 dark:text-yellow-300
-                                                {% else %}
-                                                    bg-gray-100 text-gray-800 dark:bg-gray-400/10 dark:text-gray-300
-                                                {% endif %}">
-                                                {{ task.status }}
-                                            </span>
-                                        </td>
+                    <div class="mt-4">
+                        <h4 class="text-sm font-medium leading-6 text-gray-700 dark:text-gray-200 mb-2">Task Timeline</h4>
+                        <div id="tasks-table-container" class="overflow-x-auto">
+                            <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-600">
+                                <thead class="bg-gray-50 dark:bg-gray-700">
+                                    <tr>
+                                        <th scope="col" class="px-3 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Action</th>
+                                        <th scope="col" class="px-3 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Started At</th>
+                                        <th scope="col" class="px-3 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Duration</th>
+                                        <th scope="col" class="px-3 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Est. Duration</th>
+                                        <th scope="col" class="px-3 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Status</th>
                                     </tr>
-                                {% endfor %}
-                            </tbody>
-                        </table>
-                    </div>
+                                </thead>
+                                <tbody id="tasks-table-body" class="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
+                                     {# Use x-for to loop through Alpine data #}
+                                     <template x-for="task in workflow_info.tasks" :key="task.name">
+                                         <tr :data-task-name="task.name"
+                                             :data-task-status="task.status"
+                                             :data-started-at="task.started_at"
+                                             :data-estimated-duration="task.estimated_duration">
+                                             <td class="px-3 py-2 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-white" x-text="task.name"></td>
+                                             <td class="px-3 py-2 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400" x-text="task.started_at || 'N/A'"></td>
+                                             <td class="px-3 py-2 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+                                                 <template x-if="task.status === 'STATE_SUCCESS'">
+                                                     <span x-text="task.reported_duration + 's'"></span>
+                                                 </template>
+                                                 <template x-if="task.status === 'STATE_RUNNING'">
+                                                     <div class="relative w-32">
+                                                         <div class="overflow-hidden h-2 text-xs flex rounded bg-blue-200 dark:bg-blue-700/30">
+                                                             <div class="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center bg-blue-500 dark:bg-blue-600 task-progress-bar"
+                                                                  :style="'width: ' + (taskProgressState[task.name] || 0) + '%;'" 
+                                                                  :data-progress="taskProgressState[task.name] || 0">
+                                                             </div>
+                                                         </div>
+                                                         <div class="text-xs mt-1 progress-text">0%</div> {# JS will update this #}
+                                                     </div>
+                                                 </template>
+                                                 <template x-if="task.status !== 'STATE_SUCCESS' && task.status !== 'STATE_RUNNING'">
+                                                     <span>Pending</span>
+                                                 </template>
+                                             </td>
+                                             <td class="px-3 py-2 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+                                                 {# Display estimated duration first - Use Alpine #}
+                                                 <template x-if="task.estimated_duration !== null && task.estimated_duration !== undefined">
+                                                     <span x-text="task.estimated_duration + 's'"></span>
+                                                 </template>
+                                                 <template x-if="task.estimated_duration === null || task.estimated_duration === undefined">
+                                                     <span>N/A</span>
+                                                 </template>
+    
+                                                 {# Separately check and display comparison if possible and relevant - Use Alpine #}
+                                                 <template x-if="task.status === 'STATE_SUCCESS' && 
+                                                            task.estimated_duration !== null && task.estimated_duration !== undefined && 
+                                                            task.reported_duration !== null && task.reported_duration !== undefined &&
+                                                            task.reported_duration !== task.estimated_duration">
+                                                     <template x-if="task.reported_duration > task.estimated_duration">
+                                                         <span class="text-red-500 ml-1" x-text="'(+' + (task.reported_duration - task.estimated_duration) + 's)'"></span>
+                                                     </template>
+                                                     <template x-if="task.reported_duration < task.estimated_duration">
+                                                         <span class="text-green-500 ml-1" x-text="'(-' + (task.estimated_duration - task.reported_duration) + 's)'"></span>
+                                                     </template>
+                                                 </template>
+                                             </td>
+                                            <td class="px-3 py-2 whitespace-nowrap text-sm">
+                                                {# Use Alpine :class for status styling #}
+                                                <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full"
+                                                      :class="{
+                                                          'bg-green-100 text-green-800 dark:bg-green-400/10 dark:text-green-300': task.status === 'STATE_SUCCESS',
+                                                          'bg-red-100 text-red-800 dark:bg-red-400/10 dark:text-red-300': task.status === 'STATE_FAILED',
+                                                          'bg-yellow-100 text-yellow-800 dark:bg-yellow-400/10 dark:text-yellow-300': task.status === 'STATE_RUNNING',
+                                                          'bg-gray-100 text-gray-800 dark:bg-gray-400/10 dark:text-gray-300': !['STATE_SUCCESS', 'STATE_FAILED', 'STATE_RUNNING'].includes(task.status)
+                                                      }">
+                                                    <span x-text="task.status"></span> {# Use Alpine x-text #}
+                                                </span>
+                                            </td>
+                                        </tr>
+                                     </template>
+                                </tbody>
+                            </table>
+                        </div>
 
-                    {% if workflow_info.estimated_completion %}
-                    <div class="mt-4 text-sm text-gray-600 dark:text-gray-300">
-                        <p>Estimated completion: {{ workflow_info.estimated_completion }}</p>
+                        {# Display estimated completion using Alpine #}
+                        <template x-if="workflow_info && workflow_info.estimated_completion !== null && workflow_info.estimated_completion !== undefined">
+                            <div class="mt-4 text-sm text-gray-600 dark:text-gray-300">
+                                <p>Estimated completion: <span x-text="workflow_info.estimated_completion"></span></p>
+                            </div>
+                        </template>
                     </div>
-                    {% endif %}
                 </div>
-            </div>
-
-            <script>
-              // Server-sent events handling with robust reconnection
-              let evtSource = null;
-              let reconnectAttempts = 0;
-
-              // Progress tracking variables
-              let taskStartTimes = {}; // Track when each task started
-              let taskEstimatedDurations = {}; // Track estimated duration of each task
-              let highestProgress = 0; // Track highest overall progress (ratchet)
-              let highestTaskProgress = {}; // Track highest progress per task (ratchet)
-              let animationFrameId = null;
-              const FPS = 60; // Target 60fps for smooth updates
-              let downloadStats = {}; // Track download stats by IP and task
-
-              // Track download by IP
-              function trackDownloadByIp(ip, taskName, progressPercent, bytesDownloaded, totalSize) {
-                if (!ip) return;
-                
-                // Initialize tracking for this IP if needed
-                if (!downloadStats[ip]) {
-                  downloadStats[ip] = {};
-                }
-                
-                // Update task info
-                if (!downloadStats[ip][taskName] || progressPercent > downloadStats[ip][taskName].progress) {
-                  downloadStats[ip][taskName] = {
-                    progress: progressPercent,
-                    bytesDownloaded: bytesDownloaded,
-                    totalSize: totalSize,
-                    lastUpdated: Date.now()
-                  };
-                }
-                
-                // Find all tasks that might match this download
-                const matchingTasks = findMatchingStreamTasks(taskName);
-                if (matchingTasks.length > 0) {
-                  matchingTasks.forEach(task => {
-                    updateTaskDisplay(task, progressPercent, bytesDownloaded, totalSize);
-                  });
-                }
-              }
-              
-              // Find tasks that might be associated with a specific download
-              function findMatchingStreamTasks(taskName) {
-                const allTasks = document.querySelectorAll('tr[data-task-name]');
-                const matchingTasks = [];
-                
-                allTasks.forEach(task => {
-                  const taskNameAttr = task.getAttribute('data-task-name');
-                  if (taskNameAttr && 
-                      (taskNameAttr.toLowerCase().includes('stream') || 
-                       taskNameAttr.toLowerCase().includes('download') ||
-                       taskName.toLowerCase().includes(taskNameAttr.toLowerCase()))) {
-                    matchingTasks.push(task);
-                  }
-                });
-                
-                return matchingTasks;
-              }
-              
-              // Update a task's display with download information
-              function updateTaskDisplay(taskElement, progressPercent, bytesDownloaded, totalSize) {
-                const taskStatus = taskElement.getAttribute('data-task-status');
-                if (taskStatus !== 'STATE_RUNNING') return;
-                
-                const taskName = taskElement.getAttribute('data-task-name');
-                const firstCell = taskElement.querySelector('td:first-child');
-                const progressBar = taskElement.querySelector('.task-progress-bar');
-                const progressText = taskElement.querySelector('.task-progress-percent');
-                
-                // Update task name with file size information in first cell
-                if (firstCell && totalSize > 0) {
-                  const totalMB = (totalSize / (1024 * 1024)).toFixed(1);
-                  if (bytesDownloaded > 0) {
-                    const downloadedMB = (bytesDownloaded / (1024 * 1024)).toFixed(1);
-                    // Format: "Task Name (X/Y MB)"
-                    if (taskName.toLowerCase().includes('stream')) {
-                      firstCell.textContent = `Stream image (${downloadedMB}/${totalMB} MB)`;
-                    }
-                  } else if (taskName.toLowerCase().includes('stream')) {
-                    firstCell.textContent = `Stream image (0/${totalMB} MB)`;
-                  }
-                }
-                
-                // Update progress bar if it exists
-                if (progressBar) {
-                  // Use precise float values for smoother animation
-                  progressBar.style.width = `${progressPercent}%`;
-                }
-                
-                // Update progress text with download size
-                if (progressText) {
-                  const progressRounded = Math.round(progressPercent);
-                  if (totalSize > 0) {
-                    const totalMB = (totalSize / (1024 * 1024)).toFixed(1);
-                    if (bytesDownloaded > 0) {
-                      const downloadedMB = (bytesDownloaded / (1024 * 1024)).toFixed(1);
-                      progressText.textContent = `${progressRounded}% (${downloadedMB}/${totalMB} MB)`;
-                    } else {
-                      progressText.textContent = `${progressRounded}% (${totalMB} MB)`;
-                    }
-                  } else {
-                    progressText.textContent = `${progressRounded}%`;
-                  }
-                }
-                
-                // Update stored progress tracking data for animation
-                highestTaskProgress[taskName] = Math.max(
-                  highestTaskProgress[taskName] || 0,
-                  progressPercent
-                );
-                
-                // Make sure animation is running
-                if (!animationFrameId) {
-                  startProgressAnimation();
-                }
-              }
-
-              // Initialize progress tracking from initial page load
-              function initializeProgressTracking() {
-                // Extract task data from the DOM
-                document.querySelectorAll('[data-task-name]').forEach(el => {
-                  const taskName = el.getAttribute('data-task-name');
-                  const status = el.getAttribute('data-task-status');
-                  const startedAt = el.getAttribute('data-started-at');
-                  const estimatedDuration = parseInt(el.getAttribute('data-estimated-duration'), 10) || 0;
-
-                  // Store task data
-                  taskStartTimes[taskName] = startedAt;
-                  taskEstimatedDurations[taskName] = estimatedDuration;
-                  highestTaskProgress[taskName] = 0; // Reset highest task progress on init
-                });
-
-                // Get overall progress
-                const overallProgressEl = document.querySelector('.workflow-overall-progress');
-                if (overallProgressEl) {
-                  highestProgress = parseInt(overallProgressEl.getAttribute('data-progress'), 10) || 0;
-                }
-
-                // Start the animation loop
-                startProgressAnimation();
-              }
-
-              // Calculate progress for a running task based on elapsed time
-              function calculateTaskProgress(taskName) {
-                const startedAt = taskStartTimes[taskName];
-                const estimatedDuration = taskEstimatedDurations[taskName];
-
-                // Skip if we don't have necessary data
-                if (!startedAt || !estimatedDuration || estimatedDuration <= 0) return 0;
-
-                // Parse the start time
-                let startTime;
-                try {
-                    startTime = new Date(startedAt).getTime();
-                    if (isNaN(startTime)) throw new Error("Invalid date");
-                } catch(e) {
-                    return 0; // Return 0 if date is invalid
-                }
-
-                const now = Date.now();
-                const elapsedMs = now - startTime;
-                const elapsedSeconds = elapsedMs / 1000;
-
-                // Calculate raw progress as a percentage
-                let progress = (elapsedSeconds / estimatedDuration) * 100;
-
-                // Cap at 100%
-                progress = Math.min(progress, 100);
-
-                // Apply ratchet - never go backwards
-                progress = Math.max(progress, highestTaskProgress[taskName] || 0);
-
-                // Store new highest
-                highestTaskProgress[taskName] = progress;
-
-                return progress;
-              }
-
-              // Calculate overall workflow progress based on task weights
-              function calculateOverallProgress() {
-                let completedWeight = 0;
-                let totalWeight = 0;
-
-                // Process each task from stored data
-                Object.keys(taskEstimatedDurations).forEach(taskName => {
-                  const estimatedDuration = taskEstimatedDurations[taskName] || 0;
-                  const taskRow = document.querySelector(`tr[data-task-name="${taskName}"]`);
-                  const status = taskRow ? taskRow.getAttribute('data-task-status') : 'UNKNOWN'; // Get current status from DOM
-
-                  // Skip tasks with no estimated duration
-                  if (estimatedDuration <= 0) return;
-
-                  // Add to total weight
-                  totalWeight += estimatedDuration;
-
-                  // Calculate task's contribution to overall progress
-                  if (status === 'STATE_SUCCESS') {
-                    // Completed tasks contribute 100% of their weight
-                    completedWeight += estimatedDuration;
-                  } else if (status === 'STATE_RUNNING') {
-                    // Running tasks contribute their partial progress
-                    const taskProgress = calculateTaskProgress(taskName);
-                    completedWeight += (taskProgress / 100) * estimatedDuration;
-                  }
-                  // Pending or failed tasks contribute nothing
-                });
-
-                // Calculate overall percentage
-                let overallProgress = totalWeight > 0 ? (completedWeight / totalWeight) * 100 : 0;
-
-                // Apply ratchet - never go backwards
-                overallProgress = Math.max(overallProgress, highestProgress);
-                highestProgress = overallProgress;
-
-                return overallProgress;
-              }
-
-              // Start animation loop for smooth progress updates
-              function startProgressAnimation() {
-                if (animationFrameId) {
-                  // Already running
-                  return;
-                }
-
-                let lastFrameTime = performance.now();
-                const frameInterval = 1000 / FPS;
-
-                function updateFrame(now) {
-                  // Throttle to target FPS
-                  if (now - lastFrameTime < frameInterval) {
-                    animationFrameId = requestAnimationFrame(updateFrame);
-                    return;
-                  }
-
-                  lastFrameTime = now;
-
-                  // Get running tasks from DOM
-                  const runningTasks = document.querySelectorAll('tr[data-task-status="STATE_RUNNING"]');
-                  let needsUpdate = runningTasks.length > 0;
-
-                  // Update each running task's progress UI
-                  runningTasks.forEach(taskRow => {
-                    const taskName = taskRow.getAttribute('data-task-name');
-                    const progress = calculateTaskProgress(taskName);
-                    
-                    // Use precise float values for smoother animation
-                    const progressBar = taskRow.querySelector('.task-progress-bar');
-                    if (progressBar) {
-                      progressBar.style.width = `${progress}%`;
-                    }
-
-                    // Update progress text (round only for display)
-                    const progressText = taskRow.querySelector('.task-progress-percent');
-                    if (progressText) {
-                      const progressRounded = Math.round(progress);
-                      progressText.textContent = `${progressRounded}%`;
-                    }
-                  });
-
-                  // Update overall progress if there are running tasks
-                  if (needsUpdate) {
-                    const overallProgress = calculateOverallProgress();
-                    const overallBar = document.querySelector('.workflow-overall-progress');
-
-                    if (overallBar) {
-                      // Use precise float for smoother animation
-                      overallBar.style.width = `${overallProgress}%`;
-
-                      // Round only for text display
-                      const percentText = document.querySelector('.workflow-progress-percent');
-                      if (percentText) {
-                        const overallRounded = Math.round(overallProgress);
-                        percentText.textContent = `${overallRounded}% Complete`;
-                      }
-                    }
-
-                    // Continue the animation loop
-                    animationFrameId = requestAnimationFrame(updateFrame);
-                  } else {
-                    // No running tasks, stop the animation
-                    animationFrameId = null;
-                  }
-                }
-
-                // Start the loop
-                animationFrameId = requestAnimationFrame(updateFrame);
-              }
-
-              // Attaches listener to the GLOBAL EventSource - Retries if not found initially
-              function attachDetailsListener(retryCount = 0) {
-                const MAX_RETRIES = 5;
-                const RETRY_DELAY_MS = 200;
-
-                if (window.globalEvtSource && window.globalEvtSource.readyState !== EventSource.CLOSED) {
-                    // Attach the specific listener for this page TO THE SPECIFIC EVENT TYPE
-                    window.globalEvtSource.addEventListener('machine_updated', handleDetailsMessage);
-                    
-                    // Add listener for IP-based download tracking
-                    window.globalEvtSource.addEventListener('ip_download_progress', function(event) {
-                      try {
-                        const data = JSON.parse(event.data);
-                        if (data.ip && data.progress) {
-                          // Check if this IP matches our machine
-                          const machineIp = "{{ machine.ip_address }}";
-                          if (data.ip === machineIp) {
-                            trackDownloadByIp(
-                              data.ip, 
-                              data.file_name || "Stream image", 
-                              data.progress, 
-                              data.bytes_downloaded || 0, 
-                              data.total_size || 0
-                            );
-                          }
-                        }
-                      } catch (e) {
-                        console.error("Error processing IP download progress", e);
-                      }
-                    });
-                } else {
-                    if (retryCount < MAX_RETRIES) {
-                        setTimeout(() => attachDetailsListener(retryCount + 1), RETRY_DELAY_MS);
-                    }
-                }
-              }
-
-              // Separate handler function for clarity 
-              function handleDetailsMessage(event) {
-                  const rawData = event.data;
-                  
-                  // Get machine ID from the template context
-                  const machineId = "{{ machine.id }}";
-                  
-                  // Parse event data as JSON
-                  let eventData;
-                  try {
-                      eventData = JSON.parse(rawData);
-                  } catch (e) {
-                      return;
-                  }
-                  
-                  // Check if this event is for our machine
-                  if (eventData.type === "machine_updated" && eventData.id === machineId) {
-                    fetch(`/api/machines/${machineId}/workflow-progress`)
-                          .then(response => {
-                              if (!response.ok) {
-                                  throw new Error(`HTTP error! status: ${response.status}`);
-                              }
-                              return response.text();
-                          })
-                      .then(html => {
-                              const container = document.getElementById('workflow-progress-container');
-                              if (container) {
-                                  // Directly replace the container's outerHTML with the new content
-                                  container.outerHTML = html;
-                                  
-                                  // Re-initialize progress tracking if needed (assuming relevant elements are in the new HTML)
-                                  initializeProgressTracking(); 
-                              }
-                          })
-                          .catch(err => {
-                              // Error fetching or processing workflow progress
-                          });
-                  }
-              }
-
-              // Start connection when DOM is loaded
-              document.addEventListener('DOMContentLoaded', function() {
-                initializeProgressTracking();
-                attachDetailsListener();      // Attempt to attach listener to global SSE source
-                
-                // Listen for image progress events from HTTP range requests
-                if (window.globalEvtSource) {
-                  window.globalEvtSource.addEventListener('task_progress', function(event) {
-                    try {
-                      const rawData = event.data;
-                      
-                      // Format: "machine_id:task_name:percentage:bytes_downloaded:total_size"
-                      const parts = rawData.split(':');
-                      if (parts.length >= 5) {
-                        const machineId = parts[0];
-                        const taskName = parts[1];
-                        const progressPercent = parseFloat(parts[2]);
-                        const bytesDownloaded = parseInt(parts[3], 10);
-                        const totalSize = parseInt(parts[4], 10);
-                        
-                        // Only process if this is for our machine
-                        const currentMachineId = "{{ machine.id }}";
-                        if (machineId === currentMachineId) {
-                          // Find the task in the task list by name
-                          updateTaskProgress(taskName, progressPercent, bytesDownloaded, totalSize);
-                        }
-                      }
-                    } catch (e) {
-                      // Error processing task progress event
-                    }
-                  });
-                  
-                  // Listen for file-specific progress events (more granular)
-                  window.globalEvtSource.addEventListener('file_progress', function(event) {
-                    try {
-                      const rawData = event.data;
-                      
-                      // Format: "filename:percentage:bytes_downloaded:total_size"
-                      const parts = rawData.split(':');
-                      if (parts.length >= 4) {
-                        const fileName = parts[0];
-                        const progressPercent = parseFloat(parts[1]);
-                        const bytesDownloaded = parseInt(parts[2], 10);
-                        const totalSize = parseInt(parts[3], 10);
-                        
-                        // Track by IP directly
-                        const machineIp = "{{ machine.ip_address }}";
-                        trackDownloadByIp(machineIp, fileName, progressPercent, bytesDownloaded, totalSize);
-                        
-                        // Determine task type based on filename
-                        let taskName = "Download file";
-                        if (fileName.includes("vmlinuz")) {
-                          taskName = "Download kernel";
-                        } else if (fileName.includes("initrd") || fileName.includes("initramfs")) {
-                          taskName = "Download initramfs";
-                        } else if (fileName.includes(".img") || fileName.includes(".iso") || fileName.includes("cloudimg")) {
-                          taskName = "Download OS image";
-                        }
-                        
-                        // Update task progress in UI
-                        updateTaskProgress(taskName, progressPercent, bytesDownloaded, totalSize);
-                      }
-                    } catch (e) {
-                      // Error processing file progress event
-                    }
-                  });
-                  
-                  // For backward compatibility
-                  window.globalEvtSource.addEventListener('image_progress', function(event) {
-                    try {
-                      const rawData = event.data;
-                      
-                      // Format: "image_file:percent:total_size"
-                      const parts = rawData.split(':');
-                      if (parts.length >= 3) {
-                        const imageFile = parts[0];
-                        const progressPercent = parseFloat(parts[1]);
-                        const totalSize = parseInt(parts[2], 10);
-                        
-                        // Fall back to generic task name
-                        updateTaskProgress("Download OS image", progressPercent, 0, totalSize);
-                      }
-                    } catch (e) {
-                      // Error processing image progress event
-                    }
-                  });
-                }
-                
-                // Helper function to update task progress in the UI
-                function updateTaskProgress(taskName, progressPercent, bytesDownloaded, totalSize) {
-                  // Also update our IP tracking system
-                  const machineIp = "{{ machine.ip_address }}";
-                  if (machineIp) {
-                    trackDownloadByIp(machineIp, taskName, progressPercent, bytesDownloaded, totalSize);
-                  }
-                  
-                  // Look for "Downloading" tasks in the task list
-                  const taskRows = document.querySelectorAll('tr[data-task-name]');
-                  let matched = false;
-                  
-                  // First try to find exact task name match
-                  taskRows.forEach(task => {
-                    const rowTaskName = task.getAttribute('data-task-name');
-                    const taskStatus = task.getAttribute('data-task-status');
-                    
-                    // If task name contains our target and is in RUNNING state
-                    if (rowTaskName && rowTaskName.includes(taskName) && taskStatus === 'STATE_RUNNING') {
-                      updateTaskDisplay(task, progressPercent, bytesDownloaded, totalSize);
-                      matched = true;
-                    }
-                  });
-                  
-                  // If we didn't find a specific task match, try to update any streaming or download task
-                  if (!matched) {
-                    // Find any "stream" or "download" task that's running
-                    const streamTasks = findMatchingStreamTasks(taskName);
-                    streamTasks.forEach(task => {
-                      updateTaskDisplay(task, progressPercent, bytesDownloaded, totalSize);
-                      matched = true;
-                    });
-                  }
-                  
-                  // If still no match but progress info exists, update the overall progress
-                  if (!matched && progressPercent > 0) {
-                    // Update the overall progress bar if it exists
-                    const overallBar = document.querySelector('.workflow-overall-progress');
-                    if (overallBar) {
-                      const currentProgress = parseFloat(overallBar.getAttribute('data-progress') || '0');
-                      if (progressPercent > currentProgress) {
-                        overallBar.style.width = `${progressPercent}%`;
-                        overallBar.setAttribute('data-progress', progressPercent.toString());
-                        
-                        // Update the overall progress text
-                        const percentText = document.querySelector('.workflow-progress-percent');
-                        if (percentText) {
-                          percentText.textContent = `${Math.round(progressPercent)}% Complete`;
-                        }
-                      }
-                    }
-                  }
-                }
-
-                // Clean up when leaving the page
-                window.addEventListener('beforeunload', () => {
-                    if (window.globalEvtSource) {
-                       console.log("DEBUG: Removing machine_details 'machine_updated' listener.");
-                       window.globalEvtSource.removeEventListener('machine_updated', handleDetailsMessage);
-                  }
-                  if (animationFrameId) {
-                    console.log("Cancelling animation frame");
-                    cancelAnimationFrame(animationFrameId);
-                    animationFrameId = null;
-                  }
-                });
-              });
-            </script>
-          {% endif %}
-        {% endif %}
+            </template>
+             <template x-if="!workflow_info">
+                <div class="border-t border-gray-200 dark:border-gray-700 p-4 sm:p-6 bg-gray-50 dark:bg-gray-800/30">
+                     <p class="text-sm text-gray-500 dark:text-gray-400 italic">Waiting for workflow information...</p>
+                 </div>
+            </template>
+        </template>
 
         <div class="border-t border-gray-200 dark:border-gray-700">
             <!-- Two-column layout for Basic Info and Network Config -->
             <div class="grid grid-cols-1 md:grid-cols-2 gap-6 p-4 sm:p-6">
-                <!-- Basic Information -->
-                <div class="bg-gray-50 dark:bg-gray-800/50 rounded-lg shadow-sm overflow-hidden border border-gray-100 dark:border-gray-700">
+                 <!-- Basic Information -->
+                 <div class="bg-gray-50 dark:bg-gray-800/50 rounded-lg shadow-sm overflow-hidden border border-gray-100 dark:border-gray-700">
                     <div class="px-4 py-3 bg-gray-100 dark:bg-gray-700">
                         <h3 class="text-lg font-medium leading-6 text-gray-900 dark:text-white">Basic Information</h3>
                     </div>
                     <div class="px-4 py-4">
                         <dl class="divide-y divide-gray-200 dark:divide-gray-700">
+                            {# Bind these dds to machine.* data #}
                             <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
                                 <dt class="text-sm font-medium text-gray-500 dark:text-gray-300">MAC Address</dt>
-                                <dd class="mt-1 text-sm text-gray-900 dark:text-gray-100 sm:mt-0 sm:col-span-2 tech-mono">{{ machine.mac_address }}</dd>
+                                <dd class="mt-1 text-sm text-gray-900 dark:text-gray-100 sm:mt-0 sm:col-span-2 tech-mono" x-text="machine.mac_address"></dd>
                             </div>
                             <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
                                 <dt class="text-sm font-medium text-gray-500 dark:text-gray-300">Hostname</dt>
-                                <dd class="mt-1 text-sm text-gray-900 dark:text-gray-100 sm:mt-0 sm:col-span-2">
-                                    {% if machine.hostname %}
-                                        {{ machine.hostname }}
-                                    {% else %}
-                                        Not set
-                                    {% endif %}
+                                <dd class="mt-1 text-sm text-gray-900 dark:text-gray-100 sm:mt-0 sm:col-span-2" x-text="machine.hostname || 'Not set'">
                                 </dd>
                             </div>
                             <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
@@ -756,20 +276,26 @@
                             <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
                                 <dt class="text-sm font-medium text-gray-500 dark:text-gray-300">OS</dt>
                                 <dd class="mt-1 text-sm text-gray-900 dark:text-gray-100 sm:mt-0 sm:col-span-2 flex items-center">
-                                    {% if machine.os_choice %}
-                                        {{ machine.os_choice | format_os_icon | safe }}
-                                        <span class="ml-2">{{ machine.os_choice | format_os }}</span>
-                                    {% else %}
-                                        <i class="fas fa-square-question text-gray-500 mr-2"></i>
-                                        <span>No OS Selected</span>
-                                    {% endif %}
+                                     <template x-if="machine.os_choice">
+                                        <span>
+                                            {# Need a way to format OS icon/name in Alpine #}
+                                            <i class="fab fa-ubuntu text-orange-500 mr-2" x-show="machine.os_choice.includes('ubuntu')"></i>
+                                            <span class="ml-2" x-text="machine.os_choice"></span>
+                                        </span>
+                                    </template>
+                                    <template x-if="!machine.os_choice">
+                                        <span>
+                                            <i class="fas fa-square-question text-gray-500 mr-2"></i>
+                                            <span>No OS Selected</span>
+                                        </span>
+                                    </template>
                                 </dd>
                             </div>
                         </dl>
                     </div>
                 </div>
 
-                <!-- Network Configuration -->
+                 <!-- Network Configuration -->
                 <div class="bg-blue-50 dark:bg-blue-900/10 rounded-lg shadow-sm overflow-hidden border border-blue-100 dark:border-blue-800/30">
                     <div class="px-4 py-3 bg-blue-100 dark:bg-blue-800/30">
                         <h3 class="text-lg font-medium leading-6 text-gray-900 dark:text-white">Network Configuration</h3>
@@ -778,7 +304,7 @@
                         <dl class="divide-y divide-gray-200 dark:divide-gray-700">
                             <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
                                 <dt class="text-sm font-medium text-gray-500 dark:text-gray-300">IP Address</dt>
-                                <dd class="mt-1 text-sm text-gray-900 dark:text-gray-100 sm:mt-0 sm:col-span-2 tech-mono">{{ machine.ip_address }}</dd>
+                                <dd class="mt-1 text-sm text-gray-900 dark:text-gray-100 sm:mt-0 sm:col-span-2 tech-mono" x-text="machine.ip_address"></dd>
                             </div>
                             <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
                                 <dt class="text-sm font-medium text-gray-500 dark:text-gray-300">DNS Servers</dt>
@@ -830,25 +356,30 @@
                                                 </tr>
                                             </thead>
                                             <tbody class="divide-y divide-gray-200 dark:divide-gray-600 bg-white dark:bg-gray-800">
-                                                {% for disk in machine.disks %}
-                                                <tr>
-                                                    <td class="whitespace-nowrap py-4 pl-4 pr-3 text-sm font-medium text-gray-900 dark:text-white sm:pl-6">{{ disk.device }}</td>
-                                                    <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500 dark:text-gray-400">
-                                                        {% if disk.calculated_size %}
-                                                            {{ disk.calculated_size }}
-                                                        {% else %}
-                                                            {{ disk.size_bytes }} bytes
-                                                        {% endif %}
-                                                    </td>
-                                                    <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500 dark:text-gray-400">
-                                                        {% if disk.model %}
-                                                            {{ disk.model }}
-                                                        {% else %}
-                                                            Unknown
-                                                        {% endif %}
-                                                    </td>
-                                                </tr>
-                                                {% endfor %}
+                                                <template x-for="disk in machine.disks" :key="disk.device">
+                                                    <tr>
+                                                        <td class="whitespace-nowrap py-4 pl-4 pr-3 text-sm font-medium text-gray-900 dark:text-white sm:pl-6" x-text="disk.device"></td>
+                                                        <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500 dark:text-gray-400">
+                                                            <template x-if="disk.calculated_size">
+                                                                <span x-text="disk.calculated_size"></span>
+                                                            </template>
+                                                            <template x-if="!disk.calculated_size && disk.size_bytes !== null && disk.size_bytes !== undefined">
+                                                                <span x-text="formatBytes(disk.size_bytes)"></span>
+                                                            </template>
+                                                            <template x-if="!disk.calculated_size && (disk.size_bytes === null || disk.size_bytes === undefined)">
+                                                                <span>Unknown Size</span>
+                                                            </template>
+                                                        </td>
+                                                        <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500 dark:text-gray-400">
+                                                            <template x-if="disk.model">
+                                                                <span x-text="disk.model"></span>
+                                                            </template>
+                                                            <template x-if="!disk.model">
+                                                                <span>Unknown</span>
+                                                            </template>
+                                                        </td>
+                                                    </tr>
+                                                </template>
                                             </tbody>
                                         </table>
                                     </div>
@@ -875,4 +406,298 @@
         </div>
     </div>
 </div>
+
+<script>
+  // Define helper functions in the script scope
+  const formatBytes = (bytes, decimals = 1) => { 
+      if (bytes === 0) return '0 Bytes';
+      const k = 1024;
+      const dm = decimals < 0 ? 0 : decimals;
+      const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+  };
+  const findMatchingStreamTasks = (fileName) => { 
+      const taskRows = document.querySelectorAll('#tasks-table-body tr[data-task-name]');
+      const matchingRows = [];
+      taskRows.forEach(row => {
+          const taskNameAttr = row.getAttribute('data-task-name').toLowerCase();
+          const fileNameLower = (fileName || '').toLowerCase();
+          if (taskNameAttr.startsWith('stream image') || (fileNameLower && taskNameAttr.includes(fileNameLower))) {
+              if (!taskNameAttr.includes('complete') && !taskNameAttr.includes('failed')) {
+                  matchingRows.push(row);
+              }
+          }
+      });
+      if (matchingRows.length === 0) {
+          taskRows.forEach(row => {
+              const taskNameAttr = row.getAttribute('data-task-name').toLowerCase();
+              if (taskNameAttr.startsWith('stream image')) {
+                  if (!taskNameAttr.includes('complete') && !taskNameAttr.includes('failed')) {
+                      matchingRows.push(row);
+                  }
+              }
+          });
+      }
+      return matchingRows;
+  };
+  const startProgressAnimation = (element) => {
+      if (element && !element.classList.contains('animate-progress')) {
+          element.classList.add('animate-progress');
+      }
+  };
+  const stopProgressAnimation = (element) => {
+       if (element) {
+          element.classList.remove('animate-progress');
+      }
+  };
+
+  // Alpine component function
+  function machineDetailsData() { 
+    return {
+        // --- Properties ---
+        machine: { 
+            id: null, 
+            status: 'Loading...', 
+            hostname: null, 
+            ip_address: null, 
+            mac_address: null, 
+            memorable_name: null,
+            os_choice: null, 
+            disks: [], 
+            nameservers: [],
+            last_deployment_duration: null,
+            bmc_credentials: null // Add other keys as needed by template
+        }, 
+        workflow_info: null,
+        machineId: '', 
+        machineIp: '',
+        taskProgressState: {},
+        evtSource: null,
+        selectedStatus: '', // For the status update modal
+        fetchDebounceTimer: null, // Timer for debouncing fetches
+        error: null,
+
+        // --- Methods --- 
+        updateTaskDisplay(taskRow, ratchetedProgress, bytesDownloaded, totalSize, taskName) { 
+             // Update the reactive state used by the template binding
+             this.taskProgressState[taskName] = ratchetedProgress;
+             console.log("updateTaskDisplay called for:", taskName, "Progress:", ratchetedProgress);
+             // Update visual elements directly (already correct)
+             const progressBar = taskRow.querySelector('.task-progress-bar');
+             const progressText = taskRow.querySelector('.progress-text');
+             if (progressBar) {
+                 progressBar.style.width = `${ratchetedProgress}%`;
+             }
+             if (progressText) {
+                 if (totalSize > 0) {
+                     const downloadedMB = (bytesDownloaded / (1024 * 1024)).toFixed(1);
+                     const totalMB = (totalSize / (1024 * 1024)).toFixed(1);
+                     progressText.textContent = `${ratchetedProgress.toFixed(1)}% (${downloadedMB}/${totalMB} MB)`;
+                 } else {
+                     progressText.textContent = `${ratchetedProgress.toFixed(1)}%`;
+                 }
+             }
+        },
+
+        initSSE() {
+            console.log("Initializing SSE connection...");
+            if (this.evtSource && this.evtSource.readyState !== EventSource.CLOSED) {
+                 console.log("SSE connection already open.");
+                 return;
+            }
+            if (!this.machineId || this.machineId === 'error') {
+                 console.warn("Cannot initialize SSE without a valid machine ID.");
+                 return; // Don't init if ID not set or error
+            }
+
+            // Close existing connection if any (e.g., after error retry)
+            if (this.evtSource) {
+                this.evtSource.close();
+            }
+
+            console.log(`Attempting SSE connection to /api/events`);
+            this.evtSource = new EventSource('/api/events');
+            window.globalEvtSource = this.evtSource; // Keep global reference if needed elsewhere
+
+            this.evtSource.onopen = () => {
+                console.log("SSE connection opened.");
+                this.error = null; // Clear error on successful connection
+            };
+
+            this.evtSource.onerror = (err) => {
+                console.error('Global SSE connection error:', err);
+                // Removed sse.close() to allow auto-reconnect
+                console.log('SSE connection error. Browser will attempt to reconnect automatically.');
+                // Optionally set an error state for the UI
+                this.error = "Connection lost. Attempting to reconnect..."; 
+            };
+
+            // Generic message handler (if needed)
+            this.evtSource.onmessage = (event) => {
+                 console.log("Generic SSE message received:", event.data);
+            };
+
+            // --- Listener Replacement Start ---
+            // Listen for machine updates with debounced fetch fallback
+            this.evtSource.addEventListener('machine_updated', (event) => {
+                console.log('Received machine_updated event:', event.data);
+                try {
+                    const eventData = JSON.parse(event.data);
+                    
+                    // Clear any pending fetch timeout
+                    clearTimeout(this.fetchDebounceTimer);
+
+                    // Check if the event contains the full machine object
+                    if (eventData.machine) {
+                        // Full data received directly in the event
+                        console.log('Processing full data from SSE event.');
+                        // Ensure we only update if the ID matches the current machine
+                        if (eventData.machine.id === this.machine.id) {
+                            this.machine = eventData.machine;
+                            this.workflow_info = eventData.workflow_info || null; 
+                            console.log('Updated machine state from SSE event:', this.machine);
+                            console.log('Updated workflow info from SSE event:', this.workflow_info);
+                        } else {
+                            console.warn('Received full machine_updated event for a different machine ID:', eventData.machine.id, 'Expected:', this.machine.id);
+                        }
+                    } else if (eventData.id === this.machine.id) {
+                        // Only ID received, debounce the fetch for the current machine
+                        console.log(`Debouncing fetch for machine ${eventData.id}...`);
+                        this.fetchDebounceTimer = setTimeout(() => {
+                            console.log(`Executing debounced fetch for machine ${eventData.id}`);
+                            fetch(`/api/machines/${eventData.id}`)
+                                .then(response => {
+                                    if (!response.ok) {
+                                        // Throw an error to be caught by .catch()
+                                        throw new Error(`Network response was not ok: ${response.statusText} (${response.status})`);
+                                    }
+                                    return response.json();
+                                })
+                                .then(fullData => {
+                                    console.log('Fetched full data after event:', fullData);
+                                    if (fullData.machine && fullData.machine.id === this.machine.id) {
+                                        this.machine = fullData.machine;
+                                        this.workflow_info = fullData.workflow_info || null;
+                                        console.log('Updated machine state via fetch:', this.machine);
+                                        console.log('Updated workflow info via fetch:', this.workflow_info);
+                                        this.error = null; // Clear fetch error on success
+                                    } else if (fullData.machine && fullData.machine.id !== this.machine.id) {
+                                        console.warn('Fetched data belongs to a different machine ID:', fullData.machine.id, 'Expected:', this.machine.id);
+                                    } else {
+                                        console.warn('Fetched data missing machine structure or ID mismatch:', fullData);
+                                    }
+                                })
+                                .catch(error => {
+                                    // Log the network error 
+                                    console.error('Error fetching full machine data:', error);
+                                    // Update UI error state
+                                    this.error = `Failed to fetch update for ${eventData.id}: ${error.message}. Retrying on next event.`;
+                                });
+                        }, 32); // <-- Changed debounce delay from 500 to 32ms
+                    } else {
+                        // Event is for a different machine or has unexpected format
+                        console.warn('Ignoring machine_updated event: ID mismatch or invalid format.', 'Event ID:', eventData.id, 'Current Machine ID:', this.machine.id);
+                    }
+                } catch (e) {
+                    console.error('Error parsing machine_updated event data:', e, 'Raw data:', event.data);
+                    // Potentially update UI error state if parsing fails critically
+                    this.error = "Error processing update event.";
+                }
+            });
+            // --- Listener Replacement End ---
+
+            // Listen for machine discovered events
+            this.evtSource.addEventListener('machine_discovered', (event) => {
+                console.log("SSE Listener: machine_discovered received:", event.data);
+                // Add parsing and update logic here
+            });
+
+            // Add other specific listeners (ip_download_progress, task_progress) here if needed
+            this.evtSource.addEventListener('ip_download_progress', (event) => {
+                console.log("SSE Listener: ip_download_progress received:", event.data);
+                try {
+                    const progressData = JSON.parse(event.data);
+                    // Update logic based on progressData...
+                    // Example: Find relevant task and update its progress visually
+                    if (progressData.machine_id === this.machineId) {
+                         console.log("Matching machine ID for progress update.");
+                         const taskName = progressData.file_name || 'stream image'; // Default task name
+                         const bytesDownloaded = progressData.bytes_downloaded;
+                         const totalSize = progressData.total_size;
+                         const calculatedProgress = (totalSize > 0) ? (bytesDownloaded / totalSize * 100) : 0;
+
+                         // Find task row and update display
+                         const taskRow = document.querySelector(`#tasks-table-body tr[data-task-name="${taskName}"]`);
+                         if (taskRow) {
+                             this.updateTaskDisplay(taskRow, calculatedProgress, bytesDownloaded, totalSize, taskName);
+                         } else {
+                             console.warn(`Task row not found for progress update: ${taskName}`);
+                         }
+                     }
+                } catch (e) {
+                     console.error('Error processing ip_download_progress event:', e, event.data);
+                }
+            });
+
+             // Example for task_progress (adjust format if needed)
+             this.evtSource.addEventListener('task_progress', (event) => {
+                 console.log("SSE Listener: task_progress received:", event.data);
+                 // Add parsing and update logic here
+             });
+
+        },
+
+        initializeComponent() {
+             console.log("Initializing Alpine component...");
+             try {
+                 // READ data from script tags
+                 const machineDataElement = document.getElementById('machine-data-json');
+                 const workflowDataElement = document.getElementById('workflow-data-json');
+
+                 const rawMachineData = machineDataElement ? machineDataElement.textContent : '{}';
+                 const rawWorkflowData = workflowDataElement ? workflowDataElement.textContent : 'null';
+
+                 console.log("Raw machine data from script tag:", rawMachineData.trim()); // Use trim
+                 console.log("Raw workflow data from script tag:", rawWorkflowData.trim()); // Use trim
+
+                 // Parse JSON safely
+                 this.machine = JSON.parse(rawMachineData.trim() || '{}'); 
+                 this.workflow_info = JSON.parse(rawWorkflowData.trim() || 'null'); 
+
+                 // Set IDs after parsing
+                 this.machineId = this.machine.id || '';
+                 this.machineIp = this.machine.ip_address || '';
+                 console.log("Parsed machine data:", JSON.parse(JSON.stringify(this.machine))); // Deep copy for logging
+                 console.log("Parsed workflow info:", this.workflow_info);
+             } catch (e) {
+                 console.error("Failed to parse initial JSON data from script tags:", e);
+                 // Set default error state
+                 this.machine = { id: 'error', ip_address: 'error', status: 'Error parsing data', hostname: 'Error' };
+                 this.workflow_info = null;
+                 this.machineId = 'error';
+                 this.machineIp = 'error';
+             }
+
+             // Initialize task progress state from DOM after initial render
+             this.$nextTick(() => {
+                 if (this.workflow_info && this.workflow_info.tasks) {
+                     this.workflow_info.tasks.forEach(task => {
+                         this.taskProgressState[task.name] = task.progress || 0;
+                         // Update visual progress bars if needed
+                         const taskRow = document.querySelector(`#tasks-table-body tr[data-task-name="${task.name}"]`);
+                         if (taskRow) {
+                             const progressBar = taskRow.querySelector('.task-progress-bar');
+                             if(progressBar) progressBar.style.width = `${this.taskProgressState[task.name]}%`;
+                         }
+                     });
+                 }
+             });
+
+             // Initialize SSE connection AFTER initial data is parsed and properties are set
+             this.initSSE(); 
+        }
+    };
+  }
+</script>
 {% endblock %}

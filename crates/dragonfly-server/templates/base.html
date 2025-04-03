@@ -513,26 +513,7 @@
                                     <button
                                         type="button"
                                         class="inline-flex w-full justify-center rounded-md bg-red-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-red-500 sm:ml-3 sm:w-auto"
-                                        @click="fetch(`/api/machines/${currentMachine}`, {
-                                            method: 'DELETE',
-                                            headers: {
-                                                'Content-Type': 'application/json'
-                                            }
-                                        })
-                                        .then((response) => {
-                                            if (!response.ok) {
-                                                throw new Error('Network response was not ok');
-                                            }
-                                            showToast('Machine deleted successfully', 'success');
-                                            // Redirect after a short delay to allow toast visibility
-                                            setTimeout(() => { window.location.href = '/machines'; }, 1000);
-                                            deleteModal = false; // Close modal
-                                        })
-                                        .catch(error => {
-                                            showToast('Failed to delete machine', 'error');
-                                            console.error('Error deleting machine:', error);
-                                            // Keep modal open on error
-                                        })"
+                                        @click="fetch(`/api/machines/${currentMachine}`, {\n                                            method: 'DELETE',\n                                            // Add credentials include for session cookies\n                                            credentials: 'include', \n                                            headers: {\n                                                'Content-Type': 'application/json'\n                                            }\n                                        })\n                                        .then((response) => {\n                                            if (!response.ok) {\n                                                throw new Error('Network response was not ok');\n                                            }\n                                            showToast('Machine deleted successfully', 'success');\n                                            // Redirect after a short delay to allow toast visibility\n                                            setTimeout(() => { window.location.href = '/machines'; }, 1000);\n                                            deleteModal = false; // Close modal\n                                        })\n                                        .catch(error => {\n                                            showToast('Failed to delete machine', 'error');\n                                            console.error('Error deleting machine:', error);\n                                            // Keep modal open on error\n                                        })"
                                     >
                                         Delete
                                     </button>

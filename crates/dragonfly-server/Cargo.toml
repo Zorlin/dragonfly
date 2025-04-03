@@ -14,13 +14,13 @@ axum = { version = "0.8.3", features = ["macros", "ws", "http2"] }
 # Authentication
 # Revert axum-login back to stable version
 axum-login = { version = "0.17.0" }
-axum-extra = { version = "0.10.1", features = ["typed-header"] }
+axum-extra = { version = "0.10.1", features = ["typed-header", "cookie", "cookie-signed"] }
 # Sessions
 tower-sessions = { version = "0.14.0" }
 # Use sqlx store - trying version 0.15.0 for compatibility
 tower-sessions-sqlx-store = { version = "0.15.0", features = ["sqlite"] }
 async-session = "3.0.0"
-async-trait = "0.1.79"
+async-trait = "0.1"
 # For SSE streaming
 async-stream = "0.3.5"
 # Password hashing
@@ -52,7 +52,7 @@ thiserror = "1.0.48"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["registry", "env-filter", "fmt"] }
 once_cell = "1.17.1"
-cookie = "0.18"
+cookie = { version = "0.18", features = ["private"] }
 bincode = "1.3"
 tower-cookies = "0.11.0"
 
@@ -100,5 +100,10 @@ flate2 = "1.0"
 # Error handling (moved from root)
 color-eyre = "0.6" # Add color-eyre dependency
 lazy_static = "1.4.0"
+
+# New dependencies
+base64 = "0.22"
+oauth2 = { version = "4.4", features = ["reqwest"] }
+urlencoding = "2.1"
 
 [dev-dependencies]

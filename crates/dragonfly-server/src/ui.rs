@@ -77,11 +77,13 @@ pub struct MachineListTemplate {
 
 #[derive(Serialize)]
 pub struct MachineDetailsTemplate {
-    pub machine: Machine,
+    pub machine_json: String,
     pub theme: String,
     pub is_authenticated: bool,
     pub created_at_formatted: String,
     pub updated_at_formatted: String,
+    pub workflow_info_json: String,
+    pub machine: Machine,
     pub workflow_info: Option<crate::tinkerbell::WorkflowInfo>,
 }
 
@@ -656,14 +658,33 @@ pub async fn machine_details(
                     } else {
                         None
                     };
+
+                    // Serialize machine and workflow_info to JSON strings
+                    let machine_json = serde_json::to_string(machine)
+                        .unwrap_or_else(|e| {
+                            error!("Failed to serialize demo machine to JSON: {}", e);
+                            "{}".to_string() // Default to empty JSON object on error
+                        });
+                    // ADD DEBUG LOG
+                    info!("Serialized demo machine JSON: {}", machine_json);
+                    
+                    let workflow_info_json = serde_json::to_string(&workflow_info)
+                        .unwrap_or_else(|e| {
+                             error!("Failed to serialize demo workflow info to JSON: {}", e);
+                             "null".to_string() // Default to JSON null on error
+                         });
+                    // ADD DEBUG LOG
+                    info!("Serialized demo workflow JSON: {}", workflow_info_json);                         
                     
                     let context = MachineDetailsTemplate {
-                        machine: machine.clone(),
+                        machine_json, // Pass JSON string
                         theme,
                         is_authenticated,
                         created_at_formatted,
                         updated_at_formatted,
-                        workflow_info,
+                        workflow_info_json, // Pass JSON string
+                        machine: machine.clone(), // Pass original struct too
+                        workflow_info, // Pass original option too
                     };
                     return render_minijinja(&app_state, "machine_details.html", context);
                 } else {
@@ -711,14 +732,33 @@ pub async fn machine_details(
                         None
                     };
                     
+                    // Serialize machine and workflow_info to JSON strings
+                    let machine_json = serde_json::to_string(&machine)
+                        .unwrap_or_else(|e| {
+                            error!("Failed to serialize machine {} to JSON: {}", machine.id, e);
+                            "{}".to_string() // Default to empty JSON object on error
+                        });
+                    // ADD DEBUG LOG
+                    info!("Serialized machine JSON for {}: {}", machine.id, machine_json);
+                    
+                    let workflow_info_json = serde_json::to_string(&workflow_info)
+                        .unwrap_or_else(|e| {
+                             error!("Failed to serialize workflow info for machine {} to JSON: {}", machine.id, e);
+                             "null".to_string() // Default to JSON null on error
+                         });
+                    // ADD DEBUG LOG
+                    info!("Serialized workflow JSON for {}: {}", machine.id, workflow_info_json);                         
+
                     // Replace Askama render with placeholder
                     let context = MachineDetailsTemplate {
-                        machine,
+                        machine_json, // Pass JSON string
                         theme,
                         is_authenticated,
                         created_at_formatted,
                         updated_at_formatted,
-                        workflow_info,
+                        workflow_info_json, // Pass JSON string
+                        machine: machine.clone(), // Pass original struct too
+                        workflow_info, // Pass original option too
                     };
                     // Pass AppState to render_minijinja
                     render_minijinja(&app_state, "machine_details.html", context)
@@ -726,61 +766,55 @@ pub async fn machine_details(
                 Ok(None) => {
                     error!("Machine not found: {}", uuid);
                     // Replace Askama render with placeholder
-                    let context = IndexTemplate {
-                        title: "Dragonfly - Machine Not Found".to_string(),
-                        machines: vec![],
-                        status_counts: HashMap::new(),
-                        status_counts_json: "{}".to_string(),
-                        theme: "system".to_string(),
+                    let context = ErrorTemplate { // Use ErrorTemplate for consistency
+                        theme,
                         is_authenticated,
-                        display_dates: HashMap::new(),
-                        installation_in_progress: false,
-                        initial_install_message: String::new(),
-                        initial_animation_class: String::new(),
-                        is_demo_mode: false,
+                        title: "Machine Not Found".to_string(),
+                        message: "The requested machine could not be found.".to_string(),
+                        error_details: format!("UUID: {}", uuid),
+                        back_url: "/machines".to_string(),
+                        back_text: "Back to Machines".to_string(),
+                        show_retry: false,
+                        retry_url: "".to_string(),
                     };
                     // Pass AppState to render_minijinja
-                    render_minijinja(&app_state, "index.html", context)
+                    render_minijinja(&app_state, "error.html", context) // Render error template
                 },
                 Err(e) => {
                     error!("Error fetching machine {}: {}", uuid, e);
                     // Replace Askama render with placeholder
-                    let context = IndexTemplate {
-                        title: "Dragonfly - Error".to_string(),
-                        machines: vec![],
-                        status_counts: HashMap::new(),
-                        status_counts_json: "{}".to_string(),
-                        theme: "system".to_string(),
+                    let context = ErrorTemplate { // Use ErrorTemplate
+                        theme,
                         is_authenticated,
-                        display_dates: HashMap::new(),
-                        installation_in_progress: false,
-                        initial_install_message: String::new(),
-                        initial_animation_class: String::new(),
-                        is_demo_mode: false,
+                        title: "Database Error".to_string(),
+                        message: "An error occurred while fetching machine details.".to_string(),
+                        error_details: format!("Error: {}", e),
+                        back_url: "/machines".to_string(),
+                        back_text: "Back to Machines".to_string(),
+                        show_retry: false,
+                        retry_url: "".to_string(),
                     };
                     // Pass AppState to render_minijinja
-                    render_minijinja(&app_state, "index.html", context)
+                    render_minijinja(&app_state, "error.html", context) // Render error template
                 }
             }
         },
         Err(e) => {
             error!("Invalid UUID: {}", e);
             // Replace Askama render with placeholder
-            let context = IndexTemplate {
-                title: "Dragonfly - Invalid UUID".to_string(),
-                machines: vec![],
-                status_counts: HashMap::new(),
-                status_counts_json: "{}".to_string(),
-                theme: "system".to_string(),
+            let context = ErrorTemplate { // Use ErrorTemplate
+                theme,
                 is_authenticated,
-                display_dates: HashMap::new(),
-                installation_in_progress: false,
-                initial_install_message: String::new(),
-                initial_animation_class: String::new(),
-                is_demo_mode: false,
+                title: "Invalid Request".to_string(),
+                message: "The provided machine ID was not a valid format.".to_string(),
+                error_details: format!("Invalid UUID: {}", id),
+                back_url: "/machines".to_string(),
+                back_text: "Back to Machines".to_string(),
+                show_retry: false,
+                retry_url: "".to_string(),
             };
             // Pass AppState to render_minijinja
-            render_minijinja(&app_state, "index.html", context)
+            render_minijinja(&app_state, "error.html", context) // Render error template
         }
     }
 }
@@ -936,6 +970,13 @@ pub async fn update_settings(
             // Use the setup_completed value from the form if present (checkbox is checked),
             // otherwise keep the current value from the database.
             setup_completed: form.setup_completed.is_some().then_some(true).unwrap_or(current_settings.setup_completed),
+            admin_username: current_settings.admin_username.clone(),
+            admin_password_hash: current_settings.admin_password_hash.clone(),
+            oauth_client_id: current_settings.oauth_client_id.clone(),
+            oauth_client_secret: current_settings.oauth_client_secret.clone(),
+            oauth_auth_url: current_settings.oauth_auth_url.clone(),
+            oauth_token_url: current_settings.oauth_token_url.clone(),
+            oauth_redirect_url: current_settings.oauth_redirect_url.clone(),
         };
 
         info!("Saving settings: require_login={}, default_os={:?}, setup_completed={:?}", 
@@ -1276,5 +1317,68 @@ pub fn setup_minijinja_environment(env: &mut minijinja::Environment) -> Result<(
     // Set up more configuration as needed
     env.add_global("now", minijinja::Value::from(chrono::Utc::now().to_rfc3339()));
     
+    // Add custom filter for robust JSON serialization
+    env.add_filter("to_json", |value: minijinja::Value| -> Result<String, minijinja::Error> {
+        match serde_json::to_string(&value) {
+            Ok(s) => Ok(s),
+            Err(e) => Err(minijinja::Error::new(
+                minijinja::ErrorKind::InvalidOperation,
+                format!("Failed to serialize value to JSON: {}", e)
+            )),
+        }
+    });
+    
     Ok(())
+}
+
+// ---- Alert Messages ----
+
+#[derive(Serialize, Debug, Clone)]
+pub struct AlertMessage {
+    level: String, // e.g., "success", "error", "info", "warning"
+    message: String,
+}
+
+impl AlertMessage {
+    pub fn success(message: &str) -> Self {
+        AlertMessage { level: "success".to_string(), message: message.to_string() }
+    }
+    pub fn error(message: &str) -> Self {
+        AlertMessage { level: "error".to_string(), message: message.to_string() }
+    }
+    // Add info and warning if needed
+}
+
+// Trait to add alert messages to responses (e.g., via cookies)
+pub trait AddAlert {
+    fn add_alert(self, alert: AlertMessage) -> Self;
+}
+
+impl AddAlert for Response {
+    fn add_alert(mut self, alert: AlertMessage) -> Self {
+        match serde_json::to_string(&alert) {
+            Ok(json_alert) => {
+                // Use Cookie builder for better configuration
+                let mut cookie = Cookie::build(("dragonfly_alert", json_alert))
+                    .path("/")
+                    // Make SameSite::Lax for broader compatibility with redirects
+                    .same_site(SameSite::Lax)
+                    // Set HttpOnly to false so JavaScript can read it
+                    .http_only(false)
+                    // Set MaxAge to 0 so it's a session cookie (or short duration)
+                    .max_age(time::Duration::seconds(5)); // Expires after 5 seconds
+
+                // Add the cookie header
+                self.headers_mut().append(
+                    header::SET_COOKIE,
+                    cookie.finish().to_string().parse().unwrap(),
+                );
+            }
+            Err(e) => {
+                error!("Failed to serialize alert message: {}", e);
+                // Optionally add a fallback mechanism or just log the error
+            }
+        }
+        self
+    }
 } 

@@ -637,8 +637,6 @@ fn get_avg_time_for_action(template_name: &str, action_name: &str) -> Option<u64
                 if !durations.is_empty() {
                     let sum: u64 = durations.iter().sum();
                     let avg = sum / durations.len() as u64;
-                    info!("Found timing data for {}/{}: avg={}s from {} samples", 
-                          template_name, action_name, avg, durations.len());
                     return Some(avg);
                 }
             }
@@ -658,7 +656,6 @@ fn get_avg_time_for_action(template_name: &str, action_name: &str) -> Option<u64
         }
     }
     
-    info!("No timing data found for {}/{}", template_name, action_name);
     None
 }
 
@@ -931,7 +928,6 @@ pub async fn get_workflow_info(machine: &Machine) -> Result<Option<WorkflowInfo>
                                             reported_seconds // Fall back to reported seconds if non-zero
                                         } else {
                                             // We have no data at all
-                                            info!("No timing data available for {}/{}", template_ref, name);
                                             0 // Can't make any assumptions
                                         };
                                         

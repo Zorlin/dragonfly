@@ -1,27 +1,48 @@
-use std::fs;
-use std::io;
-use std::path::Path;
-use std::sync::Arc;
-use std::collections::HashMap;
-
-use argon2::{password_hash::SaltString, Argon2, PasswordHasher, PasswordVerifier};
-use axum::{
-    extract::{Form, Extension, Request, State, Query},
-    http::{StatusCode},
-    middleware::Next,
-    response::{Html, IntoResponse, Redirect, Response},
-    Router,
-    routing::{get, post},
-    Json,
-};
-use axum_login::{AuthUser, AuthnBackend};
-use rand::{distributions::Alphanumeric, Rng, rngs::OsRng};
-use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
-use tracing::{error, info};
+use anyhow::Context;
+use async_session::{MemoryStore, Session, SessionStore};
 use async_trait::async_trait;
-use serde_json;
+use axum::{
+    extract::{FromRef, FromRequestParts, Path, Query, State},
+    http::{header, request::Parts, HeaderMap, Request, StatusCode},
+    middleware::Next,
+    response::{IntoResponse, Redirect, Response, Html},
+    routing::{get, post},
+    Extension, Form,
+    Router,
+};
+use axum_extra::extract::{cookie::Key, SignedCookieJar};
+use base64::engine::Engine;
+use oauth2::{
+    basic::BasicClient,
+    reqwest::async_http_client,
+    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, PkceCodeChallenge,
+    PkceCodeVerifier, RedirectUrl, Scope, TokenResponse, TokenUrl,
+};
+use serde::{Deserialize, Serialize};
+use std::env;
+use tower_http::trace::TraceLayer;
+use tracing::{debug, error, info, warn};
+use argon2::{
+    password_hash::{PasswordHash, PasswordVerifier as ArgonPasswordVerifier, SaltString},
+    Argon2, PasswordHasher,
+};
+use rand::rngs::OsRng;
 use minijinja::{Error as MiniJinjaError, ErrorKind as MiniJinjaErrorKind};
+use axum_login::{AuthUser, AuthnBackend, UserId};
+use std::io;
+use std::fs;
+use std::collections::HashMap;
+use std::path::Path as StdPath;
+use rand::{Rng, distributions::Alphanumeric};
+use crate::ui::AddAlert;
+use thiserror::Error;
+use std::sync::Arc;
+use urlencoding;
+
+use crate::{
+    ui::AlertMessage,
+    AppState,
+};
 
 // Constants for the initial password file (not for loading, just for UX)
 const INITIAL_PASSWORD_FILE: &str = "initial_password.txt";
@@ -69,11 +90,54 @@ pub struct LoginForm {
     pub password: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Admin {
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct AdminUser {
     pub id: i64,
     pub username: String,
-    pub password_hash: String,
+}
+
+impl AuthUser for AdminUser {
+    type Id = i64;
+
+    fn id(&self) -> Self::Id {
+        self.id
+    }
+
+    fn session_auth_hash(&self) -> &[u8] {
+        self.username.as_bytes()
+    }
+}
+
+// Define a basic AuthError for OAuth callback
+#[derive(Debug, Error)]
+pub enum AuthError {
+    #[error("OAuth state mismatch")]
+    StateMismatch,
+    #[error("Missing query parameter: {0}")]
+    MissingParam(String),
+    #[error("Cookie error: {0}")]
+    CookieError(String),
+    #[error("OAuth token exchange failed: {0}")]
+    TokenExchangeFailed(String),
+    #[error("Failed to get user info: {0}")]
+    UserInfoFailed(String),
+    #[error("Session login error: {0}")]
+    SessionLoginError(String),
+    #[error(transparent)]
+    RequestTokenError(#[from] oauth2::RequestTokenError<oauth2::reqwest::Error<reqwest::Error>, oauth2::StandardErrorResponse<oauth2::basic::BasicErrorResponseType>>),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+// Implement IntoResponse for AuthError to return appropriate HTTP responses
+impl IntoResponse for AuthError {
+    fn into_response(self) -> Response {
+        error!("Authentication error: {}", self);
+        // Redirect to login with an error message
+        Redirect::to(&format!("/login?error={}", urlencoding::encode(&self.to_string())))
+            .into_response()
+            .add_alert(AlertMessage::error(&self.to_string())) // Use AddAlert here
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -81,6 +145,14 @@ pub struct Settings {
     pub require_login: bool,
     pub default_os: Option<String>,
     pub setup_completed: bool,
+    // Add fields from previous Credentials/AdminBackend if needed by new Settings
+    pub admin_username: String, 
+    pub admin_password_hash: String, 
+    pub oauth_client_id: Option<String>,
+    pub oauth_client_secret: Option<String>,
+    pub oauth_auth_url: Option<String>,
+    pub oauth_token_url: Option<String>,
+    pub oauth_redirect_url: Option<String>,
 }
 
 impl Default for Settings {
@@ -89,59 +161,28 @@ impl Default for Settings {
             require_login: false,
             default_os: None,
             setup_completed: false,
+            admin_username: "admin".to_string(),
+            admin_password_hash: String::new(), // Default to empty, should be set
+            oauth_client_id: None,
+            oauth_client_secret: None,
+            oauth_auth_url: None,
+            oauth_token_url: None,
+            oauth_redirect_url: None,
         }
     }
 }
 
-// The auth user type which will be stored in the session
-impl AuthUser for Admin {
-    type Id = i64;
-
-    fn id(&self) -> Self::Id {
-        self.id
-    }
-
-    fn session_auth_hash(&self) -> &[u8] {
-        self.password_hash.as_bytes()
-    }
-}
-
-// Define a backend for authentication
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AdminBackend {
-    pub credentials: Credentials,
+    db: sqlx::SqlitePool,
+    settings: Settings,
 }
 
 impl AdminBackend {
-    pub fn new(credentials: Credentials) -> Self {
-        Self { credentials }
+    pub fn new(db: sqlx::SqlitePool, settings: Settings) -> Self {
+        Self { db, settings }
     }
     
-    // Verify credentials
-    pub async fn verify_credentials(&self, credentials: Credentials) -> bool {
-        // If username doesn't match, reject
-        if credentials.username != self.credentials.username {
-            return false;
-        }
-        
-        // Verify the password against the stored hash
-        let password_matches = match &credentials.password {
-            Some(password) => {
-                match argon2::Argon2::default().verify_password(
-                    password.as_bytes(),
-                    &argon2::PasswordHash::new(&self.credentials.password_hash).unwrap(),
-                ) {
-                    Ok(_) => true,
-                    Err(_) => false,
-                }
-            },
-            None => false,
-        };
-        
-        password_matches
-    }
-    
-    // Update credentials
     pub async fn update_credentials(&self, username: String, password: String) -> anyhow::Result<Credentials> {
         // Create new credentials with hashed password
         let new_credentials = Credentials::create(username, password)?;
@@ -155,70 +196,121 @@ impl AdminBackend {
 
 impl Default for AdminBackend {
     fn default() -> Self {
+        // NOTE: This default implementation likely won't work without a valid DB connection.
+        // Consider removing it or making it connect to an in-memory DB for tests.
+        // For now, let it panic if the connection fails.
+        let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite::memory:".to_string());
+        let pool = tokio::runtime::Runtime::new().unwrap().block_on(async {
+            sqlx::sqlite::SqlitePoolOptions::new()
+                .connect(&db_url)
+                .await
+        }).expect("Failed to create SQLite pool in AdminBackend::default");
+
         Self {
-            credentials: Credentials::default(),
+            db: pool,
+            settings: Settings::default(),
         }
     }
 }
 
-// The backend for handling authentication
 #[async_trait]
 impl AuthnBackend for AdminBackend {
-    type User = Admin;
+    type User = AdminUser;
     type Credentials = Credentials;
-    type Error = io::Error;
+    type Error = MiniJinjaError;
 
     async fn authenticate(
         &self,
         creds: Self::Credentials,
     ) -> Result<Option<Self::User>, Self::Error> {
-        // If username doesn't match, reject
-        if creds.username != self.credentials.username {
-            return Ok(None);
-        }
-        
-        // Verify the password against the stored hash
-        let password_matches = match &creds.password {
-            Some(password) => {
-                match argon2::Argon2::default().verify_password(
-                    password.as_bytes(),
-                    &argon2::PasswordHash::new(&self.credentials.password_hash).unwrap(),
-                ) {
-                    Ok(_) => true,
-                    Err(_) => false,
-                }
-            },
-            None => false,
+        let username = creds.username.clone();
+
+        // Fetch the stored hash from the database
+        let stored_hash = match sqlx::query!(
+            "SELECT password_hash FROM admin_credentials WHERE username = ?",
+            creds.username
+        )
+        .fetch_optional(&self.db)
+        .await
+        {
+            Ok(Some(record)) => record.password_hash,
+            Ok(None) => {
+                info!("Authentication failed: User '{}' not found", creds.username);
+                return Ok(None);
+            }
+            Err(e) => {
+                error!("Database error fetching credentials for user '{}': {}", creds.username, e);
+                return Err(MiniJinjaError::new(MiniJinjaErrorKind::InvalidOperation, format!("Database error: {}", e)));
+            }
         };
-        
-        if password_matches {
-            Ok(Some(Admin {
-                id: 1,
-                username: self.credentials.username.clone(),
-                password_hash: self.credentials.password_hash.clone(),
-            }))
+
+        // Convert password to owned bytes Option
+        let password_bytes = creds.password.map(|p| p.into_bytes());
+
+        // Verify the password using Argon2 within a blocking task
+        let is_valid = match password_bytes {
+            Some(bytes) => {
+                // Move stored_hash and bytes into the closure
+                match tokio::task::spawn_blocking(move || {
+                    match PasswordHash::new(&stored_hash) {
+                        Ok(parsed_hash) => {
+                            Argon2::default().verify_password(&bytes, &parsed_hash).is_ok()
+                        }
+                        Err(_) => false // Error parsing hash means invalid
+                    }
+                }).await {
+                    Ok(result) => result,
+                    Err(e) => {
+                        error!("Spawn blocking task failed during password verification for user '{}': {}", username, e);
+                        false // Treat join errors as verification failure
+                    }
+                }
+            }
+            None => {
+                info!("Authentication failed for user '{}': No password provided", username);
+                false // No password provided
+            }
+        };
+
+        if is_valid {
+            info!("Authentication successful for user '{}'", username);
+            // Fetch the user ID from the database to create the AdminUser
+             match sqlx::query_as!(AdminUser, "SELECT id, username FROM admin_credentials WHERE username = ?", username)
+                .fetch_one(&self.db)
+                .await {
+                    Ok(user) => Ok(Some(user)),
+                    Err(e) => {
+                        error!("Database error fetching user details for '{}': {}", username, e);
+                         Err(MiniJinjaError::new(MiniJinjaErrorKind::InvalidOperation, format!("Database error fetching user: {}", e)))
+                    }
+                }
         } else {
+            info!("Authentication failed: Invalid password for user '{}'", username);
             Ok(None)
         }
     }
 
-    async fn get_user(&self, user_id: &i64) -> Result<Option<Self::User>, Self::Error> {
-        if *user_id == 1 {
-            Ok(Some(Admin {
-                id: 1,
-                username: self.credentials.username.clone(),
-                password_hash: self.credentials.password_hash.clone(),
-            }))
-        } else {
-            Ok(None)
+    async fn get_user(&self, user_id: &UserId<Self>) -> Result<Option<Self::User>, Self::Error> {
+        // Fetch the user from the database based on the user_id
+        match sqlx::query_as!(
+            AdminUser,
+            "SELECT id, username FROM admin_credentials WHERE id = ?",
+            user_id
+        )
+        .fetch_optional(&self.db)
+        .await
+        {
+            Ok(user_opt) => Ok(user_opt),
+            Err(e) => {
+                error!("Database error fetching user by ID '{}': {}", user_id, e);
+                 Err(MiniJinjaError::new(MiniJinjaErrorKind::InvalidOperation, format!("Database error fetching user by ID: {}", e)))
+            }
         }
     }
 }
 
-// Session types
 pub type AuthSession = axum_login::AuthSession<AdminBackend>;
 
-// Setup the auth layer and router
 pub fn auth_router() -> Router<crate::AppState> {
     Router::new()
         .route("/login", get(login_page))
@@ -227,7 +319,6 @@ pub fn auth_router() -> Router<crate::AppState> {
         .route("/login-test", get(login_test_handler))
 }
 
-// Remove Askama derives, add Serialize
 #[derive(Serialize)]
 struct LoginTemplate {
     is_demo_mode: bool,
@@ -300,10 +391,9 @@ async fn login_handler(
         let username = if form.username.trim().is_empty() { "demo_user".to_string() } else { form.username.clone() };
         
         // Create a demo admin user - use the same hash as lib.rs creates for demo credentials
-        let demo_user = Admin {
+        let demo_user = AdminUser {
             id: 1,
             username,
-            password_hash: "$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHRzb21lc2FsdA$WrTpFYXQY6pZu0K+uskWZwl8fOk0W4Dj/pXGXJ9qPXc".to_string(),
         };
         
         // Hard-set the user session
@@ -357,15 +447,18 @@ async fn login_handler(
 
 async fn logout(mut auth_session: AuthSession) -> Response {
     match auth_session.logout().await {
-        Ok(_) => Redirect::to("/login").into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Ok(_) => Redirect::to("/login")
+            .into_response()
+            .add_alert(AlertMessage::success("Successfully logged out.")),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR
+            .into_response()
+            .add_alert(AlertMessage::error("Failed to log out.")),
     }
 }
 
-// Helper functions for managing credentials
 pub async fn generate_default_credentials() -> anyhow::Result<Credentials> {
     // Check if an initial password file already exists
-    if Path::new(INITIAL_PASSWORD_FILE).exists() {
+    if StdPath::new(INITIAL_PASSWORD_FILE).exists() {
         info!("Initial password file exists - attempting to load existing credentials from database");
         // Try to load credentials from database first
         if let Ok(Some(creds)) = crate::db::get_admin_credentials().await {
@@ -472,26 +565,13 @@ pub async fn save_settings(settings: &Settings) -> io::Result<()> {
     }
 }
 
-// Add pub to make require_admin public
 pub fn require_admin(auth_session: &AuthSession) -> Result<(), Response> {
-    // Check if we're in demo mode
-    let is_demo_mode = std::env::var("DRAGONFLY_DEMO_MODE").is_ok();
-    
-    // In demo mode, allow access to admin actions even if not authenticated
-    // (should not happen since we force login, but just in case)
-    if is_demo_mode && auth_session.user.is_some() {
-        return Ok(());
-    }
-    
-    if auth_session.user.is_none() {
-        let body = serde_json::json!({ "error": "Unauthorized", "message": "Admin authentication required" });
-        Err((StatusCode::UNAUTHORIZED, Json(body)).into_response())
-    } else {
-        Ok(())
+    match auth_session.user {
+        Some(_) => Ok(()),
+        None => Err(Redirect::to("/login").into_response()),
     }
 }
 
-// Debug endpoint to verify login status
 async fn login_test_handler(auth_session: AuthSession) -> impl IntoResponse {
     let is_demo_mode = std::env::var("DRAGONFLY_DEMO_MODE").is_ok();
     let is_authenticated = auth_session.user.is_some();
@@ -545,4 +625,214 @@ async fn login_test_handler(auth_session: AuthSession) -> impl IntoResponse {
     );
     
     Html(html)
+}
+
+pub async fn oauth_callback(
+    State(app_state): State<AppState>,
+    State(client): State<BasicClient>,
+    Query(params): Query<HashMap<String, String>>,
+    jar: SignedCookieJar,
+    mut auth_session: AuthSession,
+) -> Result<impl IntoResponse, AuthError> {
+    info!("Handling OAuth callback");
+
+    // Verify state parameter
+    let state_cookie = jar.get("oauth_state").ok_or(AuthError::CookieError("Missing state cookie".to_string()))?;
+    let expected_state = state_cookie.value().to_string();
+    let received_state = params.get("state").ok_or(AuthError::MissingParam("state".to_string()))?;
+
+    if expected_state != *received_state {
+        return Err(AuthError::StateMismatch);
+    }
+
+    // Get PKCE verifier from cookie
+    let pkce_verifier_cookie = jar.get("oauth_pkce_verifier").ok_or(AuthError::CookieError("Missing PKCE verifier cookie".to_string()))?;
+    let pkce_verifier = PkceCodeVerifier::new(pkce_verifier_cookie.value().to_string());
+
+    // Get authorization code
+    let code = params.get("code").ok_or(AuthError::MissingParam("code".to_string()))?;
+
+    // Get settings directly from the passed-in app_state
+    let settings = app_state.settings.lock().await;
+
+    // Exchange authorization code for tokens
+    let token_result = client
+        .exchange_code(AuthorizationCode::new(code.to_string()))
+        .set_pkce_verifier(pkce_verifier)
+        .request_async(oauth2::reqwest::async_http_client)
+        .await
+        .map_err(|e| AuthError::TokenExchangeFailed(e.to_string()))?;
+        //.map_err(AuthError::RequestTokenError)?;
+
+    // Here you would typically fetch user info using the access token
+    // let user_info = fetch_user_info(token_result.access_token()).await?;
+    
+    // For now, let's just create a placeholder user
+    let user = AdminUser {
+        id: 1, // Or generate a unique ID based on OAuth provider info
+        username: "oauth_user".to_string(), // Use actual username from provider
+    };
+
+    // Log the user into the session (use the extracted auth_session)
+    // let mut auth_session = AuthSession::from_request_parts(&mut Default::default(), &app_state)
+    //     .await
+    //     .map_err(|_| AuthError::SessionLoginError("Failed to extract auth session".to_string()))?;
+        
+    auth_session.login(&user).await.map_err(|e| AuthError::SessionLoginError(format!("Session login failed: {}", e)))?;
+
+    info!("OAuth login successful for user: {}", user.username);
+
+    // Remove used cookies
+    let jar = jar.remove(cookie::Cookie::named("oauth_state"));
+    let jar = jar.remove(cookie::Cookie::named("oauth_pkce_verifier"));
+
+    // Redirect to the main page
+    Ok((jar, Redirect::to("/")).into_response())
+}
+
+pub async fn login(
+    State(_app_state): State<AppState>, // Mark as unused for now
+    mut _auth_session: AuthSession, // Mark as unused for now
+    Form(_creds): Form<Credentials>, // Mark as unused for now
+) -> Response {
+    // Placeholder implementation - This function likely needs to call
+    // auth_session.authenticate and auth_session.login similar to login_handler
+    // For now, return an error or redirect
+    warn!("/api/login endpoint hit, but not fully implemented yet");
+    (StatusCode::NOT_IMPLEMENTED, "Login endpoint not fully implemented").into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    async fn setup_test_app() -> (Router, AppState) {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .connect("sqlite::memory:")
+            .await
+            .expect("Failed to connect to in-memory SQLite DB");
+
+        // Apply migrations (if you have them)
+        // sqlx::migrate!("./migrations").run(&pool).await.expect("Failed migrations");
+
+        // Create dummy settings using default and hash a password
+        let mut settings = Settings::default();
+        settings.admin_password_hash = hash_password("password".to_string()).await.unwrap();
+
+        // Insert the test user credentials into the DB
+        sqlx::query!(
+            "INSERT OR IGNORE INTO admin_credentials (username, password_hash) VALUES (?, ?)",
+            settings.admin_username,
+            settings.admin_password_hash
+        )
+        .execute(&pool)
+        .await
+        .expect("Failed to insert test admin credentials");
+
+        // Fetch the ID of the inserted user (or assume 1 if IGNORE worked)
+        // let user_record = sqlx::query!("SELECT id FROM admin_credentials WHERE username = ?", settings.admin_username)
+        //    .fetch_one(&pool).await.expect("Failed to fetch test user ID");
+        // let test_user_id = user_record.id;
+
+
+        let backend = AdminBackend { db: pool.clone(), settings: settings.clone() };
+        let session_store = MemoryStore::new();
+        let secret = Key::generate();
+        let session_layer = SessionManagerLayer::new(session_store)
+            .with_secure(false)
+            .with_signed(secret.clone());
+
+        let auth_layer = AuthManagerLayerBuilder::new(backend.clone(), session_layer).build();
+
+        // Create AppState with necessary components
+        let app_state = AppState {
+            dbpool: pool.clone(),
+            settings: backend.settings.clone(),
+            template_env: crate::TemplateEnv::Static(Arc::new(crate::ui::create_jinja_env().unwrap())), // Example static env
+            event_manager: crate::event_manager::EventManager::new(), // Example event manager
+             // auth_backend: backend, // If AppState needs the backend directly
+        };
+
+        let app = Router::new()
+             // Use the actual login handler route
+            .route("/login", post(login_handler))
+            .route("/logout", get(logout))
+            .route("/protected", get(login_test_handler))
+            .layer(auth_layer)
+            .with_state(app_state.clone());
+
+        (app, app_state)
+    }
+
+    // Dummy handler for protected route test
+    async fn login_test_handler(auth_session: AuthSession) -> impl IntoResponse {
+        if auth_session.user.is_some() {
+            (StatusCode::OK, "Protected content")
+        } else {
+            (StatusCode::UNAUTHORIZED, "Unauthorized")
+        }
+    }
+
+    #[tokio::test]
+    async fn test_login_success() {
+        let (app, _) = setup_test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/login")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("username=admin&password=password"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert!(response.headers().get("location").unwrap().to_str().unwrap().contains("/"));
+    }
+
+    #[tokio::test]
+    async fn test_login_failure_wrong_password() {
+        let (app, _) = setup_test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/login")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("username=admin&password=wrongpassword"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert!(response.headers().get("location").unwrap().to_str().unwrap().contains("/login"));
+    }
+
+    #[tokio::test]
+    async fn test_login_failure_user_not_found() {
+        let (app, _) = setup_test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/login")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("username=unknownuser&password=password"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert!(response.headers().get("location").unwrap().to_str().unwrap().contains("/login"));
+    }
 }

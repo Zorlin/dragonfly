@@ -11,7 +11,7 @@ use tower_cookies::CookieManagerLayer;
 use tower_http::services::ServeDir;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::watch;
-use anyhow::Context;
+use anyhow::{Result, Context, anyhow, bail};
 use listenfd::ListenFd;
 use axum::middleware; // Import middleware
 
@@ -175,6 +175,8 @@ pub struct AppState {
     pub is_installation_server: bool, // True if started via install command
     // Add client IP tracking
     pub client_ip: Arc<Mutex<Option<String>>>,
+    // Store the raw Pool<Sqlite> here
+    pub dbpool: sqlx::Pool<sqlx::Sqlite>,
 }
 
 // Clean up any existing processes
@@ -308,39 +310,33 @@ pub async fn run() -> anyhow::Result<()> {
     }
 
     // Load or generate admin credentials
-    let credentials = if is_demo_mode {
-        // In demo mode, use a special credentials object
-        info!("Demo mode: Using simplified admin credentials");
-        Credentials {
-            username: "admin".to_string(),
-            password: None,
-            password_hash: "$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHRzb21lc2FsdA$WrTpFYXQY6pZu0K+uskWZwl8fOk0W4Dj/pXGXJ9qPXc".to_string(), // demo hash
+    let credentials = match auth::load_credentials().await {
+        Ok(creds) => {
+            info!("Loaded admin credentials successfully");
+            creds
         }
-    } else {
-        match load_credentials().await { // Essential logic
-            Ok(creds) => {
-                 if !is_installation_server { info!("Loaded existing admin credentials"); } // Conditional Log
-                creds
-            },
-            Err(_) => {
-                if !is_installation_server { info!("No admin credentials found, generating default credentials"); } // Cond Log
-                match generate_default_credentials().await { // Essential logic
-                    Ok(creds) => creds,
-                    Err(e) => {
-                        eprintln!("CRITICAL: Failed to generate default credentials: {}", e);
-                        return Err(anyhow::anyhow!("Failed to generate default credentials: {}", e));
-                    }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            info!("No existing admin credentials found, generating default");
+            match auth::generate_default_credentials().await {
+                Ok(creds) => creds,
+                Err(e) => {
+                    error!("Failed to generate default admin credentials: {}", e);
+                    return Err(anyhow!("Failed to initialize admin credentials: {}", e));
                 }
             }
         }
+        Err(e) => {
+            error!("Error loading admin credentials: {}", e);
+            return Err(anyhow!("Failed to load admin credentials: {}", e));
+        }
     };
 
-     // Load settings
-    let settings = match load_settings().await { // Essential
+    // Load settings from database or use defaults
+    let settings = match auth::load_settings().await {
         Ok(s) => s,
-        Err(e) => {
-            if !is_installation_server { info!("Failed to load settings: {}, using defaults", e); } // Cond Log
-            Settings::default()
+        Err(_) => {
+            info!("Using default app settings");
+            auth::Settings::default() // Use default settings if loading fails
         }
     };
 
@@ -436,7 +432,7 @@ pub async fn run() -> anyhow::Result<()> {
 
     // Create application state
     let app_state = AppState {
-        settings: Arc::new(Mutex::new(settings)),
+        settings: Arc::new(Mutex::new(settings.clone())), // Clone settings here
         event_manager: event_manager.clone(), // Use the one created earlier
         setup_mode,
         first_run,
@@ -448,10 +444,12 @@ pub async fn run() -> anyhow::Result<()> {
         is_installation_server,
         // Initialize client IP tracking
         client_ip: Arc::new(Mutex::new(None)),
+        // Store the db_pool directly
+        dbpool: db_pool.clone(),
     };
 
     // Session store setup
-    let session_store = SqliteStore::new(db_pool.clone()); // Essential
+    let session_store = SqliteStore::new(db_pool.clone()); // Create store from the pool
     session_store.migrate().await?;
 
     // Session layer setup - use very permissive settings to ensure consistent behavior
@@ -461,7 +459,8 @@ pub async fn run() -> anyhow::Result<()> {
         .with_http_only(false);  // Allow JavaScript access to cookies
 
     // Auth backend setup
-    let backend = AdminBackend::new(credentials);
+    // Pass the pool and settings directly from AppState
+    let backend = AdminBackend::new(app_state.dbpool.clone(), app_state.settings.lock().await.clone());
     
     // Build the auth layer
     let auth_layer = AuthManagerLayerBuilder::new(backend, session_layer)
