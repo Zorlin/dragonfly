@@ -891,7 +891,7 @@ pub struct SettingsForm {
     pub require_login: Option<String>,
     pub default_os: Option<String>,
     pub username: Option<String>,
-    pub admin_password: Option<String>,
+    pub password: Option<String>,
     pub password_confirm: Option<String>,
     pub setup_completed: Option<String>,
 }
@@ -904,13 +904,13 @@ pub async fn update_settings(
 ) -> Response {
     let is_authenticated = auth_session.user.is_some();
     let theme = form.theme.clone();
-    
+
     // Only require admin authentication for admin settings
     // If trying to change admin settings but not authenticated, redirect to login
     if (form.require_login.is_some() || 
         form.default_os.is_some() || 
         form.username.is_some() || 
-        form.admin_password.is_some() || 
+        form.password.is_some() || 
         form.password_confirm.is_some() ||
         form.setup_completed.is_some()) && !is_authenticated {
         return Redirect::to("/login").into_response();
@@ -938,6 +938,9 @@ pub async fn update_settings(
             setup_completed: form.setup_completed.is_some().then_some(true).unwrap_or(current_settings.setup_completed),
         };
 
+        info!("Saving settings: require_login={}, default_os={:?}, setup_completed={:?}", 
+              new_settings.require_login, new_settings.default_os, new_settings.setup_completed);
+
         // Save the general settings
         if let Err(e) = save_app_settings(&new_settings).await {
             error!("Failed to save settings: {}", e);
@@ -946,8 +949,8 @@ pub async fn update_settings(
         }
 
         // Update admin password if provided and confirmed
-        // Check form.admin_password instead of form.password
-        if let (Some(password), Some(confirm)) = (&form.admin_password, &form.password_confirm) {
+        // Check form.password instead of form.password
+        if let (Some(password), Some(confirm)) = (&form.password, &form.password_confirm) {
             if !password.is_empty() && password == confirm {
                 // Load current credentials to get username (or use default 'admin')
                 let username = match auth::load_credentials().await {

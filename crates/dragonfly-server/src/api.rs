@@ -2141,7 +2141,7 @@ pub async fn check_hookos_artifacts() -> bool {
     ];
 
     for file in files {
-        let path = FilePath::new("/var/lib/dragonfly/ipxe/hookos").join(file);
+        let path = FilePath::new("/var/lib/dragonfly/ipxe-artifacts/hookos").join(file);
         if !path.exists() {
             return false;
         }
@@ -2153,7 +2153,7 @@ pub async fn check_hookos_artifacts() -> bool {
 
 pub async fn download_hookos_artifacts(version: &str) -> anyhow::Result<()> {
     // Create directory structure if it doesn't exist
-    let hookos_dir = FilePath::new("/var/lib/dragonfly/ipxe/hookos");
+    let hookos_dir = FilePath::new("/var/lib/dragonfly/ipxe-artifacts/hookos");
     if !hookos_dir.exists() {
         info!("Creating directory structure: {:?}", hookos_dir);
         std::fs::create_dir_all(hookos_dir)?;
