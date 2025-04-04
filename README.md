@@ -52,7 +52,7 @@ More features:
 - 🌍 (WIP) Uses DNS to find machine hostnames automatically
 - 🔒 (WIP) Login system with admin/user roles and permissions
 - 🔧 (WIP) Reimage any machine in two clicks
-- 🧸 **Safety Mode (Molly Guard)** — avoid accidentally nuking a machine
+- 🧸 (WIP) **Safety Mode (Molly Guard)** — avoid accidentally nuking a machine
 - 🚀 (WIP) Built-in IPMI/BMC/Redfish power control
   and SSH control support for flexible node power operations.
 - 🧠 (WIP) Effortless grouping and tagging for your machines,
