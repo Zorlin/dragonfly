@@ -331,7 +331,7 @@ class GamepadController {
                 });
                 
                 // Refilter to include the new elements
-                return this.focusableElements.filter(el => visibleModal.contains(el));
+        return this.focusableElements.filter(el => visibleModal.contains(el));
             }
         }
         
@@ -485,7 +485,7 @@ class GamepadController {
             } 
             
             // Fallback to normal behavior if not on machine list or no rows found
-            if (this.focusableElements.length > 0) {
+        if (this.focusableElements.length > 0) {
                 // Avoid focusing the Add Machine button as first element
                 const addMachineButtonIndex = this.focusableElements.findIndex(el => {
                     return (el.textContent && el.textContent.includes('Add Machine')) || 
@@ -497,9 +497,9 @@ class GamepadController {
                     this.focusElementAtIndex(1);
                 } else {
                     console.log('Attempting initial focus (index 0) with delay...');
-                    this.focusElementAtIndex(0);
+            this.focusElementAtIndex(0);
                 }
-            } else {
+        } else {
                 console.warn('No focusable elements found when showing gamepad UI, retrying...');
                 // Try again after a longer delay
                 setTimeout(() => {
@@ -680,9 +680,9 @@ class GamepadController {
             if (!el || !el.style) return false;
             
             try {
-                const style = window.getComputedStyle(el);
-                return style.display !== 'none' && 
-                       style.visibility !== 'hidden' && 
+            const style = window.getComputedStyle(el);
+            return style.display !== 'none' && 
+                   style.visibility !== 'hidden' && 
                        !el.hasAttribute('disabled') &&
                        !el.hasAttribute('aria-hidden');
             } catch (e) {
@@ -735,7 +735,7 @@ class GamepadController {
             console.log(`[Gamepad] Modal active: filtered to ${this.focusableElements.length} elements inside modal`);
             
             // Specifically for add-machine-modal, make sure we include the card options
-            if (addMachineModal) {
+        if (addMachineModal) {
                 console.log('[Gamepad] Special handling for Add Machine modal');
                 
                 // For machine cards, grab all div and button elements that look like cards
@@ -759,14 +759,14 @@ class GamepadController {
                 console.log(`[Gamepad] Found ${addMachineCards.length} machine cards in Add Machine modal`);
                 
                 // Add all cards to focusable elements
-                addMachineCards.forEach(card => {
+            addMachineCards.forEach(card => {
                     if (!this.focusableElements.includes(card) && 
                         window.getComputedStyle(card).display !== 'none' && 
                         window.getComputedStyle(card).visibility !== 'hidden') {
                         console.log('[Gamepad] Adding machine card to focusable elements:', card);
-                        this.focusableElements.push(card);
-                    }
-                });
+                    this.focusableElements.push(card);
+                }
+            });
                 
                 // Also include direct div children that look like cards
                 const cardOptions = Array.from(modalVisible.querySelectorAll('div > div.rounded-lg, button.rounded-lg, .grid > div'));
@@ -854,11 +854,11 @@ class GamepadController {
                 
                 // Add the action buttons we found earlier
                 actionButtons.forEach(button => {
-                    if (!this.focusableElements.includes(button)) {
+                if (!this.focusableElements.includes(button)) {
                         console.log(`[Gamepad] Adding action button to focusable elements:`, button);
-                        this.focusableElements.push(button);
-                    }
-                });
+                    this.focusableElements.push(button);
+                }
+            });
                 
                 // Add OS dropdown triggers
                 osDropdownTriggers.forEach(trigger => {
@@ -902,7 +902,7 @@ class GamepadController {
         const preXCloakCount = this.focusableElements.length;
         this.focusableElements = this.focusableElements.filter(el => {
             try {
-                return !el.closest('[x-cloak]');
+            return !el.closest('[x-cloak]');
             } catch (e) {
                 // If error in closest(), keep the element
                 console.warn('[Gamepad] Error checking x-cloak:', e);
@@ -1210,7 +1210,7 @@ class GamepadController {
                     
                     // For OS dropdown triggers, we need to click it to toggle the dropdown
                     this.resetButtonStates();
-                    this.activeElement.click();
+                this.activeElement.click();
                     
                     // After clicking, we need to update focusable elements to include the dropdown options
                     setTimeout(() => {
@@ -1385,9 +1385,9 @@ class GamepadController {
                         'button[type="button"]:not([type="submit"])'
                     );
                     
-                    if (cancelButton) {
+                if (cancelButton) {
                         console.log('[Gamepad] Found cancel button in Add Machine modal, clicking it');
-                        cancelButton.click();
+                    cancelButton.click();
                     } else {
                         console.log('[Gamepad] No cancel button found in Add Machine modal, using Alpine.js global state');
                         // Try to use Alpine.js global state to close the modal
@@ -1425,7 +1425,7 @@ class GamepadController {
                 }
             } else {
                 console.log('[Gamepad] B pressed - going back');
-                window.history.back();
+            window.history.back();
             }
         }
         
@@ -1512,7 +1512,7 @@ class GamepadController {
         } else {
             this.analogMoved = false;
         }
-
+        
         // Right analog stick (Free Cursor)
         const rightX = gamepad.axes[2];
         const rightY = gamepad.axes[3];

@@ -107,6 +107,8 @@ We also thank other projects that Dragonfly builds on, such as:
 
 Thanks to [Taylor Vick](https://unsplash.com/photos/cable-network-M5tzZtFCOfs) for the login page background image ("racks.jpg")
 
+Thanks to [DJARTMUSIC](https://pixabay.com/sound-effects/short-fire-whoosh-1-317280/) for the rocket ignition sound effect.
+
 ## 📝 License
 
 Dragonfly is licensed under the AGPLv3 license.

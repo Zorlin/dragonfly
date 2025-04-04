@@ -446,6 +446,12 @@
 {% endblock %}
 
 {% block scripts %}
+    {# Add rocket sound effect audio element (hidden) #}
+    <audio id="rocket-ignition-sound" preload="auto" style="display:none;">
+        <source src="/static/sounds/rocket-ignition.mp3" type="audio/mpeg">
+        <!-- MP3 is supported by all modern browsers -->
+    </audio>
+    
     {# Conditionally include the correct script tag based on installation progress #}
     {% if installation_in_progress %}
     <script>
@@ -463,6 +469,7 @@
         let currentAnimationState = null; // Track current animation state
         let currentMessageState = null; // Track current message
         let reconnectTimer = null; // Track reconnect timer for cleanup
+        let rocketSoundPlayed = false; // Track if rocket sound has been played
 
         // Function to update UI elements
         function updateUI(status) {
@@ -521,6 +528,12 @@
                 
                 // Phase 7 (Ready) is special - we clear everything and show only the flame
                 if (phase === 7) {
+                    // Play rocket ignition sound when entering flame stage
+                    if (!rocketSoundPlayed) {
+                        playRocketSound();
+                        rocketSoundPlayed = true;
+                    }
+                
                     // Reset/stop all animations
                     const animations = svgEl.querySelectorAll('animate, animateTransform');
                     animations.forEach(anim => {
@@ -643,6 +656,31 @@
                 console.log("Installation complete. Reloading...");
                 if (evtSource) evtSource.close();
                 setTimeout(() => { window.location.reload(); }, 3000);
+            }
+        }
+
+        // Function to play rocket ignition sound with controlled volume
+        function playRocketSound() {
+            const soundElement = document.getElementById('rocket-ignition-sound');
+            if (soundElement) {
+                console.log("Playing rocket ignition sound");
+                try {
+                    // Set volume to 50% to clamp peaks while keeping quiet parts audible
+                    soundElement.volume = 0.5;
+                    
+                    // Play the sound with a promise to catch any autoplay restrictions
+                    const playPromise = soundElement.play();
+                    if (playPromise !== undefined) {
+                        playPromise.catch(error => {
+                            console.warn("Autoplay prevented by browser:", error);
+                            // We could add a play button here if needed for browsers with strict autoplay policies
+                        });
+                    }
+                } catch (err) {
+                    console.error("Error playing rocket sound:", err);
+                }
+            } else {
+                console.warn("Rocket sound element not found");
             }
         }
 
@@ -926,6 +964,8 @@
             // Test for each animation state in descending priority order
             if (animationClass.includes('rocket-fire')) {
                 phase = 7;
+                // Play rocket sound when testing fire animation
+                playRocketSound();
             } else if (animationClass.includes('rocket-flicker')) {
                 phase = 6;
             } else if (animationClass.includes('rocket-smoke')) {
