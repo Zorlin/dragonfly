@@ -164,7 +164,7 @@ class GamepadController {
                                     const index = this.focusableElements.indexOf(firstModalElement);
                                     if (index !== -1) {
                                         console.log('[Gamepad] Focusing first element in Add Machine modal');
-                                        this.focusElementAtIndex(index);
+                                        this.focusElementAtIndex(index, false); // Don't scroll on initial modal focus
                                     }
                                 }
                             }, 200);
@@ -193,7 +193,7 @@ class GamepadController {
                             const firstModalElement = modalElements[0];
                             const index = this.focusableElements.indexOf(firstModalElement);
                             if (index !== -1) {
-                                this.focusElementAtIndex(index);
+                                this.focusElementAtIndex(index, false); // Don't scroll on initial modal focus
                             }
                         }
                     }
@@ -376,7 +376,7 @@ class GamepadController {
                 
                 if (firstRowIndex !== -1) {
                     console.log('[Gamepad] Focusing first machine row after controller connection');
-                    this.focusElementAtIndex(firstRowIndex);
+                    this.focusElementAtIndex(firstRowIndex, false); // Don't scroll
                 }
             }
         }, 500);
@@ -479,13 +479,13 @@ class GamepadController {
                 
                 if (firstRowIndex !== -1) {
                     console.log('[Gamepad] Found first row at index', firstRowIndex);
-                    this.focusElementAtIndex(firstRowIndex);
+                    this.focusElementAtIndex(firstRowIndex, false); // Don't scroll on initial focus
                     return;
                 }
             } 
             
             // Fallback to normal behavior if not on machine list or no rows found
-        if (this.focusableElements.length > 0) {
+            if (this.focusableElements.length > 0) {
                 // Avoid focusing the Add Machine button as first element
                 const addMachineButtonIndex = this.focusableElements.findIndex(el => {
                     return (el.textContent && el.textContent.includes('Add Machine')) || 
@@ -494,12 +494,12 @@ class GamepadController {
                 
                 if (addMachineButtonIndex === 0 && this.focusableElements.length > 1) {
                     console.log('[Gamepad] Skipping Add Machine button as first focus, using index 1 instead');
-                    this.focusElementAtIndex(1);
+                    this.focusElementAtIndex(1, false); // Don't scroll on initial focus
                 } else {
                     console.log('Attempting initial focus (index 0) with delay...');
-            this.focusElementAtIndex(0);
+                    this.focusElementAtIndex(0, false); // Don't scroll on initial focus
                 }
-        } else {
+            } else {
                 console.warn('No focusable elements found when showing gamepad UI, retrying...');
                 // Try again after a longer delay
                 setTimeout(() => {
@@ -514,7 +514,7 @@ class GamepadController {
                         
                         if (firstRowIndex !== -1) {
                             console.log('[Gamepad] Found first row at index', firstRowIndex);
-                            this.focusElementAtIndex(firstRowIndex);
+                            this.focusElementAtIndex(firstRowIndex, false); // Don't scroll on initial focus
                             return;
                         }
                     }
@@ -529,10 +529,10 @@ class GamepadController {
                         
                         if (addMachineButtonIndex === 0 && this.focusableElements.length > 1) {
                             console.log('[Gamepad] Skipping Add Machine button as first focus, using index 1 instead');
-                            this.focusElementAtIndex(1);
+                            this.focusElementAtIndex(1, false); // Don't scroll on initial focus
                         } else {
                             console.log('Second attempt at focusing element 0...');
-                            this.focusElementAtIndex(0);
+                            this.focusElementAtIndex(0, false); // Don't scroll on initial focus
                         }
                     } else {
                         console.error('Still no focusable elements found after retry.');
@@ -949,7 +949,7 @@ class GamepadController {
         }
     }
     
-    focusElementAtIndex(index) {
+    focusElementAtIndex(index, shouldScroll = true) {
         // Always update right before focusing to catch dynamically added/shown elements
         // console.log('Updating focusable elements within focusElementAtIndex...'); // Can be noisy
         this.updateFocusableElements();
@@ -976,8 +976,11 @@ class GamepadController {
         
         console.log('[Gamepad] Focusing element:', this.activeElement);
         
-        // Scroll element into view if needed
-        this.activeElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        // Only scroll into view if shouldScroll is true
+        if (shouldScroll) {
+            // Scroll element into view if needed
+            this.activeElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
         
         // Clear any existing focus styles first
         this.clearFocusStyles();
@@ -2371,12 +2374,12 @@ document.addEventListener('DOMContentLoaded', () => {
                         
                         if (firstRowIndex !== -1) {
                             console.log('[Gamepad] Focusing first machine row on page load');
-                            window.gamepadController.focusElementAtIndex(firstRowIndex);
+                            window.gamepadController.focusElementAtIndex(firstRowIndex, false); // Don't scroll
                         } else if (window.gamepadController.focusableElements.length > 0) {
-                            window.gamepadController.focusElementAtIndex(0);
+                            window.gamepadController.focusElementAtIndex(0, false); // Don't scroll
                         }
                     } else if (window.gamepadController.focusableElements.length > 0) {
-                        window.gamepadController.focusElementAtIndex(0);
+                        window.gamepadController.focusElementAtIndex(0, false); // Don't scroll
                     }
                 }
             }, 1000);

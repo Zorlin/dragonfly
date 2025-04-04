@@ -6,6 +6,7 @@ This is speculative and subject to change.
 ## Upcoming planned features
 * First run wizard:
 
+* Wild looking electric green bar on the front page that shows the status of the last 100 deployments
 * Lock individual nodes to prevent them from being reimaged or deleted
 * Authentication system
   * Admin login for managing and adopting machines
@@ -113,3 +114,101 @@ Actions -> Run utility -> Run network test and report results
 
 # Stress test mode
 Actions -> Run utility -> Run stress test and report results
+
+
+###############
+# Tag editing #
+###############
+🧱 Rack Editor (Physical Layout)
+🧠 Vibe:
+
+Like placing LEGO bricks into a digital rack, with:
+
+    Horizontal or vertical rack views
+
+    Dragable VM and machine cards
+
+    Snap-to-slot and auto-align on release
+
+🎮 Gamepad UX:
+
+    Left stick: Move focus
+
+    Left trigger: Activate box select
+
+    RB: Add to selection
+
+    Right trigger: Assign to rack / move
+
+    A: Toggle detailed view
+
+    Start: Open rack config panel
+
+    Right stick: Lassoo select machines
+
+✨ Visual Flavor:
+
+    Subtle glows per slot as you hover/select
+
+    Slot info in a sidebar: uptime, last deploy, heat/temp if available
+
+    Drag animation leaves behind a slight ghost trail of the card — just like moving icons on macOS or Win11
+
+🧲 Drag-and-Drop Categoriser (Tagging UI)
+🧠 Vibe:
+
+Like sorting trading cards into piles — Trello meets VS Code workspaces.
+🧩 Left Panel:
+
+    Cards for every ungrouped VM or node
+
+    Or open the "all nodes" view to categorise existing nodes
+
+    Open a group (select it and fire at it with no node selected) to show all nodes in that group
+    in a new modal, and then drag nodes out of it to unassign them from that group
+
+🧱 Right Panel:
+
+    Tag buckets or “category piles” (e.g. web, gpu, dev, decommission)
+
+✋ Mouse UX:
+
+    Click + drag to move one
+
+    Box select for bulk
+
+    Drag group → tag, release to assign
+
+    Hover over a tag = preview what’s inside
+
+🎮 Gamepad UX:
+
+    LS: Move focus across grid
+
+    LT: Box select
+
+    RB: Additive select
+
+    RT: Fire into target tag
+
+    RT+RB: Select multiple targets (tag aliases or “Apply all”)
+
+    X: Toggle preview mode for a tag (see contents in place)
+
+    Y: Filter node list (show only gpu, mismatched, reimaging, etc.)
+
+🧠 Extra Touches:
+
+    Rumble feedback when snapping into slots or valid tag zones
+
+    Toasts for actions:
+
+        “4 nodes assigned to ‘gpu’”
+
+    Undo button (press B once after a drag)
+
+🧨 Future Layer: “Hot Zone” smart regions
+
+    Drag onto a smart tag zone like “Needs OS” or “Needs Cleanup”
+
+    System takes action (reimage, delete, flag for attention)

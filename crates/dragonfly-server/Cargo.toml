@@ -25,9 +25,6 @@ async-trait = "0.1"
 async-stream = "0.3.5"
 # Password hashing
 argon2 = "0.5.2"
-# Templating
-# askama = { version = "0.12", features = ["with-axum"] }
-askama_axum = "0.4.0"
 minijinja = { version = "2.3.0", features = ["loader"] }
 minijinja-autoreload = "2.3.0"
 minijinja-embed = "2.3.0"

@@ -77,17 +77,19 @@ pub struct MachineListTemplate {
     pub current_path: String,
 }
 
-#[derive(Serialize)]
+// No Serialize derive needed for Askama
+#[derive(Serialize)] 
 pub struct MachineDetailsTemplate {
-    pub machine_json: String,
+    pub machine_json: String, // Serialized machine data
     pub theme: String,
     pub is_authenticated: bool,
     pub created_at_formatted: String,
     pub updated_at_formatted: String,
-    pub workflow_info_json: String,
-    pub machine: Machine,
-    pub workflow_info: Option<crate::tinkerbell::WorkflowInfo>,
+    pub workflow_info_json: String, // Serialized workflow info data
+    pub machine: Machine, // Original machine struct for convenience
+    pub workflow_info: Option<WorkflowInfo>, // Original workflow info for convenience
     pub current_path: String,
+    pub ip_address_type: String, // New field for IP address type
 }
 
 #[derive(Serialize)]
@@ -697,6 +699,15 @@ pub async fn machine_details(
                     // ADD DEBUG LOG
                     info!("Serialized demo workflow JSON: {}", workflow_info_json);                         
                     
+                    // Determine IP address type
+                    let ip_address_type = if machine.ip_address.is_empty() || 
+                                                machine.ip_address == "0.0.0.0" {
+                        "DHCP".to_string()
+                    } else {
+                        "Static/IPAM".to_string()
+                    };
+
+                    // Create the Askama template context
                     let context = MachineDetailsTemplate {
                         machine_json, // Pass JSON string
                         theme,
@@ -707,10 +718,12 @@ pub async fn machine_details(
                         machine: machine.clone(), // Pass original struct too
                         workflow_info, // Pass original option too
                         current_path,
+                        ip_address_type, // Pass the determined type
                     };
+                    // Use render_minijinja
                     return render_minijinja(&app_state, "machine_details.html", context);
                 } else {
-                    // Machine not found in demo mode, show error
+                    // Machine not found in demo mode, show error using MiniJinja
                     let context = ErrorTemplate {
                         theme,
                         is_authenticated,
@@ -723,6 +736,7 @@ pub async fn machine_details(
                         retry_url: "".to_string(),
                         current_path,
                     };
+                    // Use render_minijinja
                     return render_minijinja(&app_state, "error.html", context);
                 }
             }
@@ -772,7 +786,15 @@ pub async fn machine_details(
                     // ADD DEBUG LOG
                     info!("Serialized workflow JSON for {}: {}", machine.id, workflow_info_json);                         
 
-                    // Replace Askama render with placeholder
+                    // Determine IP address type
+                    let ip_address_type = if machine.ip_address.is_empty() || 
+                                                machine.ip_address == "0.0.0.0" {
+                        "DHCP".to_string()
+                    } else {
+                        "Static/IPAM".to_string()
+                    };
+
+                    // Create the Askama template context
                     let context = MachineDetailsTemplate {
                         machine_json, // Pass JSON string
                         theme,
@@ -783,13 +805,14 @@ pub async fn machine_details(
                         machine: machine.clone(), // Pass original struct too
                         workflow_info, // Pass original option too
                         current_path,
+                        ip_address_type, // Pass the determined type
                     };
-                    // Pass AppState to render_minijinja
-                    render_minijinja(&app_state, "machine_details.html", context)
+                    // Use render_minijinja
+                    return render_minijinja(&app_state, "machine_details.html", context);
                 },
                 Ok(None) => {
                     error!("Machine not found: {}", uuid);
-                    // Replace Askama render with placeholder
+                    // Use MiniJinja for error template
                     let context = ErrorTemplate { // Use ErrorTemplate for consistency
                         theme,
                         is_authenticated,
@@ -802,12 +825,11 @@ pub async fn machine_details(
                         retry_url: "".to_string(),
                         current_path,
                     };
-                    // Pass AppState to render_minijinja
                     render_minijinja(&app_state, "error.html", context) // Render error template
                 },
                 Err(e) => {
                     error!("Error fetching machine {}: {}", uuid, e);
-                    // Replace Askama render with placeholder
+                    // Use MiniJinja for error template
                     let context = ErrorTemplate { // Use ErrorTemplate
                         theme,
                         is_authenticated,
@@ -820,14 +842,13 @@ pub async fn machine_details(
                         retry_url: "".to_string(),
                         current_path,
                     };
-                    // Pass AppState to render_minijinja
                     render_minijinja(&app_state, "error.html", context) // Render error template
                 }
             }
         },
         Err(e) => {
             error!("Invalid UUID: {}", e);
-            // Replace Askama render with placeholder
+            // Use MiniJinja for error template
             let context = ErrorTemplate { // Use ErrorTemplate
                 theme,
                 is_authenticated,
@@ -840,7 +861,6 @@ pub async fn machine_details(
                 retry_url: "".to_string(),
                 current_path,
             };
-            // Pass AppState to render_minijinja
             render_minijinja(&app_state, "error.html", context) // Render error template
         }
     }

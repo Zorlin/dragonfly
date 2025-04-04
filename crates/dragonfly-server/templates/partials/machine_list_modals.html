@@ -320,11 +320,9 @@
                     style="height: 14em; background-color: #D96400;"> {# Use inline style for specific hex color #}
                     <div class="p-4 flex-grow">
                         <div class="flex justify-center items-center mb-4">
-                            <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-white dark:bg-black"> {# Reverted size to w-12 h-12 #}
+                            <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-white dark:bg-white"> {# Reverted size to w-12 h-12 #}
                                 {# Light mode logo #}
-                                <img src="/static/logos/proxmox/proxmox-logo-stacked-color.svg" alt="Proxmox Logo" class="h-11 w-11 dark:hidden"> {# Reverted logo size to h-8 w-8 #}
-                                {# Dark mode logo #}
-                                <img src="/static/logos/proxmox/proxmox-logo-stacked-inverted-color.svg" alt="Proxmox Logo" class="h-11 w-11 hidden dark:block"> {# Reverted logo size to h-8 w-8 #}
+                                <img src="/static/logos/proxmox/proxmox-logo-stacked-color.svg" alt="Proxmox Logo" class="h-11 w-11"> {# Reverted logo size to h-8 w-8 #}
                             </div>
                         </div>
                         <h3 class="text-center text-xl font-semibold text-white mb-2">Proxmox</h3>
@@ -340,7 +338,7 @@
                     style="height: 14em; background-color: #930006;">
                     <div class="p-4 flex-grow">
                         <div class="flex justify-center items-center mb-4">
-                            <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-white dark:bg-black">
+                            <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-white dark:bg-red-400">
                                 🧪
                             </div>
                         </div>
@@ -351,18 +349,18 @@
                     </div>
                 </div>
 
-                <!-- Discover -->
-                <div @click="addMachineModal = false; discoverMachineModal = true" 
-                    class="rounded-xl shadow-md overflow-hidden border border-gray-300 dark:border-gray-600 transition-all hover:shadow-lg hover:scale-[1.02] duration-300 flex flex-col cursor-pointer dark:bg-blue-800" 
+                <!-- Create Machine --> 
+                <div @click="addMachineModal = false; createMachineModal = true" 
+                    class="rounded-xl shadow-md overflow-hidden border border-gray-300 dark:border-gray-600 transition-all hover:shadow-lg hover:scale-[1.02] duration-300 flex flex-col cursor-pointer bg-blue-500 dark:bg-blue-600" 
                     style="height: 14em">
                     <div class="p-4 flex-grow">
                         <div class="flex justify-center items-center mb-4">
-                            <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-gray-200 dark:bg-blue-300">
+                            <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-gray-200 dark:bg-blue-200">
                                 🔍
                             </div>
                         </div>
-                        <h3 class="text-center text-xl font-semibold text-gray-900 dark:text-white mb-2">Discover</h3>
-                        <p class="text-center text-gray-600 dark:text-white mt-2 text-sm">
+                        <h3 class="text-center text-xl font-semibold text-white dark:text-white mb-2">Discover</h3>
+                        <p class="text-center text-white dark:text-white mt-2 text-sm">
                             Discover machines on your network.
                         </p>
                     </div>
