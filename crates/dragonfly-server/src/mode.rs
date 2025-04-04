@@ -1273,7 +1273,7 @@ pub async fn enter_flight_mode() -> Result<()> {
         }
 
         // --- Clean up --- 
-        debug!("Cleaning up temporary chart repository...");
+    debug!("Cleaning up temporary chart repository...");
         let _ = fs::remove_dir_all(&repo_dir).await; // Best effort cleanup
 
         info!("Helm upgrade completed successfully.");
@@ -1853,7 +1853,7 @@ fn setup_logging(log_dir: &str) -> Result<(), anyhow::Error> {
     info!("Logging initialized. Log file: {}", log_path.display());
 
     Ok(())
-}
+} 
 
 // TODO: Move helper functions below to a shared utility module
 

@@ -59,7 +59,11 @@ pub async fn init_db() -> Result<SqlitePool> {
             nameservers TEXT, -- JSON array of nameservers
             bmc_credentials TEXT, -- JSON object of BMC credentials
             created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
+            updated_at TEXT NOT NULL,
+            -- Add new hardware columns
+            cpu_model TEXT,
+            cpu_cores INTEGER,
+            total_ram_bytes INTEGER
         )
         "#,
     )
@@ -123,11 +127,13 @@ pub async fn register_machine(req: &RegisterRequest) -> Result<Uuid> {
         let disks_json = serde_json::to_string(&req.disks)?;
         let nameservers_json = serde_json::to_string(&req.nameservers)?;
         
-        // Update the existing machine's IP, hostname, disks, and nameservers
+        // Update the existing machine's IP, hostname, disks, nameservers, and hardware info
         sqlx::query(
             r#"
             UPDATE machines 
-            SET ip_address = ?, hostname = ?, disks = ?, nameservers = ?, updated_at = ?
+            SET ip_address = ?, hostname = ?, disks = ?, nameservers = ?, 
+                cpu_model = ?, cpu_cores = ?, total_ram_bytes = ?, 
+                updated_at = ?
             WHERE id = ?
             "#,
         )
@@ -135,6 +141,9 @@ pub async fn register_machine(req: &RegisterRequest) -> Result<Uuid> {
         .bind(&req.hostname)
         .bind(&disks_json)
         .bind(&nameservers_json)
+        .bind(&req.cpu_model)
+        .bind(req.cpu_cores) // Option<u32> directly bound
+        .bind(req.total_ram_bytes.map(|r| r as i64)) // Map Option<u64> to Option<i64>
         .bind(&now_str)
         .bind(machine_id.to_string())
         .execute(pool)
@@ -152,14 +161,13 @@ pub async fn register_machine(req: &RegisterRequest) -> Result<Uuid> {
     let nameservers_json = serde_json::to_string(&req.nameservers)?;
     
     // Always start with AwaitingAssignment status
-    // Default OS will be applied after the status update from the agent
     let status_json = serde_json::to_string(&MachineStatus::AwaitingAssignment)?;
     
-    // Insert the new machine
+    // Insert the new machine including hardware info
     let result = sqlx::query(
         r#"
-        INSERT INTO machines (id, mac_address, ip_address, hostname, os_choice, os_installed, status, disks, nameservers, created_at, updated_at)
-        VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)
+        INSERT INTO machines (id, mac_address, ip_address, hostname, os_choice, os_installed, status, disks, nameservers, created_at, updated_at, cpu_model, cpu_cores, total_ram_bytes)
+        VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(machine_id.to_string())
@@ -171,6 +179,9 @@ pub async fn register_machine(req: &RegisterRequest) -> Result<Uuid> {
     .bind(&nameservers_json)
     .bind(&now_str)
     .bind(&now_str)
+    .bind(&req.cpu_model) // Bind new hardware info
+    .bind(req.cpu_cores)
+    .bind(req.total_ram_bytes.map(|r| r as i64)) // Map Option<u64> to Option<i64>
     .execute(pool)
     .await;
     
@@ -192,7 +203,11 @@ pub async fn get_all_machines() -> Result<Vec<Machine>> {
     
     let rows = sqlx::query(
         r#"
-        SELECT id, mac_address, ip_address, hostname, os_choice, os_installed, status, disks, nameservers, created_at, updated_at, bmc_credentials, installation_progress, installation_step 
+        SELECT id, mac_address, ip_address, hostname, os_choice, os_installed, status, 
+               disks, nameservers, created_at, updated_at, bmc_credentials, 
+               installation_progress, installation_step, 
+               -- Add new hardware columns
+               cpu_model, cpu_cores, total_ram_bytes 
         FROM machines
         "#,
     )
@@ -201,69 +216,7 @@ pub async fn get_all_machines() -> Result<Vec<Machine>> {
     
     let mut machines = Vec::new();
     for row in rows {
-        let id: String = row.get(0);
-        let mac_address: String = row.get(1);
-        let status_str: String = row.get(6);
-        let disks_json: Option<String> = row.get(7);
-        let nameservers_json: Option<String> = row.get(8);
-        let bmc_credentials_json: Option<String> = row.get(11);
-        
-        // Generate memorable name from MAC address
-        let memorable_name = dragonfly_common::mac_to_words::mac_to_words_safe(&mac_address);
-        
-        // Deserialize disks and nameservers from JSON or use empty vectors if null
-        let mut disks = if let Some(json) = disks_json {
-            serde_json::from_str::<Vec<dragonfly_common::models::DiskInfo>>(&json).unwrap_or_else(|_| Vec::new())
-        } else {
-            Vec::new()
-        };
-        
-        // Calculate precise disk sizes with 2 decimal places
-        for disk in &mut disks {
-            if disk.size_bytes > 1099511627776 {
-                disk.calculated_size = Some(format!("{:.2} TB", disk.size_bytes as f64 / 1099511627776.0));
-            } else if disk.size_bytes > 1073741824 {
-                disk.calculated_size = Some(format!("{:.2} GB", disk.size_bytes as f64 / 1073741824.0));
-            } else if disk.size_bytes > 1048576 {
-                disk.calculated_size = Some(format!("{:.2} MB", disk.size_bytes as f64 / 1048576.0));
-            } else if disk.size_bytes > 1024 {
-                disk.calculated_size = Some(format!("{:.2} KB", disk.size_bytes as f64 / 1024.0));
-            } else {
-                disk.calculated_size = Some(format!("{} B", disk.size_bytes));
-            }
-        }
-        
-        let nameservers = if let Some(json) = nameservers_json {
-            serde_json::from_str::<Vec<String>>(&json).unwrap_or_else(|_| Vec::new())
-        } else {
-            Vec::new()
-        };
-        
-        let bmc_credentials = if let Some(json) = bmc_credentials_json {
-            serde_json::from_str::<dragonfly_common::models::BmcCredentials>(&json).ok()
-        } else {
-            None
-        };
-        
-        let machine = Machine {
-            id: Uuid::parse_str(&id)?,
-            mac_address,
-            ip_address: row.get(2),
-            hostname: row.get(3),
-            os_choice: row.get(4),
-            os_installed: row.get(5),
-            status: parse_status(&status_str),
-            disks,
-            nameservers,
-            memorable_name: Some(memorable_name),
-            bmc_credentials,
-            created_at: parse_datetime(&row.get::<String, _>(9)),
-            updated_at: parse_datetime(&row.get::<String, _>(10)),
-            installation_progress: row.get::<Option<i64>, _>(12).unwrap_or(0) as u8,
-            installation_step: row.get(13),
-            last_deployment_duration: None,
-        };
-        
+        let machine = map_row_to_machine_with_hardware(row)?; // Use a new helper
         machines.push(machine);
     }
     
@@ -276,7 +229,11 @@ pub async fn get_machine_by_id(id: &Uuid) -> Result<Option<Machine>> {
     
     let result = sqlx::query(
         r#"
-        SELECT id, mac_address, ip_address, hostname, os_choice, os_installed, status, disks, nameservers, created_at, updated_at, bmc_credentials, installation_progress, installation_step 
+        SELECT id, mac_address, ip_address, hostname, os_choice, os_installed, status, 
+               disks, nameservers, created_at, updated_at, bmc_credentials, 
+               installation_progress, installation_step, 
+               -- Add new hardware columns
+               cpu_model, cpu_cores, total_ram_bytes 
         FROM machines 
         WHERE id = ?
         "#,
@@ -286,75 +243,8 @@ pub async fn get_machine_by_id(id: &Uuid) -> Result<Option<Machine>> {
     .await?;
     
     if let Some(row) = result {
-        let id: String = row.get(0);
-        let mac_address: String = row.get(1);
-        let status_str: String = row.get(6);
-        let disks_json: Option<String> = row.get(7);
-        let nameservers_json: Option<String> = row.get(8);
-        let bmc_credentials_json: Option<String> = row.get(11);
-        
-        // Generate memorable name from MAC address
-        let memorable_name = dragonfly_common::mac_to_words::mac_to_words_safe(&mac_address);
-        
-        // Deserialize disks and nameservers from JSON or use empty vectors if null
-        let mut disks = if let Some(json) = disks_json {
-            serde_json::from_str::<Vec<dragonfly_common::models::DiskInfo>>(&json).unwrap_or_else(|_| Vec::new())
-        } else {
-            Vec::new()
-        };
-        
-        // Calculate precise disk sizes with 2 decimal places
-        for disk in &mut disks {
-            if disk.size_bytes > 1099511627776 {
-                disk.calculated_size = Some(format!("{:.2} TB", disk.size_bytes as f64 / 1099511627776.0));
-            } else if disk.size_bytes > 1073741824 {
-                disk.calculated_size = Some(format!("{:.2} GB", disk.size_bytes as f64 / 1073741824.0));
-            } else if disk.size_bytes > 1048576 {
-                disk.calculated_size = Some(format!("{:.2} MB", disk.size_bytes as f64 / 1048576.0));
-            } else if disk.size_bytes > 1024 {
-                disk.calculated_size = Some(format!("{:.2} KB", disk.size_bytes as f64 / 1024.0));
-            } else {
-                disk.calculated_size = Some(format!("{} bytes", disk.size_bytes));
-            }
-        }
-        
-        let nameservers = if let Some(json) = nameservers_json {
-            serde_json::from_str::<Vec<String>>(&json).unwrap_or_else(|_| Vec::new())
-        } else {
-            Vec::new()
-        };
-        
-        // Deserialize BMC credentials if present
-        let bmc_credentials = if let Some(json) = bmc_credentials_json {
-            serde_json::from_str::<dragonfly_common::models::BmcCredentials>(&json).ok()
-        } else {
-            None
-        };
-        
-        // Parse status and ensure os_choice is set when we have ExistingOS
-        let status = parse_status(&status_str);
-        
-        // os_choice is separate from status now
-        let os_choice: Option<String> = row.get(4);
-        
-        Ok(Some(Machine {
-            id: Uuid::parse_str(&id).unwrap_or_default(),
-            mac_address,
-            ip_address: row.get(2),
-            hostname: row.get(3),
-            os_choice,
-            os_installed: row.get(5),
-            status,
-            disks,
-            nameservers,
-            created_at: parse_datetime(&row.get::<String, _>(9)),
-            updated_at: parse_datetime(&row.get::<String, _>(10)),
-            memorable_name: Some(memorable_name),
-            bmc_credentials,
-            installation_progress: row.get::<Option<i64>, _>(12).unwrap_or(0) as u8,
-            installation_step: row.get(13),
-            last_deployment_duration: None,
-        }))
+        let machine = map_row_to_machine_with_hardware(row)?; // Use a new helper
+        Ok(Some(machine))
     } else {
         Ok(None)
     }
@@ -366,7 +256,11 @@ pub async fn get_machine_by_mac(mac_address: &str) -> Result<Option<Machine>> {
     
     let result = sqlx::query(
         r#"
-        SELECT id, mac_address, ip_address, hostname, os_choice, os_installed, status, disks, nameservers, created_at, updated_at, bmc_credentials, installation_progress, installation_step 
+        SELECT id, mac_address, ip_address, hostname, os_choice, os_installed, status, 
+               disks, nameservers, created_at, updated_at, bmc_credentials, 
+               installation_progress, installation_step, 
+               -- Add new hardware columns
+               cpu_model, cpu_cores, total_ram_bytes 
         FROM machines 
         WHERE mac_address = ?
         "#,
@@ -376,75 +270,8 @@ pub async fn get_machine_by_mac(mac_address: &str) -> Result<Option<Machine>> {
     .await?;
     
     if let Some(row) = result {
-        let id: String = row.get(0);
-        let mac_address: String = row.get(1);
-        let status_str: String = row.get(6);
-        let disks_json: Option<String> = row.get(7);
-        let nameservers_json: Option<String> = row.get(8);
-        let bmc_credentials_json: Option<String> = row.get(11);
-        
-        // Generate memorable name from MAC address
-        let memorable_name = dragonfly_common::mac_to_words::mac_to_words_safe(&mac_address);
-        
-        // Deserialize disks and nameservers from JSON or use empty vectors if null
-        let mut disks = if let Some(json) = disks_json {
-            serde_json::from_str::<Vec<dragonfly_common::models::DiskInfo>>(&json).unwrap_or_else(|_| Vec::new())
-        } else {
-            Vec::new()
-        };
-        
-        // Calculate precise disk sizes with 2 decimal places
-        for disk in &mut disks {
-            if disk.size_bytes > 1099511627776 {
-                disk.calculated_size = Some(format!("{:.2} TB", disk.size_bytes as f64 / 1099511627776.0));
-            } else if disk.size_bytes > 1073741824 {
-                disk.calculated_size = Some(format!("{:.2} GB", disk.size_bytes as f64 / 1073741824.0));
-            } else if disk.size_bytes > 1048576 {
-                disk.calculated_size = Some(format!("{:.2} MB", disk.size_bytes as f64 / 1048576.0));
-            } else if disk.size_bytes > 1024 {
-                disk.calculated_size = Some(format!("{:.2} KB", disk.size_bytes as f64 / 1024.0));
-            } else {
-                disk.calculated_size = Some(format!("{} bytes", disk.size_bytes));
-            }
-        }
-        
-        let nameservers = if let Some(json) = nameservers_json {
-            serde_json::from_str::<Vec<String>>(&json).unwrap_or_else(|_| Vec::new())
-        } else {
-            Vec::new()
-        };
-        
-        // Deserialize BMC credentials if present
-        let bmc_credentials = if let Some(json) = bmc_credentials_json {
-            serde_json::from_str::<dragonfly_common::models::BmcCredentials>(&json).ok()
-        } else {
-            None
-        };
-        
-        // Parse status and ensure os_choice is set when we have ExistingOS
-        let status = parse_status(&status_str);
-        
-        // os_choice is separate from status now
-        let os_choice: Option<String> = row.get(4);
-        
-        Ok(Some(Machine {
-            id: Uuid::parse_str(&id).unwrap_or_default(),
-            mac_address,
-            ip_address: row.get(2),
-            hostname: row.get(3),
-            os_choice,
-            os_installed: row.get(5),
-            status,
-            disks,
-            nameservers,
-            created_at: parse_datetime(&row.get::<String, _>(9)),
-            updated_at: parse_datetime(&row.get::<String, _>(10)),
-            memorable_name: Some(memorable_name),
-            bmc_credentials,
-            installation_progress: row.get::<Option<i64>, _>(12).unwrap_or(0) as u8,
-            installation_step: row.get(13),
-            last_deployment_duration: None,
-        }))
+        let machine = map_row_to_machine_with_hardware(row)?; // Use a new helper
+        Ok(Some(machine))
     } else {
         Ok(None)
     }
@@ -456,7 +283,11 @@ pub async fn get_machine_by_ip(ip_address: &str) -> Result<Option<Machine>> {
     
     let result = sqlx::query(
         r#"
-        SELECT id, mac_address, ip_address, hostname, os_choice, os_installed, status, disks, nameservers, created_at, updated_at, bmc_credentials, installation_progress, installation_step 
+        SELECT id, mac_address, ip_address, hostname, os_choice, os_installed, status, 
+               disks, nameservers, created_at, updated_at, bmc_credentials, 
+               installation_progress, installation_step, 
+               -- Add new hardware columns
+               cpu_model, cpu_cores, total_ram_bytes 
         FROM machines 
         WHERE ip_address = ?
         "#,
@@ -466,75 +297,8 @@ pub async fn get_machine_by_ip(ip_address: &str) -> Result<Option<Machine>> {
     .await?;
     
     if let Some(row) = result {
-        let id: String = row.get(0);
-        let mac_address: String = row.get(1);
-        let status_str: String = row.get(6);
-        let disks_json: Option<String> = row.get(7);
-        let nameservers_json: Option<String> = row.get(8);
-        let bmc_credentials_json: Option<String> = row.get(11);
-        
-        // Generate memorable name from MAC address
-        let memorable_name = dragonfly_common::mac_to_words::mac_to_words_safe(&mac_address);
-        
-        // Deserialize disks and nameservers from JSON or use empty vectors if null
-        let mut disks = if let Some(json) = disks_json {
-            serde_json::from_str::<Vec<dragonfly_common::models::DiskInfo>>(&json).unwrap_or_else(|_| Vec::new())
-        } else {
-            Vec::new()
-        };
-        
-        // Calculate precise disk sizes with 2 decimal places
-        for disk in &mut disks {
-            if disk.size_bytes > 1099511627776 {
-                disk.calculated_size = Some(format!("{:.2} TB", disk.size_bytes as f64 / 1099511627776.0));
-            } else if disk.size_bytes > 1073741824 {
-                disk.calculated_size = Some(format!("{:.2} GB", disk.size_bytes as f64 / 1073741824.0));
-            } else if disk.size_bytes > 1048576 {
-                disk.calculated_size = Some(format!("{:.2} MB", disk.size_bytes as f64 / 1048576.0));
-            } else if disk.size_bytes > 1024 {
-                disk.calculated_size = Some(format!("{:.2} KB", disk.size_bytes as f64 / 1024.0));
-            } else {
-                disk.calculated_size = Some(format!("{} bytes", disk.size_bytes));
-            }
-        }
-        
-        let nameservers = if let Some(json) = nameservers_json {
-            serde_json::from_str::<Vec<String>>(&json).unwrap_or_else(|_| Vec::new())
-        } else {
-            Vec::new()
-        };
-        
-        // Deserialize BMC credentials if present
-        let bmc_credentials = if let Some(json) = bmc_credentials_json {
-            serde_json::from_str::<dragonfly_common::models::BmcCredentials>(&json).ok()
-        } else {
-            None
-        };
-        
-        // Parse status and ensure os_choice is set when we have ExistingOS
-        let status = parse_status(&status_str);
-        
-        // os_choice is separate from status now
-        let os_choice: Option<String> = row.get(4);
-        
-        Ok(Some(Machine {
-            id: Uuid::parse_str(&id).unwrap_or_default(),
-            mac_address,
-            ip_address: row.get(2),
-            hostname: row.get(3),
-            os_choice,
-            os_installed: row.get(5),
-            status,
-            disks,
-            nameservers,
-            created_at: parse_datetime(&row.get::<String, _>(9)),
-            updated_at: parse_datetime(&row.get::<String, _>(10)),
-            memorable_name: Some(memorable_name),
-            bmc_credentials,
-            installation_progress: row.get::<Option<i64>, _>(12).unwrap_or(0) as u8,
-            installation_step: row.get(13),
-            last_deployment_duration: None,
-        }))
+        let machine = map_row_to_machine_with_hardware(row)?; // Use a new helper
+        Ok(Some(machine))
     } else {
         Ok(None)
     }
@@ -1056,6 +820,30 @@ async fn migrate_db(pool: &Pool<Sqlite>) -> Result<()> {
         }
     }
     
+    // Add cpu_model column if it doesn't exist
+    let result = sqlx::query("SELECT COUNT(*) FROM pragma_table_info('machines') WHERE name = 'cpu_model'").fetch_one(pool).await?;
+    let column_exists: i64 = result.get(0);
+    if column_exists == 0 {
+        info!("Adding cpu_model column to machines table");
+        sqlx::query("ALTER TABLE machines ADD COLUMN cpu_model TEXT").execute(pool).await?;
+    }
+
+    // Add cpu_cores column if it doesn't exist
+    let result = sqlx::query("SELECT COUNT(*) FROM pragma_table_info('machines') WHERE name = 'cpu_cores'").fetch_one(pool).await?;
+    let column_exists: i64 = result.get(0);
+    if column_exists == 0 {
+        info!("Adding cpu_cores column to machines table");
+        sqlx::query("ALTER TABLE machines ADD COLUMN cpu_cores INTEGER").execute(pool).await?;
+    }
+
+    // Add total_ram_bytes column if it doesn't exist
+    let result = sqlx::query("SELECT COUNT(*) FROM pragma_table_info('machines') WHERE name = 'total_ram_bytes'").fetch_one(pool).await?;
+    let column_exists: i64 = result.get(0);
+    if column_exists == 0 {
+        info!("Adding total_ram_bytes column to machines table");
+        sqlx::query("ALTER TABLE machines ADD COLUMN total_ram_bytes INTEGER").execute(pool).await?;
+    }
+    
     Ok(())
 }
 
@@ -1334,11 +1122,11 @@ pub async fn update_machine(machine: &Machine) -> Result<bool> {
     let nameservers_json = serde_json::to_string(&machine.nameservers)?;
     let disks_json = serde_json::to_string(&machine.disks)?;
 
-    // Log the update attempt with detailed info
-    info!("Updating machine {} in database: status={:?}, serialized as {}", 
-          machine.id, machine.status, status_json);
+    // Log the update attempt with detailed info, including hardware
+    info!("Updating machine {} in database: status={:?}, cpu={:?}, cores={:?}, ram={:?}", 
+          machine.id, machine.status, machine.cpu_model, machine.cpu_cores, machine.total_ram_bytes);
     
-    // Create a plain SQL query to update the machine
+    // Create a plain SQL query to update the machine, including hardware fields
     let query = "
         UPDATE machines SET 
             hostname = $1, 
@@ -1349,8 +1137,12 @@ pub async fn update_machine(machine: &Machine) -> Result<bool> {
             disks = $6,
             os_choice = $7,
             updated_at = $8,
-            last_deployment_duration = $9
-        WHERE id = $10
+            last_deployment_duration = $9,
+            -- Add hardware fields
+            cpu_model = $10,
+            cpu_cores = $11,
+            total_ram_bytes = $12
+        WHERE id = $13
     ";
     
     // Execute the update query with explicit type annotation for SqlitePool
@@ -1362,8 +1154,13 @@ pub async fn update_machine(machine: &Machine) -> Result<bool> {
         .bind(&status_json)
         .bind(&disks_json)
         .bind(machine.os_choice.as_deref())
-        .bind(machine.updated_at)
+        .bind(machine.updated_at) // Use the timestamp from the input machine struct
         .bind(machine.last_deployment_duration)
+        // Bind hardware fields
+        .bind(machine.cpu_model.as_deref())
+        .bind(machine.cpu_cores.map(|c| c as i64)) // Map Option<u32> to Option<i64>
+        .bind(machine.total_ram_bytes.map(|r| r as i64)) // Map Option<u64> to Option<i64>
+        // Bind ID last
         .bind(machine.id)
         .execute(pool)
         .await;
@@ -1587,14 +1384,14 @@ pub async fn get_machines_by_status(status: dragonfly_common::models::MachineSta
     
     let mut machines = Vec::with_capacity(rows.len());
     for row in rows {
-        machines.push(map_row_to_machine(row)?);
+        machines.push(map_row_to_machine_with_hardware(row)?);
     }
     
     Ok(machines)
 }
 
-// Helper function to map a database row to a Machine struct
-fn map_row_to_machine(row: sqlx::sqlite::SqliteRow) -> Result<dragonfly_common::models::Machine> {
+// NEW helper function to map a row including hardware info
+fn map_row_to_machine_with_hardware(row: sqlx::sqlite::SqliteRow) -> Result<Machine> {
     use sqlx::Row;
     
     let id: String = row.try_get("id")?;
@@ -1604,6 +1401,13 @@ fn map_row_to_machine(row: sqlx::sqlite::SqliteRow) -> Result<dragonfly_common::
     let nameservers_json: Option<String> = row.try_get("nameservers")?;
     let bmc_credentials_json: Option<String> = row.try_get("bmc_credentials")?;
     let last_deployment_duration: Option<i64> = row.try_get("last_deployment_duration").ok();
+    
+    // Map hardware info (use try_get for Option types)
+    let cpu_model: Option<String> = row.try_get("cpu_model")?;
+    let cpu_cores_i64: Option<i64> = row.try_get("cpu_cores")?;
+    let cpu_cores: Option<u32> = cpu_cores_i64.map(|c| c as u32);
+    let total_ram_bytes_i64: Option<i64> = row.try_get("total_ram_bytes")?;
+    let total_ram_bytes: Option<u64> = total_ram_bytes_i64.map(|r| r as u64);
     
     // Generate memorable name from MAC address
     let memorable_name = dragonfly_common::mac_to_words::mac_to_words_safe(&mac_address);
@@ -1643,10 +1447,9 @@ fn map_row_to_machine(row: sqlx::sqlite::SqliteRow) -> Result<dragonfly_common::
         None
     };
     
-    // Parse status and ensure os_choice is set when we have ExistingOS
+    // Parse status
     let status = parse_status(&status_str);
     
-    // os_choice is separate from status now
     let os_choice: Option<String> = row.try_get("os_choice")?;
     
     let created_at_str: String = row.try_get("created_at")?;
@@ -1669,6 +1472,10 @@ fn map_row_to_machine(row: sqlx::sqlite::SqliteRow) -> Result<dragonfly_common::
         installation_progress: row.try_get::<Option<i64>, _>("installation_progress").unwrap_or(None).unwrap_or(0) as u8,
         installation_step: row.try_get("installation_step")?,
         last_deployment_duration,
+        // Add new hardware fields
+        cpu_model,
+        cpu_cores,
+        total_ram_bytes,
     })
 }
 

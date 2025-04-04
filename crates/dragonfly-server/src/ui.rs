@@ -360,6 +360,10 @@ fn create_demo_machine(
         installation_progress: 0,
         installation_step: None,
         last_deployment_duration: None,
+        // Initialize new hardware fields to None for demo data
+        cpu_model: None,
+        cpu_cores: None,
+        total_ram_bytes: None,
     }
 }
 

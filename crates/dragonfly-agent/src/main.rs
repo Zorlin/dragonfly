@@ -5,10 +5,13 @@ use std::env;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use sysinfo::System;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use clap::Parser;
+use tracing::{info, error, warn};
+// Use wildcard import for sysinfo to bring traits into scope
+use sysinfo::*;
+use serde_json;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -16,6 +19,10 @@ struct Args {
     /// Run in setup mode (initial PXE boot)
     #[arg(long)]
     setup: bool,
+
+    /// Attempt kexec into existing OS when in setup mode (requires --setup)
+    #[arg(long, requires = "setup")]
+    kexec: bool,
 
     /// Server URL (default: http://localhost:3000)
     #[arg(long)]
@@ -369,7 +376,6 @@ fn detect_nameservers() -> Vec<String> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Parse command line arguments
     let args = Args::parse();
     
     // Initialize logger
@@ -379,19 +385,63 @@ async fn main() -> Result<()> {
     let api_url = args.server
         .or_else(|| env::var("DRAGONFLY_API_URL").ok())
         .unwrap_or_else(|| "http://localhost:3000".to_string());
-    
-    // Create HTTP client
-    let client = Client::new();
-    
-    // Get system information
-    let _system = System::new();
-    
-    // Get MAC address and IP address
+
+    // --- Get required system info FIRST --- 
+    // Get MAC address and IP address (using improved logic)
     let mac_address = get_mac_address().context("Failed to get MAC address")?;
-    let ip_address = get_ip_address().context("Failed to get IP address")?;
+    let ip_address_str = get_ip_address().context("Failed to get IP address")?;
+    info!("Agent identified its primary IP as: {}", ip_address_str);
+
+    // Parse the determined IP address for binding
+    let local_ip: Option<std::net::IpAddr> = match ip_address_str.parse() {
+        Ok(ip) => Some(ip),
+        Err(e) => {
+            warn!("Failed to parse determined IP address '{}' for binding: {}. Client will use default interface.", ip_address_str, e);
+            None
+        }
+    };
+    
+    // --- Create HTTP client, binding to the determined IP if possible --- 
+    let client_builder = Client::builder();
+    let client = match local_ip {
+        Some(ip) => {
+            info!("Attempting to bind HTTP client to local address: {}", ip);
+            client_builder
+                .local_address(ip)
+                .build()
+                .context("Failed to build HTTP client with local address binding")?
+        }
+        None => {
+            info!("Building HTTP client without specific local address binding.");
+            client_builder
+                .build()
+                .context("Failed to build default HTTP client")?
+        }
+    };
+    
+    // Get system information (rest of it)
+    let mut sys = System::new_all();
+    sys.refresh_all();
     
     // Get hostname
     let hostname = System::host_name().unwrap_or_else(|| "unknown".to_string());
+    
+    // --- Detect CPU, Core Count, and RAM --- 
+    // Ensure sysinfo is refreshed first
+    sys.refresh_cpu();
+    sys.refresh_memory();
+
+    let cpu_model = sys.cpus().first().map(|cpu| cpu.brand().to_string());
+    // Prefer physical cores, fallback to logical cores (cpus().len())
+    let cpu_cores = sys.physical_core_count().map(|c| c as u32).or_else(|| Some(sys.cpus().len() as u32));
+    let total_ram_bytes = sys.total_memory();
+    // Convert total RAM to GiB for logging (optional, but often more readable)
+    let total_ram_gib = total_ram_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+    
+    info!("Detected CPU: {:?}", cpu_model.as_deref().unwrap_or("Unknown"));
+    info!("Detected CPU Cores: {:?}", cpu_cores); // Log Option<u32>
+    info!("Detected RAM: {} bytes ({:.2} GiB)", total_ram_bytes, total_ram_gib);
+    // --- End CPU/RAM Detection ---
     
     // Detect disks and nameservers
     let disks = detect_disks();
@@ -441,56 +491,110 @@ async fn main() -> Result<()> {
         .context("Failed to parse existing machines response")?;
     
     // Find if this machine already exists by MAC address
-    let existing_machine = existing_machines.iter().find(|m| m.mac_address == mac_address);
+    let existing_machine_option = existing_machines.iter().find(|m| m.mac_address == mac_address).cloned();
     
     // Process registration/update as before
-    let _machine_id = match existing_machine {
-        Some(machine) => {
-            // Machine exists, update its status
-            tracing::info!("Machine already exists with ID: {}", machine.id);
-            
-            // Update machine status with the OS information
-            tracing::info!("Updating machine status with OS information...");
-            let status_update = StatusUpdateRequest {
-                status: current_status,
-                message: None,
-            };
-            
-            let status_response = client.put(format!("{}/api/machines/{}/status", api_url, machine.id))
-                .json(&status_update)
-                .send()
-                .await
-                .context("Failed to send status update")?;
-            
-            if !status_response.status().is_success() {
-                let error_text = status_response.text().await?;
-                anyhow::bail!("Failed to update machine status: {}", error_text);
+    let _machine_id = match existing_machine_option {
+        Some(mut machine) => { // Make machine mutable
+            // Machine exists, update its status, OS, and hardware info
+            tracing::info!("Machine already exists with ID: {}, fetching current state...", machine.id);
+
+            // Fetch the full machine data first to ensure we have the latest base
+            // This is less efficient but safer than assuming the list endpoint has absolutely latest data
+            let fetch_url = format!("{}/api/machines/{}", api_url, machine.id);
+            match client.get(&fetch_url).send().await {
+                Ok(resp) => {
+                    if resp.status().is_success() {
+                        // The API returns {"machine": ..., "workflow_info": ...}
+                        let full_data: serde_json::Value = resp.json().await
+                            .context("Failed to parse full machine data JSON")?;
+                        if let Some(fetched_machine_json) = full_data.get("machine") {
+                             match serde_json::from_value::<Machine>(fetched_machine_json.clone()) {
+                                Ok(fetched_machine) => {
+                                    machine = fetched_machine; // Replace with the latest fetched data
+                                    info!("Successfully fetched latest machine data for ID: {}", machine.id);
+                                }
+                                Err(e) => {
+                                    warn!("Failed to deserialize fetched machine data for {}: {}. Proceeding with list data.", machine.id, e);
+                                    // Fallback to using the 'machine' from the list if fetch parsing fails
+                                }
+                            }
+                        } else {
+                             warn!("Fetched machine data for {} is missing 'machine' field. Proceeding with list data.", machine.id);
+                        }
+                    } else {
+                        warn!("Failed to fetch full machine data for {}: Status {}. Proceeding with list data.", 
+                              machine.id, resp.status());
+                        // Fallback to using the 'machine' from the list if fetch fails
+                    }
+                },
+                Err(e) => {
+                     warn!("Network error fetching full machine data for {}: {}. Proceeding with list data.", machine.id, e);
+                     // Fallback to using the 'machine' from the list if fetch fails
+                }
             }
             
-            tracing::info!("Machine status updated successfully!");
+            // Update fields on the (potentially refreshed) machine object
+            machine.status = current_status; // Set status based on detection
+            machine.os_installed = os_info;  // Set os_installed based on detection
+            machine.cpu_model = cpu_model.clone();
+            machine.cpu_cores = cpu_cores;
+            machine.total_ram_bytes = Some(total_ram_bytes);
+            // Note: We don't update disks/nameservers here, assuming registration is the source of truth for those
+            // updated_at will be set by the server handler
+            
+            // Send the full updated machine object back to the server
+            tracing::info!("Updating existing machine {} with full payload...", machine.id);
+            let update_url = format!("{}/api/machines/{}", api_url, machine.id);
+            
+            // Log the request details before sending
+            info!("Attempting to PUT full machine update to URL: {} with payload: {:?}", update_url, machine);
+
+            let update_response = client.put(&update_url)
+                .json(&machine) // Send the whole updated machine struct
+                .send()
+                .await
+                .context("Failed to send machine update request")?;
+
+            // Log status and raw response text for debugging
+            let status = update_response.status();
+            let response_text = match update_response.text().await {
+                Ok(text) => text,
+                Err(e) => {
+                    error!("Failed to read update response text: {}", e);
+                    format!("Failed to read response text: {}", e)
+                }
+            };
+            info!("Received response for machine update: Status={}, Body=\"{}\"", status, response_text);
+
+            if !status.is_success() {
+                // Use the response text we already read
+                error!(
+                    "Failed to update machine {}. Status: {}, Response: {}",
+                    machine.id,
+                    status,
+                    response_text
+                );
+                // Logged the error, but continue agent operation if possible
+                // Depending on the error, may want to bail here in some cases?
+            } else {
+                info!("Successfully updated machine {} on server", machine.id);
+            }
+            
+            // We don't need to update status/os_installed separately anymore
+            /*
+            // Update machine status with the OS information
+            tracing::info!("Updating machine status with OS information...");
+            // ... old separate status update code removed ...
             
             // If we detected an OS, also update the os_installed field
             if let Some(os_name) = &os_info {
                 tracing::info!("Updating OS installed to: {}", os_name);
-                let os_installed_update = OsInstalledUpdateRequest {
-                    os_installed: os_name.to_string(),
-                };
-                
-                let os_installed_response = client.put(format!("{}/api/machines/{}/os_installed", api_url, machine.id))
-                    .json(&os_installed_update)
-                    .send()
-                    .await
-                    .context("Failed to send OS installed update")?;
-                
-                if !os_installed_response.status().is_success() {
-                    let error_text = os_installed_response.text().await?;
-                    anyhow::bail!("Failed to update OS installed: {}", error_text);
-                }
-                
-                tracing::info!("OS installed updated successfully!");
+                // ... old separate os_installed update code removed ...
             }
+            */
             
-            machine.id
+            machine.id // Return the ID
         },
         None => {
             // Machine doesn't exist, register it
@@ -499,10 +603,14 @@ async fn main() -> Result<()> {
             // Prepare registration request
             let register_request = RegisterRequest {
                 mac_address,
-                ip_address,
+                ip_address: ip_address_str,
                 hostname: Some(hostname),
                 disks,
                 nameservers,
+                // Add the detected hardware info (cloning cpu_model Option)
+                cpu_model: cpu_model.clone(), 
+                cpu_cores,
+                total_ram_bytes: Some(total_ram_bytes),
             };
             
             // Register the machine
@@ -551,18 +659,55 @@ async fn main() -> Result<()> {
                     os_installed: os_name.to_string(),
                 };
                 
-                let os_installed_response = client.put(format!("{}/api/machines/{}/os_installed", api_url, register_response.machine_id))
+                // Construct the URL
+                let url = format!(
+                    "{}/api/machines/{}/os-installed",
+                    api_url,
+                    register_response.machine_id
+                );
+
+                // Log the request details before sending
+                info!("Attempting to PUT OS installed update to URL: {} with payload: {:?}", url, os_installed_update);
+
+                // Send the request and handle potential network/send errors
+                let response_result = client
+                    .put(&url)
                     .json(&os_installed_update)
                     .send()
-                    .await
-                    .context("Failed to send OS installed update")?;
-                
-                if !os_installed_response.status().is_success() {
-                    let error_text = os_installed_response.text().await?;
-                    anyhow::bail!("Failed to update OS installed: {}", error_text);
+                    .await;
+
+                match response_result {
+                    Ok(response) => {
+                        // Log status and raw response text for debugging
+                        let status = response.status();
+                        let response_text = match response.text().await {
+                            Ok(text) => text,
+                            Err(e) => {
+                                error!("Failed to read response text: {}", e);
+                                format!("Failed to read response text: {}", e)
+                            }
+                        };
+                        info!("Received response for OS installed update: Status={}, Body=\"{}\"", status, response_text);
+
+                        // Check the status code
+                        if status.is_success() {
+                            info!("Successfully updated OS installed status on server");
+                        } else {
+                            // Use the response text we already read
+                            error!(
+                                "Failed to update OS installed. Status: {}, Response: {}",
+                                status,
+                                response_text
+                            );
+                             // Logged the error, continue agent operation
+                        }
+                     },
+                    Err(e) => {
+                        // Log the specific reqwest error from send()
+                        error!("Failed to send OS installed update request: {}", e);
+                         // Logged the error, continue agent operation
+                    }
                 }
-                
-                tracing::info!("OS installed updated successfully!");
             }
             
             register_response.machine_id
@@ -572,15 +717,31 @@ async fn main() -> Result<()> {
     // If in setup mode, handle boot decision
     if args.setup {
         if has_bootable_os {
-            tracing::info!("Bootable OS detected, attempting to chainload existing OS...");
-            
-            // Try to chainload the existing OS
-            chainload_existing_os()?;
+            if args.kexec {
+                tracing::info!("--kexec flag provided, attempting to chainload existing OS...");
+                // Try to chainload the existing OS
+                chainload_existing_os()?;
+                // If chainload succeeds, the process is replaced. If it fails, we fall through.
+                // Add a log here in case kexec load/exec fails but doesn't return Err?
+                tracing::error!("kexec command sequence completed but did not transfer control. This is unexpected.");
+                // Still exit cleanly even if kexec didn't work as expected, 
+                // as the user explicitly asked for it.
+                return Ok(()); 
+            } else {
+                tracing::info!("Bootable OS detected, but --kexec not specified. Exiting agent cleanly.");
+                // Exit cleanly without attempting kexec or reboot
+                return Ok(());
+            }
         } else {
-            tracing::info!("No bootable OS found, rebooting into Tinkerbell...");
+            tracing::info!("No bootable OS found, attempting reboot into Tinkerbell for OS installation...");
+            // Only attempt reboot if no bootable OS is found during setup
             let mut cmd = Command::new("reboot");
             cmd.status().context("Failed to reboot")?;
+            // Reboot replaces the current process, so we won't reach here normally.
+            // If reboot fails, the context error will propagate.
         }
+    } else {
+        tracing::info!("Agent finished running in non-setup mode.");
     }
     
     Ok(())
@@ -674,7 +835,7 @@ fn chainload_existing_os() -> Result<()> {
     
     // Find matching initrd
     let mut initrd_path = None;
-    if let Some((kernel_path, _)) = &newest_kernel {
+    if let Some((_kernel_path, _)) = &newest_kernel { // Prefix kernel_path with underscore
         for initrd in initrd_locations.iter() {
             if Path::new(initrd).exists() {
                 initrd_path = Some(initrd.to_string());
@@ -683,7 +844,7 @@ fn chainload_existing_os() -> Result<()> {
         }
     }
     
-    if let Some((kernel_path, _)) = newest_kernel {
+    if let Some((kernel_path, _)) = newest_kernel { // Use original kernel_path here for kexec
         tracing::info!("Found kernel at: {}", kernel_path);
         if let Some(initrd) = &initrd_path {
             tracing::info!("Found initrd at: {}", initrd);
@@ -800,27 +961,179 @@ fn get_mac_address() -> Result<String> {
 }
 
 fn get_ip_address() -> Result<String> {
-    // Try to use ip command if available
-    if let Ok(output) = Command::new("ip")
-        .args(["addr", "show"])
+    // 1. Try to find the IP on the interface used for the default route
+    match get_ip_from_default_route_interface() {
+        Ok(Some(ip)) => {
+            info!("Found IP {} from default route interface", ip);
+            return Ok(ip);
+        }
+        Ok(None) => {
+            info!("No default route found or no IP on default interface, scanning all interfaces...");
+            // Proceed to scan all interfaces
+        }
+        Err(e) => {
+            warn!("Error checking default route interface: {}. Scanning all interfaces...", e);
+            // Proceed to scan all interfaces
+        }
+    }
+
+    // 2. Fallback: Scan all interfaces if default route method failed or yielded no IP
+    info!("Scanning all interfaces for a suitable IP address...");
+    let output = Command::new("ip")
+        .args(["-4", "addr", "show"])
         .output()
-    {
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            for line in stdout.lines() {
-                if line.contains("inet ") && !line.contains("127.0.0.1") {
-                    let parts: Vec<&str> = line.split_whitespace().collect();
-                    if parts.len() >= 2 {
-                        let addr = parts[1].split('/').next().unwrap_or("").to_string();
-                        if !addr.is_empty() {
-                            return Ok(addr);
+        .context("Failed to run 'ip addr show'")?;
+
+    if !output.status.success() {
+        anyhow::bail!("'ip addr show' command failed");
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut current_interface: Option<String> = None;
+    let mut candidates: Vec<(String, String)> = Vec::new(); // (interface_name, ip_address)
+    let bad_prefixes = ["docker", "virbr", "veth", "cni", "flannel"];
+    let bad_masters = ["cni0", "docker0"]; // Add known bad master interfaces
+    let preferred_prefixes = ["eth", "en", "wl"]; // Common physical/wifi prefixes
+
+    for line in stdout.lines() {
+        // Check for start of a new interface block (e.g., "2: eth0: <...")
+        if let Some(colon_pos) = line.find(':') {
+            if line[..colon_pos].chars().all(|c| c.is_digit(10)) {
+                // Looks like an interface index line
+                // Log the raw interface line *before* filtering
+                tracing::debug!("Processing interface line: {}", line.trim());
+
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() > 1 {
+                    let if_name = parts[1].trim_end_matches(':').to_string();
+                    let is_lo = if_name == "lo";
+                    let is_up = line.contains("<UP,") || line.contains(",UP>");
+                    let has_bad_prefix = bad_prefixes.iter().any(|prefix| if_name.starts_with(prefix));
+                    // Check if the interface is attached to a known bad master
+                    let is_attached_to_bad_master = bad_masters.iter().any(|master| line.contains(&format!(" master {}", master)));
+
+                    // Determine if this interface should be considered
+                    if is_lo || !is_up || has_bad_prefix || is_attached_to_bad_master {
+                        if is_attached_to_bad_master {
+                            tracing::debug!("Ignoring interface {} because it is attached to a bad master", if_name);
+                        } else if has_bad_prefix {
+                             tracing::debug!("Ignoring interface {} because it has a bad prefix", if_name);
+                        } // Add other debug logs if needed
+                        current_interface = None; // Skip this interface block
+                    } else {
+                        current_interface = Some(if_name); // Good candidate interface
+                    }
+                } else {
+                     current_interface = None; // Malformed line?
+                }
+                continue; // Move to the next line after processing interface header
+            }
+        }
+
+        // Check for inet line within an active, considered interface block
+        if let Some(ref if_name) = current_interface {
+            if line.trim().starts_with("inet ") {
+                let parts: Vec<&str> = line.trim().split_whitespace().collect();
+                if parts.len() >= 2 {
+                    if let Some(ip) = parts[1].split('/').next() {
+                        // Basic validation and filtering for the IP address itself
+                        // Interface checks (prefix, master, up state) were already done when setting current_interface
+                        if !ip.starts_with("127.") && !ip.starts_with("169.254.") {
+                            // No need to re-check bad_prefixes on if_name here
+                            candidates.push((if_name.clone(), ip.to_string()));
+                            tracing::debug!("Found candidate IP {} on interface {}", ip, if_name);
                         }
                     }
                 }
             }
         }
     }
-    
-    // Fallback
+
+    // Log all candidates found before prioritization
+    if candidates.is_empty() {
+        warn!("No suitable IP address candidates found after filtering scanning all interfaces.");
+    } else {
+        info!("Found {} IP address candidates from scanning all interfaces:", candidates.len());
+        for (if_name, ip) in &candidates {
+            info!("  - Interface: {}, IP: {}", if_name, ip);
+        }
+    }
+
+    // Prioritize candidates based on preferred interface prefixes
+    if let Some((if_name, ip)) = candidates.iter().find(|(name, _)| preferred_prefixes.iter().any(|p| name.starts_with(p))) {
+        info!("Selected preferred IP {} from interface {} based on prefix matching (fallback scan).", ip, if_name);
+        return Ok(ip.clone());
+    }
+
+    // If no preferred interface found, return the first valid candidate
+    if let Some((if_name, ip)) = candidates.first() {
+        info!("Selected first available IP {} from interface {} (fallback scan, no preferred prefix match).", ip, if_name);
+        return Ok(ip.clone());
+    }
+
+    // If no suitable IP found after filtering
+    warn!("Could not find any suitable IP address. Falling back to 127.0.0.1");
     Ok("127.0.0.1".to_string())
+}
+
+// Helper function to get IP from the default route interface
+fn get_ip_from_default_route_interface() -> Result<Option<String>> {
+    let output = Command::new("ip")
+        .args(["-4", "route", "show", "default"])
+        .output()
+        .context("Failed to run 'ip route show default'")?;
+
+    if !output.status.success() {
+        // Command might fail if there is no default route, which is not an error in itself
+        info!("'ip route show default' command failed or no default route set.");
+        return Ok(None);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let default_route_line = stdout.lines().next(); // Default route should be the first line
+
+    if let Some(line) = default_route_line {
+        info!("Default route line: {}", line);
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if let Some(dev_index) = parts.iter().position(|&p| p == "dev") {
+            if let Some(if_name) = parts.get(dev_index + 1) {
+                info!("Found default route interface: {}", if_name);
+                // Now get the IP address for this specific interface
+                let addr_output = Command::new("ip")
+                    .args(["-4", "addr", "show", "dev", if_name])
+                    .output()
+                    .context(format!("Failed to run 'ip addr show dev {}'", if_name))?;
+
+                if !addr_output.status.success() {
+                    warn!("Failed to get address for default interface {}. Status: {}", if_name, addr_output.status);
+                    return Ok(None);
+                }
+
+                let addr_stdout = String::from_utf8_lossy(&addr_output.stdout);
+                for addr_line in addr_stdout.lines() {
+                    if addr_line.trim().starts_with("inet ") {
+                        let addr_parts: Vec<&str> = addr_line.trim().split_whitespace().collect();
+                        if addr_parts.len() >= 2 {
+                            if let Some(ip) = addr_parts[1].split('/').next() {
+                                if !ip.starts_with("127.") && !ip.starts_with("169.254.") {
+                                    info!("Found valid IP {} on default interface {}", ip, if_name);
+                                    return Ok(Some(ip.to_string()));
+                                }
+                            }
+                        }
+                    }
+                }
+                warn!("No valid inet address found on default interface {}", if_name);
+                return Ok(None); // Found interface but no suitable IP
+            } else {
+                warn!("Could not parse interface name after 'dev' in default route line");
+            }
+        } else {
+            warn!("Could not find 'dev' keyword in default route line");
+        }
+    } else {
+        info!("No output from 'ip route show default' (no default route?)");
+    }
+
+    Ok(None) // No default route found or couldn't parse it
 } 

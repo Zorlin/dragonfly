@@ -334,10 +334,38 @@
                         </dl>
                     </div>
                 </div>
+
+                 <!-- Hardware Information -->
+                 <div class="bg-green-50 dark:bg-green-900/10 rounded-lg shadow-sm overflow-hidden border border-green-100 dark:border-green-800/30 md:col-span-1">
+                    <div class="px-4 py-3 bg-green-100 dark:bg-green-800/30">
+                        <h3 class="text-lg font-medium leading-6 text-gray-900 dark:text-white">Hardware</h3>
+                    </div>
+                    <div class="px-4 py-4">
+                        <dl class="divide-y divide-gray-200 dark:divide-gray-700">
+                            <!-- CPU Model -->
+                            <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
+                                <dt class="text-sm font-medium text-gray-500 dark:text-gray-300">CPU Model</dt>
+                                <dd class="mt-1 text-sm text-gray-900 dark:text-gray-100 sm:mt-0 sm:col-span-2" x-text="machine.cpu_model || 'Unknown'"></dd>
+                            </div>
+                            <!-- CPU Cores -->
+                            <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
+                                <dt class="text-sm font-medium text-gray-500 dark:text-gray-300">CPU Cores</dt>
+                                <dd class="mt-1 text-sm text-gray-900 dark:text-gray-100 sm:mt-0 sm:col-span-2" x-text="machine.cpu_cores !== null ? machine.cpu_cores : 'Unknown'"></dd>
+                            </div>
+                            <!-- Total RAM -->
+                            <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4">
+                                <dt class="text-sm font-medium text-gray-500 dark:text-gray-300">Total RAM</dt>
+                                <dd class="mt-1 text-sm text-gray-900 dark:text-gray-100 sm:mt-0 sm:col-span-2" 
+                                    x-text="machine.total_ram_bytes !== null ? (machine.total_ram_bytes / (1024**3)).toFixed(1) + ' GiB' : 'Unknown'">
+                                </dd>
+                            </div>
+                        </dl>
+                    </div>
+                </div>
             </div>
 
-            <!-- Storage Information (Full Width) -->
-            <div class="p-4 sm:p-6">
+            <!-- Storage Information (Half Width) -->
+            <div class="p-4 sm:p-4">
                 <div class="bg-purple-50 dark:bg-purple-900/10 rounded-lg shadow-sm overflow-hidden border border-purple-100 dark:border-purple-800/30">
                     <div class="px-4 py-3 bg-purple-100 dark:bg-purple-800/30">
                         <h3 class="text-lg font-medium leading-6 text-gray-900 dark:text-white">Storage</h3>

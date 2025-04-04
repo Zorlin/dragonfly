@@ -4,8 +4,8 @@ use tower_sessions::{SessionManagerLayer};
 use tower_sessions_sqlx_store::SqliteStore;
 use std::sync::{Arc};
 use tokio::sync::Mutex;
-use tower_http::trace::TraceLayer;
-use tracing::{info, error, warn, debug};
+use tower_http::trace::{TraceLayer, DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse};
+use tracing::{info, error, warn, debug, Level, Span};
 use std::net::SocketAddr;
 use tower_cookies::CookieManagerLayer;
 use tower_http::services::ServeDir;
@@ -14,6 +14,7 @@ use tokio::sync::watch;
 use anyhow::{Result, Context, anyhow, bail};
 use listenfd::ListenFd;
 use axum::middleware; // Import middleware
+use axum::extract::MatchedPath;
 
 use crate::auth::{AdminBackend, auth_router, load_credentials, generate_default_credentials, load_settings, Settings, Credentials};
 use crate::db::init_db;
@@ -487,10 +488,36 @@ pub async fn run() -> anyhow::Result<()> {
         .layer(CookieManagerLayer::new())
         .layer(auth_layer)
         .layer(Extension(db_pool.clone()))
-        // Add back a STANDARD TraceLayer if desired for non-install runs (will respect RUST_LOG)
-        .layer(TraceLayer::new_for_http()) // Standard layer respects RUST_LOG
-        .with_state(app_state.clone()) // Add the state FIRST
-        .layer(middleware::from_fn_with_state(app_state.clone(), track_client_ip)); // THEN apply state-dependent layers
+        // Add middleware to track client IP globally
+        .layer(axum::middleware::from_fn_with_state(app_state.clone(), api::track_client_ip))
+        // Configure a more verbose TraceLayer (after IP tracking)
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(|request: &axum::http::Request<axum::body::Body>| {
+                    // Get matched path if available
+                    let matched_path = request
+                        .extensions()
+                        .get::<MatchedPath>()
+                        .map(MatchedPath::as_str)
+                        .unwrap_or(request.uri().path());
+                    
+                    tracing::debug_span!(
+                        "http-request",
+                        method = %request.method(),
+                        uri = %request.uri(),
+                        matched_path = matched_path, // Log matched path
+                        version = ?request.version(),
+                        headers = ?request.headers(),
+                    )
+                })
+                .on_request(DefaultOnRequest::new().level(Level::INFO))
+                .on_response(DefaultOnResponse::new().level(Level::INFO).latency_unit(tower_http::LatencyUnit::Micros))
+                .on_failure(|error: tower_http::classify::ServerErrorsFailureClass, latency: std::time::Duration, span: &Span| {
+                    // Log failures verbosely
+                    tracing::error!(parent: span, latency = ?latency, error = ?error, "Request failed");
+                })
+        )
+        .with_state(app_state.clone()); // State applied here
 
     // Handoff listener setup 
     if let Some(mode) = &current_mode {

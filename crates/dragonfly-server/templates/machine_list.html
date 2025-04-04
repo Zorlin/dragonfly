@@ -13,6 +13,10 @@
     reimageModal: false,
     powerModal: false,
     macConfirmModal: false,
+    addMachineModal: false, // New modal for adding machines
+    addPxeModal: false, // PXE Boot Machine modal
+    externalMachineModal: false, // External Machine modal
+    bmcMachineModal: false, // BMC Machine modal
     currentMachineId: null,
     currentMachineName: null,
     newMacAddress: null,
@@ -260,6 +264,17 @@
         <div class="sm:flex-auto">
             <h1 class="text-xl font-semibold text-gray-900 dark:text-white">Machines</h1>
             <p class="mt-2 text-sm text-gray-700 dark:text-gray-300">A list of all machines that have been discovered or added.</p>
+        </div>
+        <div>
+            <button type="button" 
+                    class="inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                    {% if not is_authenticated %}style="display: none;"{% endif %}
+                    @click="addMachineModal = true">
+                <svg class="-ml-1 mr-2 h-5 w-5 text-gray-500 dark:text-gray-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                    <path fill-rule="evenodd" d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h-3v3a1 1 0 11-2 0v-3H6a1 1 0 110-2h3V6a1 1 0 011-1z" clip-rule="evenodd" />
+                </svg>
+                Add Machine
+            </button>
         </div>
     </div>
     <div class="mt-8 flex flex-col">
@@ -549,7 +564,7 @@
 
     {# === MODALS === (Moved inside the main x-data div) #}
     <div id="status-modal" class="relative z-10" aria-labelledby="modal-title" role="dialog" aria-modal="true" x-show="statusModal" x-cloak>
-        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"></div>
+        <!-- Removed background overlay -->
         <div class="fixed inset-0 z-10 overflow-y-auto" @click="statusModal = false">
             <div class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
                 <div class="relative transform overflow-hidden rounded-lg bg-white px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6" 
@@ -562,7 +577,7 @@
     </div>
 
     <div id="os-modal" class="relative z-10" aria-labelledby="modal-title" role="dialog" aria-modal="true" x-show="osModal" x-cloak>
-        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"></div>
+        <!-- Removed background overlay -->
         <div class="fixed inset-0 z-10 overflow-y-auto" @click="osModal = false">
             <div class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
                 <div class="relative transform overflow-hidden rounded-lg bg-white px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6" 
@@ -575,7 +590,7 @@
     </div>
 
     <div id="delete-modal" class="relative z-10" aria-labelledby="modal-title" role="dialog" aria-modal="true" x-show="deleteModal" x-cloak>
-        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"></div>
+        <!-- Removed background overlay -->
         <div class="fixed inset-0 z-10 overflow-y-auto" @click="deleteModal = false">
             <div class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
                 <div class="relative transform overflow-hidden rounded-lg bg-white px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6" 
@@ -607,7 +622,7 @@
 
     {# Tag Editor Modal #}
     <div id="tag-modal" class="relative z-20" aria-labelledby="tag-modal-title" role="dialog" aria-modal="true" x-show="tagModal" x-cloak>
-        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"></div>
+        <!-- Removed background overlay -->
         <div class="fixed inset-0 z-20 overflow-y-auto" @click="$dispatch('close-tag-modal')">
             <div class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
                 <div class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6" 
@@ -693,7 +708,7 @@
 
     {# Reimage Modal #}
     <div id="reimage-modal" class="relative z-10" aria-labelledby="modal-title" role="dialog" aria-modal="true" x-show="reimageModal" x-cloak>
-        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"></div>
+        <!-- Removed background overlay -->
         <div class="fixed inset-0 z-10 overflow-y-auto" @click="reimageModal = false">
             <div class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
                 <div class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6" 
@@ -723,7 +738,7 @@
 
     {# Power Modal #}
     <div id="power-modal" class="relative z-10" aria-labelledby="modal-title" role="dialog" aria-modal="true" x-show="powerModal" x-cloak>
-        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"></div>
+        <!-- Removed background overlay -->
         <div class="fixed inset-0 z-10 overflow-y-auto" @click="powerModal = false">
             <div class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
                 <div class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6" 
@@ -762,7 +777,7 @@
         x-transition:leave-start="opacity-100 scale-100"
         x-transition:leave-end="opacity-0 scale-95"
         x-cloak>
-        <div class="fixed inset-0 pointer-events-none"></div>
+        <!-- Removed background overlay -->
         <div class="fixed inset-0 z-50 overflow-y-auto" @click="macConfirmModal = false">
             <div class="flex min-h-full items-center justify-center p-4 text-center sm:p-0">
                 <div class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6 border border-purple-500/30 dark:border-purple-500/20" 
@@ -790,13 +805,394 @@
             </div>
         </div>
     </div>
-    {# === END MODALS === #}
 
+    {# Add Machine Modal #}
+    <div id="add-machine-modal" class="relative z-10" aria-labelledby="modal-title" role="dialog" aria-modal="true" x-show="addMachineModal" x-cloak>
+        <!-- Remove the background overlay div -->
+        <div class="fixed inset-0 z-10 overflow-y-auto" @click="addMachineModal = false">
+            <div class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
+                <div class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-4xl sm:p-6" 
+                    @click.stop>
+                    
+                    <div class="mb-6 text-center">
+                        <h3 class="text-2xl font-bold text-gray-900 dark:text-white mb-2">Add Machine</h3>
+                        <p class="text-gray-600 dark:text-gray-400">Select how you want to add a new machine to Dragonfly</p>
+                    </div>
+                    
+                    <!-- Three card options similar to welcome.html -->
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <!-- PXE Boot Machine -->
+                        <div @click="addMachineModal = false; addPxeModal = true" 
+                            class="bg-emerald-800 dark:bg-emerald-900/90 rounded-xl shadow-md overflow-hidden border border-emerald-700 dark:border-emerald-800 transition-all hover:shadow-lg hover:scale-[1.02] duration-300 flex flex-col cursor-pointer" 
+                            style="height: 14em;">
+                            <div class="p-4 flex-grow">
+                                <div class="flex justify-center items-center mb-4">
+                                    <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-emerald-700 dark:bg-emerald-800">
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-emerald-300 dark:text-emerald-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" />
+                                        </svg>
+                                    </div>
+                                </div>
+                                <h3 class="text-xl font-semibold text-white mb-3 text-center">PXE Boot</h3>
+                                <p class="text-emerald-100 dark:text-emerald-200 mt-2 text-center text-sm">
+                                    Add a machine that will PXE boot and be provisioned automatically
+                                </p>
+                            </div>
+                        </div>
+                        
+                        <!-- External Machine -->
+                        <div @click="addMachineModal = false; externalMachineModal = true" 
+                            class="bg-purple-900 dark:bg-purple-950/90 rounded-xl shadow-md overflow-hidden border border-purple-800 dark:border-purple-800 transition-all hover:shadow-lg hover:scale-[1.02] duration-300 flex flex-col cursor-pointer" 
+                            style="height: 14em;">
+                            <div class="p-4 flex-grow">
+                                <div class="flex justify-center items-center mb-4">
+                                    <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-purple-800 dark:bg-purple-800">
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-purple-300 dark:text-purple-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                                        </svg>
+                                    </div>
+                                </div>
+                                <h3 class="text-center text-xl font-semibold text-white mb-2">External</h3>
+                                <p class="text-center text-purple-100 dark:text-purple-200 mt-2 text-sm">
+                                    Add an existing machine that won't be provisioned by Dragonfly
+                                </p>
+                            </div>
+                        </div>
+                        
+                        <!-- Cloud Machine -->
+                        <div @click="addMachineModal = false; cloudMachineModal = true" 
+                            class="bg-cyan-800 dark:bg-cyan-900/90 rounded-xl shadow-md overflow-hidden border border-cyan-700 dark:border-cyan-800 transition-all hover:shadow-lg hover:scale-[1.02] duration-300 flex flex-col cursor-pointer" 
+                            style="height: 14em;">
+                            <div class="p-4 flex-grow">
+                                <div class="flex justify-center items-center mb-4">
+                                    <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-cyan-700 dark:bg-cyan-700">
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-cyan-300 dark:text-cyan-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                        </svg>
+                                    </div>
+                                </div>
+                                <h3 class="text-center text-xl font-semibold text-white mb-2">Cloud</h3>
+                                <p class="text-center text-cyan-100 dark:text-cyan-200 mt-2 text-sm">
+                                    Add a machine from a cloud provider
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Cancel button -->
+                    <div class="mt-6 text-center">
+                        <button type="button" @click="addMachineModal = false"
+                                class="inline-flex justify-center rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-4 py-2 text-base font-medium text-gray-700 dark:text-gray-200 shadow-sm hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 sm:text-sm">
+                            Cancel
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {# PXE Boot Machine Modal #}
+    <div id="add-pxe-modal" class="relative z-10" aria-labelledby="modal-title" role="dialog" aria-modal="true" x-show="addPxeModal" x-cloak>
+        <!-- Removed background overlay -->
+        <div class="fixed inset-0 z-10 overflow-y-auto" @click="addPxeModal = false">
+            <div class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
+                <div class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6" 
+                    @click.stop x-data="addMachineForm()" x-init="initForm()">
+                    <div>
+                        <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-900">
+                            <svg class="h-6 w-6 text-emerald-600 dark:text-emerald-300" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" />
+                            </svg>
+                        </div>
+                        <div class="mt-3 text-center sm:mt-5">
+                            <h3 class="text-lg font-medium leading-6 text-gray-900 dark:text-white" id="modal-title">Connect a Machine</h3>
+                            <div class="mt-2">
+                                <p class="text-sm text-gray-500 dark:text-gray-400">
+                                    Add a machine that will be provisioned via PXE boot by providing its MAC address. You can optionally set a hostname and IP address.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Form fields -->
+                    <div class="mt-5 sm:mt-6">
+                        <form @submit.prevent="submitForm">
+                            <div class="space-y-4">
+                                <!-- MAC Address (required) -->
+                                <div>
+                                    <label for="mac-address" class="block text-sm font-medium text-gray-700 dark:text-gray-300">MAC Address <span class="text-red-500">*</span></label>
+                                    <div class="mt-1">
+                                        <input type="text" name="mac_address" id="mac-address" 
+                                               x-model="formData.mac_address" 
+                                               class="block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-emerald-500 focus:ring-emerald-500 sm:text-sm"
+                                               placeholder="e.g., 00:11:22:33:44:55" required>
+                                    </div>
+                                    <p class="mt-1 text-xs text-red-500" x-show="errors.mac_address" x-text="errors.mac_address"></p>
+                                </div>
+                                
+                                <!-- Hostname (optional) -->
+                                <div>
+                                    <label for="hostname" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Hostname</label>
+                                    <div class="mt-1">
+                                        <input type="text" name="hostname" id="hostname" 
+                                               x-model="formData.hostname" 
+                                               class="block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-emerald-500 focus:ring-emerald-500 sm:text-sm"
+                                               placeholder="e.g., server01">
+                                    </div>
+                                    <p class="mt-1 text-xs text-red-500" x-show="errors.hostname" x-text="errors.hostname"></p>
+                                </div>
+                                
+                                <!-- IP Address (optional) -->
+                                <div>
+                                    <label for="ip-address" class="block text-sm font-medium text-gray-700 dark:text-gray-300">IP Address</label>
+                                    <div class="mt-1">
+                                        <input type="text" name="ip_address" id="ip-address" 
+                                               x-model="formData.ip_address" 
+                                               class="block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-emerald-500 focus:ring-emerald-500 sm:text-sm"
+                                               placeholder="e.g., 192.168.1.100">
+                                    </div>
+                                    <p class="mt-1 text-xs text-red-500" x-show="errors.ip_address" x-text="errors.ip_address"></p>
+                                </div>
+                                
+                                <!-- Initial Status -->
+                                <div>
+                                    <label for="status" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Initial Status</label>
+                                    <div class="mt-1">
+                                        <select id="status" name="status" x-model="formData.status" 
+                                                class="block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-emerald-500 focus:ring-emerald-500 sm:text-sm">
+                                            <option value="AwaitingAssignment">Awaiting OS Assignment</option>
+                                            <option value="ExistingOS">Existing OS</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                
+                                <!-- Optional Descriptive Name -->
+                                <div>
+                                    <label for="memorable-name" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Descriptive Name</label>
+                                    <div class="mt-1">
+                                        <input type="text" name="memorable_name" id="memorable-name" 
+                                               x-model="formData.memorable_name" 
+                                               class="block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-emerald-500 focus:ring-emerald-500 sm:text-sm"
+                                               placeholder="e.g., Web Server">
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- Error message -->
+                            <div class="mt-4" x-show="formError">
+                                <p class="text-sm text-red-600 dark:text-red-400" x-text="formError"></p>
+                            </div>
+                            
+                            <!-- Form buttons -->
+                            <div class="mt-5 sm:mt-6 sm:grid sm:grid-flow-row-dense sm:grid-cols-2 sm:gap-3">
+                                <button type="submit" 
+                                        class="inline-flex w-full justify-center rounded-md border border-transparent bg-emerald-600 px-4 py-2 text-base font-medium text-white shadow-sm hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 sm:col-start-2 sm:text-sm"
+                                        :disabled="isSubmitting">
+                                    <span x-show="!isSubmitting">Add PXE Machine</span>
+                                    <span x-show="isSubmitting" class="flex items-center">
+                                        <svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                        </svg>
+                                        Processing...
+                                    </span>
+                                </button>
+                                <button type="button" @click="addPxeModal = false"
+                                        class="mt-3 inline-flex w-full justify-center rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-4 py-2 text-base font-medium text-gray-700 dark:text-gray-200 shadow-sm hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 sm:col-start-1 sm:mt-0 sm:text-sm">
+                                    Cancel
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {# External Machine Modal #}
+    <div id="external-machine-modal" class="relative z-10" aria-labelledby="modal-title" role="dialog" aria-modal="true" x-show="externalMachineModal" x-cloak>
+        <!-- Removed background overlay -->
+        <div class="fixed inset-0 z-10 overflow-y-auto" @click="externalMachineModal = false">
+            <div class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
+                <div class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6" 
+                    @click.stop>
+                    <div>
+                        <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-purple-100 dark:bg-purple-900">
+                            <svg class="h-6 w-6 text-purple-600 dark:text-purple-300" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                            </svg>
+                        </div>
+                        <div class="mt-3 text-center sm:mt-5">
+                            <h3 class="text-lg font-medium leading-6 text-gray-900 dark:text-white" id="modal-title">Add External Machine</h3>
+                            <div class="mt-2">
+                                <p class="text-sm text-gray-500 dark:text-gray-400">
+                                    Add an existing machine that will not be provisioned by Dragonfly.
+                                </p>
+                                <p class="text-sm text-gray-500 dark:text-gray-400 mt-4">
+                                    This feature is coming soon.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="mt-5 sm:mt-6">
+                        <button type="button" @click="externalMachineModal = false"
+                                class="inline-flex w-full justify-center rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-4 py-2 text-base font-medium text-gray-700 dark:text-gray-200 shadow-sm hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 sm:text-sm">
+                            Close
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    {# BMC Machine Modal #}
+    <div id="bmc-machine-modal" class="relative z-10" aria-labelledby="modal-title" role="dialog" aria-modal="true" x-show="bmcMachineModal" x-cloak>
+        <!-- Removed background overlay -->
+        <div class="fixed inset-0 z-10 overflow-y-auto" @click="bmcMachineModal = false">
+            <div class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
+                <div class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6" 
+                    @click.stop>
+                    <div>
+                        <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-cyan-100 dark:bg-cyan-900">
+                            <svg class="h-6 w-6 text-cyan-600 dark:text-cyan-300" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                            </svg>
+                        </div>
+                        <div class="mt-3 text-center sm:mt-5">
+                            <h3 class="text-lg font-medium leading-6 text-gray-900 dark:text-white" id="modal-title">Add BMC Managed Machine</h3>
+                            <div class="mt-2">
+                                <p class="text-sm text-gray-500 dark:text-gray-400">
+                                    Add a machine with BMC (IPMI, Redfish, iDRAC) for power control and management.
+                                </p>
+                                <p class="text-sm text-gray-500 dark:text-gray-400 mt-4">
+                                    This feature is coming soon.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="mt-5 sm:mt-6">
+                        <button type="button" @click="bmcMachineModal = false"
+                                class="inline-flex w-full justify-center rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-4 py-2 text-base font-medium text-gray-700 dark:text-gray-200 shadow-sm hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2 sm:text-sm">
+                            Close
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 </div> {# End of main x-data div #}
 {% endblock %}
 
 {% block scripts %}
 <script>
+    // Add Machine Form Handler
+    function addMachineForm() {
+        return {
+            formData: {
+                mac_address: '',
+                hostname: '',
+                ip_address: '',
+                memorable_name: '',
+                status: 'AwaitingAssignment'
+            },
+            errors: {},
+            formError: '',
+            isSubmitting: false,
+            
+            initForm() {
+                // Initialize the form
+                this.resetForm();
+            },
+            
+            resetForm() {
+                this.formData = {
+                    mac_address: '',
+                    hostname: '',
+                    ip_address: '',
+                    memorable_name: '',
+                    status: 'AwaitingAssignment'
+                };
+                this.errors = {};
+                this.formError = '';
+                this.isSubmitting = false;
+            },
+            
+            validateForm() {
+                this.errors = {};
+                let isValid = true;
+                
+                // Validate MAC address (required and format)
+                if (!this.formData.mac_address) {
+                    this.errors.mac_address = 'MAC address is required';
+                    isValid = false;
+                } else if (!/^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/.test(this.formData.mac_address)) {
+                    this.errors.mac_address = 'Invalid MAC address format. Use XX:XX:XX:XX:XX:XX';
+                    isValid = false;
+                }
+                
+                // Validate hostname format if provided
+                if (this.formData.hostname && !/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/i.test(this.formData.hostname)) {
+                    this.errors.hostname = 'Invalid hostname format';
+                    isValid = false;
+                }
+                
+                // Validate IP address format if provided
+                if (this.formData.ip_address && !/^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/.test(this.formData.ip_address)) {
+                    this.errors.ip_address = 'Invalid IP address format';
+                    isValid = false;
+                }
+                
+                return isValid;
+            },
+            
+            async submitForm() {
+                if (!this.validateForm()) return;
+                
+                this.isSubmitting = true;
+                this.formError = '';
+                
+                try {
+                    const response = await fetch('/api/machines', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(this.formData)
+                    });
+                    
+                    if (!response.ok) {
+                        const errorData = await response.json();
+                        throw new Error(errorData.message || 'Failed to add machine');
+                    }
+                    
+                    const result = await response.json();
+                    
+                    // Show success message
+                    showToast('Machine added successfully', 'success');
+                    
+                    // Close the modal
+                    this.addPxeModal = false;
+                    
+                    // Reset the form
+                    this.resetForm();
+                    
+                    // Refresh the machine list
+                    refreshMachineList();
+                    
+                } catch (error) {
+                    console.error('Error adding machine:', error);
+                    this.formError = error.message || 'An error occurred while adding the machine';
+                } finally {
+                    this.isSubmitting = false;
+                }
+            }
+        };
+    }
+    
     // Check if user is authenticated before allowing admin actions
     function requireAdmin(callback) {
         // window.isAuthenticated is now set by Alpine's x-init

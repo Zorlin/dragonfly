@@ -50,22 +50,22 @@ use crate::ui; // Import the ui module
 use axum::http::Request;
 use std::net::SocketAddr;
 use axum::middleware::Next; // Add this import back
+use chrono::Utc;
 
 pub fn api_router() -> Router<crate::AppState> {
     Router::new()
         .route("/machines", get(get_all_machines).post(register_machine))
         .route("/machines/install-status", get(get_install_status))
-        .route("/machines/{id}", get(get_machine).put(update_machine).delete(delete_machine))
         .route("/machines/{id}/os", get(get_machine_os).post(assign_os))
-        .route("/machines/{id}/hostname", get(get_hostname_form))
+        .route("/machines/{id}/hostname", get(get_hostname_form).put(update_hostname))
         .route("/machines/{id}/status", put(update_status))
-        .route("/machines/{id}/status-and-progress", get(get_machine_status_and_progress_partial)) // NEW ROUTE
-        .route("/machines/{id}/hostname", put(update_hostname))
+        .route("/machines/{id}/status-and-progress", get(get_machine_status_and_progress_partial))
         .route("/machines/{id}/os-installed", put(update_os_installed))
         .route("/machines/{id}/bmc", post(update_bmc))
         .route("/machines/{id}/workflow-progress", get(get_workflow_progress))
         .route("/machines/{id}/tags", get(api_get_machine_tags).put(api_update_machine_tags))
         .route("/machines/{id}/tags/{tag}", delete(api_delete_machine_tag))
+        .route("/machines/{id}", get(get_machine).put(update_machine).delete(delete_machine))
         .route("/installation/progress", put(update_installation_progress))
         .route("/events", get(machine_events))
         .route("/heartbeat", get(heartbeat))
@@ -258,9 +258,12 @@ async fn download_file(url: &str, target_path: &StdPath) -> Result<(), dragonfly
 #[axum::debug_handler]
 async fn register_machine(
     State(state): State<AppState>,
+    // Ensure the payload type is correct, matching the updated common struct
     Json(payload): Json<RegisterRequest>,
 ) -> Response {
-    info!("Registering machine with MAC: {}", payload.mac_address);
+    // Pass the full payload (including new hardware fields) to the db function
+    info!("Registering machine with MAC: {}, CPU: {:?}, Cores: {:?}, RAM: {:?}", 
+          payload.mac_address, payload.cpu_model, payload.cpu_cores, payload.total_ram_bytes);
     
     match db::register_machine(&payload).await {
         Ok(machine_id) => {
@@ -456,7 +459,7 @@ async fn get_all_machines(
                     Html(html).into_response()
                 }
             } else {
-                // For non-HTMX requests, return JSON
+                // For non-HTMX requests, return JSON (already includes new fields via db query)
                 (StatusCode::OK, Json(machines)).into_response()
             }
         },
@@ -476,7 +479,7 @@ async fn get_machine(
     Path(id): Path<Uuid>,
 ) -> Response {
     match db::get_machine_by_id(&id).await {
-        Ok(Some(machine)) => {
+        Ok(Some(machine)) => { // machine now includes hardware fields from db query
             // Fetch workflow info if the machine is installing OS
             let workflow_info = if machine.status == MachineStatus::InstallingOS {
                 match crate::tinkerbell::get_workflow_info(&machine).await {
@@ -490,10 +493,10 @@ async fn get_machine(
                 None // Not installing OS, no workflow info
             };
 
-            // Create the wrapped JSON response
+            // Create the wrapped JSON response (already includes hardware fields)
             let response_data = json!({
                 "machine": machine,
-                "workflow_info": workflow_info, // This will be serialized as JSON null if None
+                "workflow_info": workflow_info, 
             });
 
             (StatusCode::OK, Json(response_data)).into_response()
@@ -880,7 +883,6 @@ async fn update_hostname(
 #[axum::debug_handler]
 async fn update_os_installed(
     State(state): State<AppState>,
-    _auth_session: AuthSession,
     Path(id): Path<Uuid>,
     Json(payload): Json<OsInstalledUpdateRequest>,
 ) -> Response {
@@ -898,6 +900,8 @@ async fn update_os_installed(
             (StatusCode::OK, Json(response)).into_response()
         },
         Ok(false) => {
+            // Add a warning log here to confirm if this path is hit
+            warn!("Machine with ID {} not found when attempting to update OS installed.", id);
             let error_response = ErrorResponse {
                 error: "Not Found".to_string(),
                 message: format!("Machine with ID {} not found", id),
@@ -1150,131 +1154,101 @@ async fn delete_machine(
     }
 }
 
-// Define a new request struct for the update machine operation
-#[derive(Debug, Deserialize)]
-struct UpdateMachineRequest {
-    hostname: Option<String>,
-    ip_address: Option<String>,
-    mac_address: Option<String>,
-    #[serde(rename = "nameservers[]")]
-    nameservers: Option<Vec<String>>,
-}
-
 // Add this function to handle machine updates
 #[axum::debug_handler]
 async fn update_machine(
     State(state): State<AppState>,
+    // Use AuthSession directly, not Option<AuthSession>
     auth_session: AuthSession,
+    // Add ConnectInfo to get client IP
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Path(id): Path<Uuid>,
-    Form(payload): Form<UpdateMachineRequest>,
+    Json(mut machine_payload): Json<Machine>,
 ) -> Response {
-    // Check if user is authenticated as admin
-    if auth_session.user.is_none() {
-        return (StatusCode::UNAUTHORIZED, Json(json!({
-            "error": "Unauthorized",
-            "message": "Admin authentication required for this operation"
+    let client_ip = addr.ip().to_string();
+    info!("Update request for machine {} from IP: {}", id, client_ip);
+
+    // Authorization Logic
+    // Check if an admin user is logged in
+    let is_admin = auth_session.user.is_some();
+
+    let authorized = if is_admin {
+        // Admin is always authorized
+        info!("Admin user authorized update for machine {}", id);
+        true
+    } else {
+        // Not an admin, check if it's the agent based on IP
+        info!("Request is not from an admin, checking IP for agent authorization...");
+        match db::get_machine_by_id(&id).await {
+            Ok(Some(stored_machine)) => {
+                if stored_machine.ip_address == client_ip {
+                    info!("Agent IP {} matches stored IP for machine {}. Authorizing update.", client_ip, id);
+                    true // IP matches, allow update
+                } else {
+                    warn!("Agent IP {} does NOT match stored IP {} for machine {}. Denying update.",
+                          client_ip, stored_machine.ip_address, id);
+                    false // IP mismatch
+                }
+            },
+            Ok(None) => {
+                warn!("Machine {} not found during IP authorization check.", id);
+                false // Machine not found
+                },
+                Err(e) => {
+                error!("Database error during IP authorization check for machine {}: {}", id, e);
+                false // Database error
+            }
+        }
+    };
+
+    if !authorized {
+        // Use 403 Forbidden for authorization failures
+        // (axum-login middleware handles 401 for missing authentication if configured)
+        return (StatusCode::FORBIDDEN, Json(json!({
+            "error": "Forbidden",
+            "message": "You are not authorized to update this machine."
         }))).into_response();
     }
 
-    info!("Updating machine {}", id);
-    let mut updated = false;
-    let mut messages = vec![];
-
-    // Update hostname if provided
-    if let Some(hostname) = &payload.hostname {
-        if !hostname.is_empty() {
-            match db::update_hostname(&id, hostname).await {
-                Ok(true) => {
-                    updated = true;
-                    messages.push(format!("Hostname updated to '{}'", hostname));
-                },
-                Ok(false) => {
-                    messages.push("Machine not found for hostname update".to_string());
-                },
-                Err(e) => {
-                    error!("Failed to update hostname: {}", e);
-                    messages.push(format!("Failed to update hostname: {}", e));
-                }
-            }
-        }
+    // --- Proceed with Update (if authorized) ---
+    
+    // Ensure the ID from the path matches the payload ID
+    if machine_payload.id != id {
+        return (StatusCode::BAD_REQUEST, Json(json!({
+            "error": "ID Mismatch",
+            "message": "The machine ID in the URL path does not match the ID in the request body."
+        }))).into_response();
     }
 
-    // Update IP address if provided
-    if let Some(ip_address) = &payload.ip_address {
-        if !ip_address.is_empty() {
-            match db::update_ip_address(&id, ip_address).await {
-                Ok(true) => {
-                    updated = true;
-                    messages.push(format!("IP address updated to '{}'", ip_address));
-                },
-                Ok(false) => {
-                    messages.push("Machine not found for IP address update".to_string());
-                },
-                Err(e) => {
-                    error!("Failed to update IP address: {}", e);
-                    messages.push(format!("Failed to update IP address: {}", e));
-                }
-            }
-        }
-    }
+    info!("Updating machine {} with full payload (Authorized by admin: {})", id, is_admin);
     
-    // Update MAC address if provided
-    if let Some(mac_address) = &payload.mac_address {
-        if !mac_address.is_empty() {
-            match db::update_mac_address(&id, mac_address).await {
+    // Set the updated_at timestamp before saving
+    machine_payload.updated_at = Utc::now();
+
+    // Call the updated db::update_machine function
+    match db::update_machine(&machine_payload).await {
                 Ok(true) => {
-                    updated = true;
-                    messages.push(format!("MAC address updated to '{}'", mac_address));
-                },
-                Ok(false) => {
-                    messages.push("Machine not found for MAC address update".to_string());
-                },
-                Err(e) => {
-                    error!("Failed to update MAC address: {}", e);
-                    messages.push(format!("Failed to update MAC address: {}", e));
-                }
-            }
-        }
-    }
-    
-    // Update DNS servers if provided
-    if let Some(nameservers) = &payload.nameservers {
-        // Filter out empty strings
-        let filtered_nameservers: Vec<String> = nameservers.iter()
-            .filter(|ns| !ns.is_empty())
-            .cloned()
-            .collect();
+            // Emit machine updated event
+            let _ = state.event_manager.send(format!("machine_updated:{}", id));
             
-        if !filtered_nameservers.is_empty() {
-            match db::update_nameservers(&id, &filtered_nameservers).await {
-                Ok(true) => {
-                    updated = true;
-                    messages.push(format!("DNS servers updated"));
+            // Return the updated machine object
+            (StatusCode::OK, Json(machine_payload)).into_response()
                 },
                 Ok(false) => {
-                    messages.push("Machine not found for DNS servers update".to_string());
+            // This case should ideally not happen if the ID check above passed
+            // but handle it just in case (e.g., race condition with deletion)
+            (StatusCode::NOT_FOUND, Json(json!({
+                "error": "Not Found",
+                "message": format!("Machine with ID {} not found during update attempt.", id)
+            }))).into_response()
                 },
                 Err(e) => {
-                    error!("Failed to update DNS servers: {}", e);
-                    messages.push(format!("Failed to update DNS servers: {}", e));
-                }
-            }
+            error!("Failed to update machine {}: {}", id, e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
+                "error": "Database Error",
+                "message": e.to_string()
+            }))).into_response()
         }
-    }
-
-    if updated {
-        // Emit machine updated event
-        let _ = state.event_manager.send(format!("machine_updated:{}", id));
-        
-        (StatusCode::OK, Json(json!({
-            "success": true,
-            "message": messages.join(", ")
-        }))).into_response()
-    } else {
-        (StatusCode::BAD_REQUEST, Json(json!({
-            "success": false,
-            "message": if messages.is_empty() { "No updates provided".to_string() } else { messages.join(", ") }
-        }))).into_response()
     }
 }
 
@@ -1361,8 +1335,8 @@ pub async fn get_machine_status(Path(id): Path<Uuid>) -> impl IntoResponse {
 async fn machine_events(
     State(state): State<AppState>,
 ) -> Sse<impl Stream<Item = std::result::Result<Event, Infallible>>> {
-    let mut rx = state.event_manager.subscribe();
-
+    let rx = state.event_manager.subscribe(); // Remove mut
+    
     let stream = stream::unfold(rx, |mut rx| async move {
         match rx.recv().await {
             Ok(event_string) => {
@@ -1378,8 +1352,8 @@ async fn machine_events(
                 if event_type == "ip_download_progress" {
                     if let Some(payload_str) = event_payload_str {
                         // Directly use the JSON string as data for this specific event type
-                        let sse_event = Event::default()
-                            .event(event_type)
+                let sse_event = Event::default()
+                    .event(event_type)
                             .data(payload_str); // Use the payload string directly
                         Some((Ok(sse_event), rx))
                     } else {
@@ -1403,7 +1377,7 @@ async fn machine_events(
                             let sse_event = Event::default()
                                 .event(event_type)
                                 .data(json_string);
-                            Some((Ok(sse_event), rx))
+                Some((Ok(sse_event), rx))
                         },
                         Err(e) => {
                             error!("Failed to serialize SSE event data to JSON: {}", e);
@@ -2796,23 +2770,34 @@ async fn get_install_status() -> Response {
 pub async fn track_client_ip(
     State(state): State<AppState>,             // State first
     ConnectInfo(addr): ConnectInfo<SocketAddr>, // Then other FromRequestParts extractors
-    request: Request<Body>,
+    request: axum::http::Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> { // Return Result based on example
     // Try to get IP from X-Real-IP header first
-    let ip_from_header = request.headers()
+    let real_ip_header = request.headers()
         .get("X-Real-IP")
-        .and_then(|header| header.to_str().ok())
-        .map(|s| s.to_string());
+        .and_then(|value| value.to_str().ok());
 
-    // Fall back to direct connection IP if header is not present or invalid
-    let client_ip = ip_from_header.unwrap_or_else(|| addr.ip().to_string());
+    let ip = match real_ip_header {
+        Some(real_ip) => {
+            // Log that we found the header and its value
+            info!("[track_client_ip] Found X-Real-IP header: {}", real_ip);
+            real_ip.to_string()
+        },
+        None => {
+            // Log that the header was missing and we're falling back
+            let fallback_ip = addr.ip().to_string();
+            info!("[track_client_ip] X-Real-IP header not found. Falling back to ConnectInfo IP: {}", fallback_ip);
+            fallback_ip
+        }
+    };
 
-    debug!("Tracking client IP: {}", client_ip);
-    *state.client_ip.lock().await = Some(client_ip); // Store the determined IP
+    // Log the IP being stored in state
+    info!("[track_client_ip] Storing client IP in state: {}", ip);
+    *state.client_ip.lock().await = Some(ip);
 
-    // Continue processing the request
-    Ok(next.run(request).await) // Wrap response in Ok
+    // Proceed with the request
+    Ok(next.run(request).await)
 }
 
 // Function to add machine IP tracking to API router helpers

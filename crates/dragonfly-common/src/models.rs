@@ -25,6 +25,12 @@ pub struct Machine {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub installation_step: Option<String>,
     pub last_deployment_duration: Option<i64>,  // Duration in seconds
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_cores: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_ram_bytes: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -76,13 +82,16 @@ impl fmt::Display for BmcType {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RegisterRequest {
     pub mac_address: String,
     pub ip_address: String,
     pub hostname: Option<String>,
     pub disks: Vec<DiskInfo>,
     pub nameservers: Vec<String>,
+    pub cpu_model: Option<String>,
+    pub cpu_cores: Option<u32>,
+    pub total_ram_bytes: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
