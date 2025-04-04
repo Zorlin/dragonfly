@@ -641,6 +641,103 @@
     <!-- Gamepad Support -->
     <script src="/static/js/gamepad.js"></script>
 
+    <!-- Gamepad Start Button Menu -->
+    <div x-data="gamepadMenu()" 
+        x-show="isOpen" 
+        x-cloak
+        @keydown.escape.window="close()"
+        class="fixed inset-0 bg-black/30 backdrop-blur-[3px] z-[1000] flex items-center justify-center transition-all duration-300"
+        x-transition:enter="transition ease-out duration-300"
+        x-transition:enter-start="opacity-0"
+        x-transition:enter-end="opacity-100"
+        x-transition:leave="transition ease-in duration-200"
+        x-transition:leave-start="opacity-100"
+        x-transition:leave-end="opacity-0">
+        
+        <!-- Menu Panel -->
+        <div class="bg-gray-300 dark:bg-gray-900 bg-opacity-70 border border-indigo-800/40 rounded-lg shadow-2xl backdrop-blur-sm max-w-md w-full p-6 transform transition-all duration-300"
+             x-transition:enter="transition ease-out duration-300"
+             x-transition:enter-start="opacity-0 translate-y-4"
+             x-transition:enter-end="opacity-100 translate-y-0"
+             x-transition:leave="transition ease-in duration-200"
+             x-transition:leave-start="opacity-100 translate-y-0"
+             x-transition:leave-end="opacity-0 translate-y-4">
+
+            <div class="space-y-2">
+                <!-- Resume Option -->
+                <button @click="close()" 
+                        :class="{'ring-2 ring-indigo-500 ring-offset-1 ring-offset-indigo-900 shadow-lg shadow-indigo-800/30': currentIndex === 0}"
+                        class="w-full text-left px-4 py-3 rounded-lg flex items-center transition-all duration-200 hover:bg-indigo-800/40 focus:outline-none">
+                    <span class="flex-shrink-0 w-8 text-indigo-400">🎮</span>
+                    <span class="ml-3 text-gray-900 dark:text-white">Resume</span>
+                </button>
+
+                <!-- Login/Logout Option -->
+                <button @click="handleAction('auth')" 
+                        :class="{'ring-2 ring-indigo-500 ring-offset-1 ring-offset-indigo-900 shadow-lg shadow-indigo-800/30': currentIndex === 1}"
+                        class="w-full text-left px-4 py-3 rounded-lg flex items-center transition-all duration-200 hover:bg-indigo-800/40 focus:outline-none">
+                    <span x-show="!{{ is_authenticated|lower }}" class="flex-shrink-0 w-8 text-indigo-400">🔑</span>
+                    <span x-show="{{ is_authenticated|lower }}" class="flex-shrink-0 w-8 text-indigo-400">👋</span>
+                    <span x-show="!{{ is_authenticated|lower }}" class="ml-3 text-gray-900 dark:text-white">Sign In</span>
+                    <span x-show="{{ is_authenticated|lower }}" class="ml-3 text-gray-900 dark:text-white">Sign Out</span>
+                </button>
+                
+                <!-- Settings Option -->
+                <button @click="handleAction('settings')" 
+                        :class="{'ring-2 ring-indigo-500 ring-offset-1 ring-offset-indigo-900 shadow-lg shadow-indigo-800/30': currentIndex === 2}"
+                        class="w-full text-left px-4 py-3 rounded-lg flex items-center transition-all duration-200 hover:bg-indigo-800/40 focus:outline-none">
+                    <span class="flex-shrink-0 w-8 text-indigo-400">⚙️</span>
+                    <span class="ml-3 text-gray-900 dark:text-white">Settings</span>
+                </button>
+                
+                <!-- Dark Mode Option -->
+                <button @click="handleAction('theme')" 
+                        :class="{'ring-2 ring-indigo-500 ring-offset-1 ring-offset-indigo-900 shadow-lg shadow-indigo-800/30 bg-indigo-500/30': currentIndex === 3}"
+                        class="w-full text-left px-4 py-3 rounded-lg flex items-center transition-all duration-200 hover:bg-indigo-800/40 focus:outline-none">
+                    <span x-show="isDarkMode" class="flex-shrink-0 w-8 text-indigo-400">🌞</span>
+                    <span x-show="!isDarkMode" class="flex-shrink-0 w-8 text-indigo-400">🌙</span>
+                    <span x-show="isDarkMode" class="ml-3 text-gray-900 dark:text-white">Light Mode</span>
+                    <span x-show="!isDarkMode" class="ml-3 text-gray-900 dark:text-white">Dark Mode</span>
+                </button>
+                
+                <!-- Fullscreen Option -->
+                <button @click="handleAction('fullscreen')" 
+                        :class="{'ring-2 ring-indigo-500 ring-offset-1 ring-offset-indigo-900 shadow-lg shadow-indigo-800/30': currentIndex === 4}"
+                        class="w-full text-left px-4 py-3 rounded-lg flex items-center transition-all duration-200 hover:bg-indigo-800/40 focus:outline-none">
+                    <span x-show="!isFullscreen" class="flex-shrink-0 w-8 text-indigo-400">📺</span>
+                    <span x-show="isFullscreen" class="flex-shrink-0 w-8 text-indigo-400">🔳</span>
+                    <span x-show="!isFullscreen" class="ml-3 text-gray-900 dark:text-white">Enter Fullscreen</span>
+                    <span x-show="isFullscreen" class="ml-3 text-gray-900 dark:text-white">Exit Fullscreen</span>
+                </button>
+            </div>
+            
+            <!-- Current User Info (if authenticated) -->
+            <div x-show="{{ is_authenticated|lower }}" class="mt-6 pt-4 border-t border-indigo-800/30 text-center text-sm text-indigo-900 dark:text-indigo-100">
+                <p>Signed in as <span class="font-semibold text-black dark:text-white">{{ user_email|default('Admin') }}</span></p>
+            </div>
+            
+            <!-- Footer with Controls Guide -->
+            <div class="mt-6 pt-4 border-t border-indigo-800/30 flex justify-between text-xs">
+                <div class="flex items-center">
+                    <span class="bg-green-600 text-black dark:text-white w-6 h-6 flex items-center justify-center rounded-full font-bold mr-2 shadow-sm">A</span>
+                    Select
+                </div>
+                <div class="flex items-center">
+                    <span class="bg-red-600 text-black dark:text-white w-6 h-6 flex items-center justify-center rounded-full font-bold mr-2 shadow-sm">B</span>
+                    Close
+                </div>
+                <div class="flex items-center">
+                    <span class="bg-zinc-800 text-black dark:text-white w-8 h-6 flex items-center justify-center rounded-md mr-2 shadow-sm">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="white" class="w-5 h-5">
+                          <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 15L12 18.75 15.75 15m-7.5-6L12 5.25 15.75 9" />
+                        </svg>
+                    </span>
+                    Navigate
+                </div>
+            </div>
+        </div>
+    </div>
+
     {# --- Demo Mode Banner --- #}
     {% if is_demo_mode %}
     <div class="bg-yellow-100 border-b border-yellow-300 text-yellow-800 px-4 py-2 text-center text-sm dark:bg-yellow-900/30 dark:border-yellow-700/50 dark:text-yellow-200 z-50 sticky top-0 shadow-sm">
@@ -657,5 +754,201 @@
     {# ... (existing installation banner) ... #}
     {% endif %}
     {# --- End Installation Progress Banner --- #}
+
+    <!-- Gamepad Menu Functions -->
+    <script>
+        // Create sound effects
+        const menuSounds = {
+            navigation: new Audio('/static/sounds/menu_nav.mp3'),
+            select: new Audio('/static/sounds/menu_select.mp3'),
+            open: new Audio('/static/sounds/menu_open.mp3'),
+            close: new Audio('/static/sounds/menu_close.mp3')
+        };
+        
+        // Handle sound initialization (browsers require user interaction before playing sounds)
+        function prepareMenuSounds() {
+            // Set volume for all sounds
+            Object.values(menuSounds).forEach(sound => {
+                sound.volume = 0.3;
+                
+                // Create silent versions if sounds don't exist yet
+                sound.onerror = () => {
+                    console.log("Sound file not found, creating silent version");
+                    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                    const oscillator = ctx.createOscillator();
+                    oscillator.type = 'sine';
+                    oscillator.frequency.value = 0; // Silent
+                    oscillator.connect(ctx.destination);
+                    oscillator.start();
+                    setTimeout(() => oscillator.stop(), 10);
+                };
+                
+                // Load sounds
+                sound.load();
+            });
+        }
+        
+        // Attempt to initialize sounds on first user interaction
+        document.addEventListener('click', prepareMenuSounds, { once: true });
+        
+        // Alpine.js component for the gamepad menu
+        document.addEventListener('alpine:init', () => {
+            Alpine.data('gamepadMenu', () => ({
+                isOpen: false,
+                currentIndex: 0,
+                menuItems: 5, // Total number of menu items
+                isDarkMode: document.documentElement.classList.contains('dark'),
+                
+                // Get fullscreen state
+                get isFullscreen() {
+                    return !!document.fullscreenElement;
+                },
+                
+                init() {
+                    // Listen for gamepad start button press
+                    window.addEventListener('gamepad-menu-open', () => {
+                        this.open();
+                    });
+                    
+                    // Listen for gamepad button presses while menu is open
+                    window.addEventListener('gamepad-button-press', (e) => {
+                        if (!this.isOpen) return;
+                        
+                        switch (e.detail.button) {
+                            case 'up':
+                                this.navigateUp();
+                                break;
+                            case 'down':
+                                this.navigateDown();
+                                break;
+                            case 'a': // Select
+                                this.selectCurrentItem();
+                                break;
+                            case 'b': // Back
+                                this.close();
+                                break;
+                        }
+                    });
+                },
+                
+                open() {
+                    this.isOpen = true;
+                    this.currentIndex = 0;
+                    menuSounds.open.play().catch(e => console.log("Couldn't play sound:", e));
+                    
+                    // Tell the gamepad controller this menu is active
+                    window.dispatchEvent(new CustomEvent('gamepad-menu-active', { 
+                        detail: { active: true } 
+                    }));
+                },
+                
+                close() {
+                    this.isOpen = false;
+                    menuSounds.close.play().catch(e => console.log("Couldn't play sound:", e));
+                    
+                    // Tell the gamepad controller this menu is no longer active
+                    window.dispatchEvent(new CustomEvent('gamepad-menu-active', { 
+                        detail: { active: false } 
+                    }));
+                },
+                
+                navigateUp() {
+                    this.currentIndex = (this.currentIndex - 1 + this.menuItems) % this.menuItems;
+                    menuSounds.navigation.play().catch(e => console.log("Couldn't play sound:", e));
+                },
+                
+                navigateDown() {
+                    this.currentIndex = (this.currentIndex + 1) % this.menuItems;
+                    menuSounds.navigation.play().catch(e => console.log("Couldn't play sound:", e));
+                },
+                
+                selectCurrentItem() {
+                    menuSounds.select.play().catch(e => console.log("Couldn't play sound:", e));
+                    
+                    // Determine which item is selected
+                    switch (this.currentIndex) {
+                        case 0: // Resume
+                            this.close();
+                            break;
+                        case 1: // Auth (Login/Logout)
+                            this.handleAction('auth');
+                            break;
+                        case 2: // Settings
+                            this.handleAction('settings');
+                            break;
+                        case 3: // Theme Toggle
+                            this.handleAction('theme');
+                            break;
+                        case 4: // Fullscreen
+                            this.handleAction('fullscreen');
+                            break;
+                    }
+                },
+                
+                handleAction(action) {
+                    switch(action) {
+                        case 'auth':
+                            // Handle login/logout
+                            if ({{ is_authenticated|lower }}) {
+                                // Logout
+                                window.location.href = '/logout';
+                            } else {
+                                // Login
+                                window.location.href = '/login';
+                            }
+                            // Close menu after auth action
+                            setTimeout(() => this.close(), 300);
+                            break;
+                        case 'settings':
+                            // Navigate to settings
+                            window.location.href = '/settings';
+                            // Close menu after settings action
+                            setTimeout(() => this.close(), 300);
+                            break;
+                        case 'theme':
+                            // Toggle theme without closing menu
+                            const event = new CustomEvent('toggle-theme');
+                            window.dispatchEvent(event);
+                            
+                            // Toggle dark mode class
+                            if (this.isDarkMode) {
+                                document.documentElement.classList.remove('dark');
+                                localStorage.setItem('theme', 'light');
+                                this.isDarkMode = false;
+                            } else {
+                                document.documentElement.classList.add('dark');
+                                localStorage.setItem('theme', 'dark');
+                                this.isDarkMode = true;
+                            }
+                            
+                            // Force Alpine to re-evaluate the isDarkMode getter
+                            this.$nextTick(() => {
+                                // This empty nextTick forces a reactive update to refresh the UI
+                                console.log("Theme toggled to: " + (this.isDarkMode ? "dark" : "light"));
+                            });
+                            
+                            // Don't close menu after theme toggle
+                            break;
+                        case 'fullscreen':
+                            // Toggle fullscreen
+                            if (!document.fullscreenElement) {
+                                document.documentElement.requestFullscreen().catch(err => {
+                                    console.error(`Error attempting to enable fullscreen: ${err.message}`);
+                                });
+                            } else {
+                                if (document.exitFullscreen) {
+                                    document.exitFullscreen();
+                                }
+                            }
+                            // Close menu after fullscreen action
+                            setTimeout(() => this.close(), 300);
+                            break;
+                    }
+                    
+                    // No global close timeout anymore - each action handles its own closing
+                }
+            }));
+        });
+    </script>
 </body>
 </html>
