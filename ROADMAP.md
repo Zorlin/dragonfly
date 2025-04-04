@@ -212,3 +212,16 @@ Like sorting trading cards into piles — Trello meets VS Code workspaces.
     Drag onto a smart tag zone like “Needs OS” or “Needs Cleanup”
 
     System takes action (reimage, delete, flag for attention)
+
+# Labs mode
+Special tweaks that users might like
+* Enable draining and rebooting of machines in safe mode
+
+# Molly guard
+Let's add a molly guard button.
+
+It'll be a teddy bear emoji in the top right of the interface, which says "🧸 Safe" and changes to "⚡ Power" when clicked
+
+In Safe mode, which will be a button like this (see image) modifications to machines, deletion of machines and power off, shutdown and reboot operations are locked behind a second modal which requires a click and hold to get past. So when you remove a machine, it pops up a window to confirm, then in mollyguard mode (safe mode) it opens a *second* modal and says "Safe mode is enabled. Are you sure you wish to proceed? This is a potentially dangerous action."
+
+See @base.html for molly guard, see @machine_list.html for reimage.
