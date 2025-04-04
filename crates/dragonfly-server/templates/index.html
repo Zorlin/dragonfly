@@ -1171,8 +1171,8 @@
     </script>
     {% endif %}
 
-    <!-- This setup is only needed when we're in installation server mode -->
-    {% if is_installation_server %}
+    <!-- This setup should only run if we are the installation server AND installation is actually in progress -->
+    {% if is_installation_server and installation_in_progress %}
     <script>
         let evtSource;
         let initialized = false;

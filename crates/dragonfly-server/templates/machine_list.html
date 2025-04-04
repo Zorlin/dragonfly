@@ -3,6 +3,8 @@
 {% block title %}Dragonfly - Machines{% endblock %}
 
 {% block content %}
+
+
 <div class="px-4 sm:px-6 lg:px-8" x-data="{
     isAuthenticated: {{ is_authenticated }},
     updateDebounceTimer: null,
@@ -833,9 +835,9 @@
                                         </svg>
                                     </div>
                                 </div>
-                                <h3 class="text-xl font-semibold text-white mb-3 text-center">PXE Boot</h3>
+                                <h3 class="text-xl font-semibold text-white mb-3 text-center">Managed</h3>
                                 <p class="text-emerald-100 dark:text-emerald-200 mt-2 text-center text-sm">
-                                    Add a machine that will PXE boot and be provisioned automatically
+                                    Dragonfly will be allowed to adopt and manage this machine. Great for existing servers.
                                 </p>
                             </div>
                         </div>
@@ -852,9 +854,9 @@
                                         </svg>
                                     </div>
                                 </div>
-                                <h3 class="text-center text-xl font-semibold text-white mb-2">External</h3>
+                                <h3 class="text-center text-xl font-semibold text-white mb-2">Protected</h3>
                                 <p class="text-center text-purple-100 dark:text-purple-200 mt-2 text-sm">
-                                    Add an existing machine that won't be provisioned by Dragonfly
+                                    Track a machine in Dragonfly, but don't allow reimaging or power control.
                                 </p>
                             </div>
                         </div>
@@ -878,8 +880,59 @@
                                 </p>
                             </div>
                         </div>
+                    <!-- Proxmox -->
+                    <div @click="addMachineModal = false; proxmoxMachineModal = true" 
+                        class="rounded-xl shadow-md overflow-hidden border border-[#D96400]/50 dark:border-[#D96400]/30 transition-all hover:shadow-lg hover:scale-[1.02] duration-300 flex flex-col cursor-pointer" 
+                        style="height: 14em; background-color: #D96400;"> {# Use inline style for specific hex color #}
+                        <div class="p-4 flex-grow">
+                            <div class="flex justify-center items-center mb-4">
+                                <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-white dark:bg-black"> {# Reverted size to w-12 h-12 #}
+                                    {# Light mode logo #}
+                                    <img src="/static/logos/proxmox/proxmox-logo-stacked-color.svg" alt="Proxmox Logo" class="h-11 w-11 dark:hidden"> {# Reverted logo size to h-8 w-8 #}
+                                    {# Dark mode logo #}
+                                    <img src="/static/logos/proxmox/proxmox-logo-stacked-inverted-color.svg" alt="Proxmox Logo" class="h-11 w-11 hidden dark:block"> {# Reverted logo size to h-8 w-8 #}
+                                </div>
+                            </div>
+                            <h3 class="text-center text-xl font-semibold text-white mb-2">Proxmox</h3>
+                            <p class="text-center text-white dark:text-white mt-2 text-sm"> {# Adjusted text color for contrast #}
+                                Add a Proxmox machine or cluster
+                            </p>
+                        </div>
                     </div>
-                    
+
+                    <!-- Temporary -->
+                    <div @click="addMachineModal = false; temporaryNodeModal = true" 
+                        class="rounded-xl shadow-md overflow-hidden border border-gray-300 dark:border-gray-600 transition-all hover:shadow-lg hover:scale-[1.02] duration-300 flex flex-col cursor-pointer" 
+                        style="height: 14em; background-color: #930006;">
+                        <div class="p-4 flex-grow">
+                            <div class="flex justify-center items-center mb-4">
+                                <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-white dark:bg-black">
+                                    🧪
+                                </div>
+                            </div>
+                            <h3 class="text-center text-xl font-semibold text-white dark:text-red- mb-2">Temporary</h3>
+                            <p class="text-center text-white dark:text-white mt-2 text-sm">
+                                Add a temporary machine for testing or development. Can be set to expire.
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Discover -->
+                    <div @click="addMachineModal = false; discoverMachineModal = true" 
+                        class="rounded-xl shadow-md overflow-hidden border border-gray-300 dark:border-gray-600 transition-all hover:shadow-lg hover:scale-[1.02] duration-300 flex flex-col cursor-pointer dark:bg-blue-800" 
+                        style="height: 14em">
+                        <div class="p-4 flex-grow">
+                            <div class="flex justify-center items-center mb-4">
+                                <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-gray-200 dark:bg-blue-300">
+                                    🔍
+                                </div>
+                            </div>
+                            <h3 class="text-center text-xl font-semibold text-gray-900 dark:text-white mb-2">Discover</h3>
+                            <p class="text-center text-gray-600 dark:text-white mt-2 text-sm">
+                                Discover machines on your network.
+                            </p>
+                        </div>
+                    </div>
                     <!-- Cancel button -->
                     <div class="mt-6 text-center">
                         <button type="button" @click="addMachineModal = false"
@@ -1088,6 +1141,7 @@
 {% endblock %}
 
 {% block scripts %}
+
 <script>
     // Add Machine Form Handler
     function addMachineForm() {

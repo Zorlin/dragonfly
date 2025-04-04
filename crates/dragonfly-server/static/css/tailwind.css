@@ -346,6 +346,9 @@
   .z-50 {
     z-index: 50;
   }
+  .z-\[9999\] {
+    z-index: 9999;
+  }
   .container {
     width: 100%;
     @media (width >= 40rem) {
@@ -529,6 +532,9 @@
   .h-8 {
     height: calc(var(--spacing) * 8);
   }
+  .h-11 {
+    height: calc(var(--spacing) * 11);
+  }
   .h-12 {
     height: calc(var(--spacing) * 12);
   }
@@ -561,6 +567,9 @@
   }
   .w-8 {
     width: calc(var(--spacing) * 8);
+  }
+  .w-11 {
+    width: calc(var(--spacing) * 11);
   }
   .w-12 {
     width: calc(var(--spacing) * 12);
@@ -829,6 +838,9 @@
   .border-l-4 {
     border-left-style: var(--tw-border-style);
     border-left-width: 4px;
+  }
+  .border-\[\#D96400\]\/50 {
+    border-color: color-mix(in oklab, #D96400 50%, transparent);
   }
   .border-blue-100 {
     border-color: var(--color-blue-100);
@@ -2156,6 +2168,16 @@
       padding-inline: calc(var(--spacing) * 8);
     }
   }
+  .dark\:block {
+    &:where(.dark, .dark *) {
+      display: block;
+    }
+  }
+  .dark\:hidden {
+    &:where(.dark, .dark *) {
+      display: none;
+    }
+  }
   .dark\:divide-gray-600 {
     &:where(.dark, .dark *) {
       :where(& > :not(:last-child)) {
@@ -2193,6 +2215,11 @@
   .dark\:border-\[\#222\]\/10 {
     &:where(.dark, .dark *) {
       border-color: color-mix(in oklab, #222 10%, transparent);
+    }
+  }
+  .dark\:border-\[\#D96400\]\/30 {
+    &:where(.dark, .dark *) {
+      border-color: color-mix(in oklab, #D96400 30%, transparent);
     }
   }
   .dark\:border-blue-500\/20 {
@@ -2310,6 +2337,11 @@
       background-color: var(--color-black);
     }
   }
+  .dark\:bg-blue-300 {
+    &:where(.dark, .dark *) {
+      background-color: var(--color-blue-300);
+    }
+  }
   .dark\:bg-blue-400\/10 {
     &:where(.dark, .dark *) {
       background-color: color-mix(in oklab, var(--color-blue-400) 10%, transparent);
@@ -2323,6 +2355,11 @@
   .dark\:bg-blue-700\/30 {
     &:where(.dark, .dark *) {
       background-color: color-mix(in oklab, var(--color-blue-700) 30%, transparent);
+    }
+  }
+  .dark\:bg-blue-800 {
+    &:where(.dark, .dark *) {
+      background-color: var(--color-blue-800);
     }
   }
   .dark\:bg-blue-800\/30 {
@@ -2620,6 +2657,11 @@
   .dark\:text-red-400 {
     &:where(.dark, .dark *) {
       color: var(--color-red-400);
+    }
+  }
+  .dark\:text-red-500 {
+    &:where(.dark, .dark *) {
+      color: var(--color-red-500);
     }
   }
   .dark\:text-sky-300 {
