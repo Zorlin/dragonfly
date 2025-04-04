@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Query, State},
+    extract::{Query, State, OriginalUri},
     http::{header, HeaderMap, StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
@@ -64,6 +64,7 @@ pub struct IndexTemplate {
     pub initial_install_message: String,
     pub initial_animation_class: String,
     pub is_demo_mode: bool,
+    pub current_path: String,
 }
 
 #[derive(Serialize)]
@@ -73,6 +74,7 @@ pub struct MachineListTemplate {
     pub is_authenticated: bool,
     pub is_admin: bool,
     pub workflow_infos: HashMap<uuid::Uuid, crate::tinkerbell::WorkflowInfo>,
+    pub current_path: String,
 }
 
 #[derive(Serialize)]
@@ -85,6 +87,7 @@ pub struct MachineDetailsTemplate {
     pub workflow_info_json: String,
     pub machine: Machine,
     pub workflow_info: Option<crate::tinkerbell::WorkflowInfo>,
+    pub current_path: String,
 }
 
 #[derive(Serialize)]
@@ -103,6 +106,7 @@ pub struct SettingsTemplate {
     pub rendered_password: String,
     pub show_admin_settings: bool,
     pub error_message: Option<String>,
+    pub current_path: String,
 }
 
 #[derive(Serialize)]
@@ -110,6 +114,7 @@ pub struct WelcomeTemplate {
     pub theme: String,
     pub is_authenticated: bool,
     pub hide_footer: bool,
+    pub current_path: String,
 }
 
 #[derive(Serialize)]
@@ -123,6 +128,7 @@ pub struct ErrorTemplate {
     pub back_text: String,
     pub show_retry: bool,
     pub retry_url: String,
+    pub current_path: String,
 }
 
 // Updated render_minijinja function
@@ -372,10 +378,12 @@ pub async fn index(
     State(app_state): State<AppState>,
     headers: HeaderMap,
     auth_session: AuthSession,
+    uri: OriginalUri,
 ) -> Response {
     let theme = get_theme_from_cookie(&headers);
     let is_authenticated = auth_session.user.is_some();
     let require_login = app_state.settings.lock().await.require_login;
+    let current_path = uri.path().to_string();
 
     // --- Scenario B Logic --- 
     if app_state.is_demo_mode {
@@ -421,6 +429,7 @@ pub async fn index(
                 back_text: "Retry".to_string(),
                 show_retry: true,
                 retry_url: "/".to_string(),
+                current_path,
             };
             return render_minijinja(&app_state, "error.html", context);
         }
@@ -501,6 +510,7 @@ pub async fn index(
         initial_install_message,
         initial_animation_class,
         is_demo_mode: app_state.is_demo_mode, // Use the state flag
+        current_path,
     };
 
     render_minijinja(&app_state, "index.html", context)
@@ -510,10 +520,12 @@ pub async fn machine_list(
     State(app_state): State<crate::AppState>,
     headers: HeaderMap,
     auth_session: AuthSession,
+    uri: OriginalUri,
 ) -> Response {
     let theme = get_theme_from_cookie(&headers);
     let is_authenticated = auth_session.user.is_some();
     let is_admin = is_authenticated;
+    let current_path = uri.path().to_string();
 
     let require_login = app_state.settings.lock().await.require_login;
 
@@ -556,6 +568,7 @@ pub async fn machine_list(
             is_authenticated,
             is_admin,
             workflow_infos,
+            current_path,
         };
         return render_minijinja(&app_state, "machine_list.html", context);
     } else { // Normal mode
@@ -585,6 +598,7 @@ pub async fn machine_list(
                     is_authenticated,
                     is_admin,
                     workflow_infos,
+                    current_path,
                 };
                 // Pass AppState to render_minijinja
                 render_minijinja(&app_state, "machine_list.html", context)
@@ -598,6 +612,7 @@ pub async fn machine_list(
                     is_authenticated,
                     is_admin,
                     workflow_infos: HashMap::new(),
+                    current_path,
                 };
                 // Pass AppState to render_minijinja
                 render_minijinja(&app_state, "machine_list.html", context)
@@ -611,10 +626,12 @@ pub async fn machine_details(
     axum::extract::Path(id): axum::extract::Path<String>,
     headers: HeaderMap,
     auth_session: AuthSession,
+    uri: OriginalUri,
 ) -> Response {
     // Get theme preference from cookie
     let theme = get_theme_from_cookie(&headers);
     let is_authenticated = auth_session.user.is_some();
+    let current_path = uri.path().to_string();
     
     // Check if login is required site-wide
     let require_login = app_state.settings.lock().await.require_login;
@@ -689,6 +706,7 @@ pub async fn machine_details(
                         workflow_info_json, // Pass JSON string
                         machine: machine.clone(), // Pass original struct too
                         workflow_info, // Pass original option too
+                        current_path,
                     };
                     return render_minijinja(&app_state, "machine_details.html", context);
                 } else {
@@ -703,6 +721,7 @@ pub async fn machine_details(
                         back_text: "Back to Machines".to_string(),
                         show_retry: false,
                         retry_url: "".to_string(),
+                        current_path,
                     };
                     return render_minijinja(&app_state, "error.html", context);
                 }
@@ -763,6 +782,7 @@ pub async fn machine_details(
                         workflow_info_json, // Pass JSON string
                         machine: machine.clone(), // Pass original struct too
                         workflow_info, // Pass original option too
+                        current_path,
                     };
                     // Pass AppState to render_minijinja
                     render_minijinja(&app_state, "machine_details.html", context)
@@ -780,6 +800,7 @@ pub async fn machine_details(
                         back_text: "Back to Machines".to_string(),
                         show_retry: false,
                         retry_url: "".to_string(),
+                        current_path,
                     };
                     // Pass AppState to render_minijinja
                     render_minijinja(&app_state, "error.html", context) // Render error template
@@ -797,6 +818,7 @@ pub async fn machine_details(
                         back_text: "Back to Machines".to_string(),
                         show_retry: false,
                         retry_url: "".to_string(),
+                        current_path,
                     };
                     // Pass AppState to render_minijinja
                     render_minijinja(&app_state, "error.html", context) // Render error template
@@ -816,6 +838,7 @@ pub async fn machine_details(
                 back_text: "Back to Machines".to_string(),
                 show_retry: false,
                 retry_url: "".to_string(),
+                current_path,
             };
             // Pass AppState to render_minijinja
             render_minijinja(&app_state, "error.html", context) // Render error template
@@ -851,12 +874,14 @@ pub async fn settings_page(
     State(app_state): State<crate::AppState>,
     auth_session: AuthSession,
     headers: HeaderMap,
+    uri: OriginalUri,
 ) -> Response {
     // Get current theme from cookie
     let theme = get_theme_from_cookie(&headers);
     
     // Check if user is authenticated
     let is_authenticated = auth_session.user.is_some();
+    let current_path = uri.path().to_string();
     
     // Get current settings
     let settings_lock = app_state.settings.lock().await;
@@ -918,6 +943,7 @@ pub async fn settings_page(
         rendered_password,
         show_admin_settings,
         error_message: None,
+        current_path,
     };
     // Pass AppState to render_minijinja
     render_minijinja(&app_state, "settings.html", context)
@@ -935,13 +961,16 @@ pub struct SettingsForm {
 }
 
 // Handler for settings form submission
+#[axum::debug_handler]
 pub async fn update_settings(
     State(app_state): State<crate::AppState>,
     mut auth_session: AuthSession,
+    uri: OriginalUri,
     Form(form): Form<SettingsForm>,
 ) -> Response {
     let is_authenticated = auth_session.user.is_some();
     let theme = form.theme.clone();
+    let current_path = uri.path().to_string();
 
     // Only require admin authentication for admin settings
     // If trying to change admin settings but not authenticated, redirect to login
@@ -989,8 +1018,48 @@ pub async fn update_settings(
         // Save the general settings
         if let Err(e) = save_app_settings(&new_settings).await {
             error!("Failed to save settings: {}", e);
-            // Handle error, maybe return an error message to the user
-            // For now, just log and continue
+            // Prepare error message and template for display
+            let error_message = Some(format!("Failed to save settings: {}", e));
+            
+            // Get current settings for template
+            let admin_username = current_settings.admin_username.clone();
+            let require_login = current_settings.require_login;
+            let default_os = current_settings.default_os.clone();
+            
+            // These fields are not in Settings, use defaults
+            let has_initial_password = false;
+            let rendered_password = "".to_string();
+            let show_admin_settings = is_authenticated;
+            
+            // Create template with error message
+            let context = SettingsTemplate {
+                theme: theme.clone(),
+                is_authenticated,
+                admin_username,
+                require_login,
+                default_os_none: default_os.is_none(),
+                default_os_ubuntu2204: default_os.as_deref() == Some("ubuntu-2204"),
+                default_os_ubuntu2404: default_os.as_deref() == Some("ubuntu-2404"),
+                default_os_debian12: default_os.as_deref() == Some("debian-12"),
+                default_os_proxmox: default_os.as_deref() == Some("proxmox"),
+                default_os_talos: default_os.as_deref() == Some("talos"),
+                has_initial_password,
+                rendered_password,
+                show_admin_settings,
+                error_message,
+                current_path, // Make sure current_path is passed here
+            };
+            
+            // Return the error template
+            let mut cookie = Cookie::new("dragonfly_theme", theme.clone());
+            cookie.set_path("/");
+            cookie.set_max_age(time::Duration::days(365));
+            cookie.set_same_site(SameSite::Lax);
+            
+            return (
+                [(header::SET_COOKIE, cookie.to_string())],
+                render_minijinja(&app_state, "settings.html", context)
+            ).into_response();
         } else {
             // Update settings in app state ONLY after successful save
             if let Ok(mut guard) = app_state.settings.try_lock() {
@@ -1020,7 +1089,48 @@ pub async fn update_settings(
                     Ok(new_creds) => {
                         if let Err(e) = auth::save_credentials(&new_creds).await {
                             error!("Failed to save new admin password: {}", e);
-                            // Handle credential saving error
+                            // Prepare error message and template for display
+                            let error_message = Some(format!("Failed to save credentials: {}", e));
+                            
+                            // Get current settings for template
+                            let admin_username = current_settings.admin_username.clone();
+                            let require_login = current_settings.require_login;
+                            let default_os = current_settings.default_os.clone();
+                            
+                            // These fields are not in Settings, use defaults
+                            let has_initial_password = false;
+                            let rendered_password = "".to_string();
+                            let show_admin_settings = is_authenticated;
+                            
+                            // Create template with error message
+                            let context = SettingsTemplate {
+                                theme: theme.clone(),
+                                is_authenticated,
+                                admin_username,
+                                require_login,
+                                default_os_none: default_os.is_none(),
+                                default_os_ubuntu2204: default_os.as_deref() == Some("ubuntu-2204"),
+                                default_os_ubuntu2404: default_os.as_deref() == Some("ubuntu-2404"),
+                                default_os_debian12: default_os.as_deref() == Some("debian-12"),
+                                default_os_proxmox: default_os.as_deref() == Some("proxmox"),
+                                default_os_talos: default_os.as_deref() == Some("talos"),
+                                has_initial_password,
+                                rendered_password,
+                                show_admin_settings,
+                                error_message,
+                                current_path, // Add current_path here
+                            };
+                            
+                            // Return the error template
+                            let mut cookie = Cookie::new("dragonfly_theme", theme.clone());
+                            cookie.set_path("/");
+                            cookie.set_max_age(time::Duration::days(365));
+                            cookie.set_same_site(SameSite::Lax);
+                            
+                            return (
+                                [(header::SET_COOKIE, cookie.to_string())],
+                                render_minijinja(&app_state, "settings.html", context)
+                            ).into_response();
                         } else {
                             // Password updated successfully, delete initial password file if it exists
                             if std::path::Path::new("initial_password.txt").exists() {
@@ -1035,9 +1145,103 @@ pub async fn update_settings(
                     }
                     Err(e) => {
                         error!("Failed to hash new password: {}", e);
-                        // Handle hashing error (e.g., display message to user)
+                        // Prepare error message and template for display
+                        let error_message = Some(format!("Failed to hash password: {}", e));
+                        
+                        // Get current settings for template
+                        let admin_username = current_settings.admin_username.clone();
+                        let require_login = current_settings.require_login;
+                        let default_os = current_settings.default_os.clone();
+                        
+                        // These fields are not in Settings, use defaults
+                        let has_initial_password = false;
+                        let rendered_password = "".to_string();
+                        let show_admin_settings = is_authenticated;
+                        
+                        // Create template with error message
+                        let context = SettingsTemplate {
+                            theme: theme.clone(),
+                            is_authenticated,
+                            admin_username,
+                            require_login,
+                            default_os_none: default_os.is_none(),
+                            default_os_ubuntu2204: default_os.as_deref() == Some("ubuntu-2204"),
+                            default_os_ubuntu2404: default_os.as_deref() == Some("ubuntu-2404"),
+                            default_os_debian12: default_os.as_deref() == Some("debian-12"),
+                            default_os_proxmox: default_os.as_deref() == Some("proxmox"),
+                            default_os_talos: default_os.as_deref() == Some("talos"),
+                            has_initial_password,
+                            rendered_password,
+                            show_admin_settings,
+                            error_message,
+                            current_path, // Add current_path here
+                        };
+                        
+                        // Return the error template
+                        let mut cookie = Cookie::new("dragonfly_theme", theme.clone());
+                        cookie.set_path("/");
+                        cookie.set_max_age(time::Duration::days(365));
+                        cookie.set_same_site(SameSite::Lax);
+                        
+                        return (
+                            [(header::SET_COOKIE, cookie.to_string())],
+                            render_minijinja(&app_state, "settings.html", context)
+                        ).into_response();
                     }
                 }
+            }
+        }
+        
+        // Check form password and confirm (moving this out of previous if-let block to fix scope)
+        if form.password.is_some() || form.password_confirm.is_some() {
+            let password = form.password.as_deref().unwrap_or("");
+            let confirm = form.password_confirm.as_deref().unwrap_or("");
+            
+            if (!password.is_empty() || !confirm.is_empty()) && password != confirm {
+                // Passwords provided but don't match
+                error!("Password mismatch in settings form");
+                // Prepare error message and template for display
+                let error_message = Some("Passwords do not match.".to_string());
+                
+                // Get current settings for template
+                let admin_username = current_settings.admin_username.clone();
+                let require_login = current_settings.require_login;
+                let default_os = current_settings.default_os.clone();
+                
+                // These fields are not in Settings, use defaults
+                let has_initial_password = false;
+                let rendered_password = "".to_string();
+                let show_admin_settings = is_authenticated;
+                
+                // Create template with error message
+                let context = SettingsTemplate {
+                    theme: theme.clone(),
+                    is_authenticated,
+                    admin_username,
+                    require_login,
+                    default_os_none: default_os.is_none(),
+                    default_os_ubuntu2204: default_os.as_deref() == Some("ubuntu-2204"),
+                    default_os_ubuntu2404: default_os.as_deref() == Some("ubuntu-2404"),
+                    default_os_debian12: default_os.as_deref() == Some("debian-12"),
+                    default_os_proxmox: default_os.as_deref() == Some("proxmox"),
+                    default_os_talos: default_os.as_deref() == Some("talos"),
+                    has_initial_password,
+                    rendered_password,
+                    show_admin_settings,
+                    error_message,
+                    current_path, // Make sure current_path is passed here
+                };
+                
+                // Return the error template
+                let mut cookie = Cookie::new("dragonfly_theme", theme.clone());
+                cookie.set_path("/");
+                cookie.set_max_age(time::Duration::days(365));
+                cookie.set_same_site(SameSite::Lax);
+                
+                return (
+                    [(header::SET_COOKIE, cookie.to_string())],
+                    render_minijinja(&app_state, "settings.html", context)
+                ).into_response();
             }
         }
     }
@@ -1061,16 +1265,19 @@ pub async fn welcome_page(
     State(app_state): State<crate::AppState>,
     headers: HeaderMap,
     auth_session: AuthSession,
+    uri: OriginalUri,
 ) -> Response {
     // Get theme preference from cookie
     let theme = get_theme_from_cookie(&headers);
     let is_authenticated = auth_session.user.is_some();
+    let current_path = uri.path().to_string();
     
     // Replace Askama render with placeholder
     let context = WelcomeTemplate {
         theme,
         is_authenticated,
         hide_footer: true,
+        current_path,
     };
     // Pass AppState to render_minijinja
     render_minijinja(&app_state, "welcome.html", context)
@@ -1081,10 +1288,12 @@ pub async fn setup_simple(
     State(app_state): State<crate::AppState>,
     headers: HeaderMap,
     auth_session: AuthSession,
+    uri: OriginalUri,
 ) -> Response {
     // Get theme preference from cookie
     let theme = get_theme_from_cookie(&headers);
     let is_authenticated = auth_session.user.is_some();
+    let current_path = uri.path().to_string();
     
     // Save mode to database immediately
     if let Err(e) = mode::save_mode(mode::DeploymentMode::Simple, false).await {
@@ -1101,6 +1310,7 @@ pub async fn setup_simple(
             back_text: "Back to Dashboard".to_string(),
             show_retry: true,
             retry_url: "/setup/simple".to_string(),
+            current_path,
         };
         return render_minijinja(&app_state, "error.html", context);
     }
@@ -1142,10 +1352,12 @@ pub async fn setup_flight(
     State(app_state): State<crate::AppState>,
     headers: HeaderMap,
     auth_session: AuthSession,
+    uri: OriginalUri,
 ) -> Response {
     // Get theme preference from cookie
     let theme = get_theme_from_cookie(&headers);
     let is_authenticated = auth_session.user.is_some();
+    let current_path = uri.path().to_string();
     
     // Save mode to database immediately
     if let Err(e) = mode::save_mode(mode::DeploymentMode::Flight, false).await {
@@ -1162,6 +1374,7 @@ pub async fn setup_flight(
             back_text: "Back to Dashboard".to_string(),
             show_retry: true,
             retry_url: "/setup/flight".to_string(),
+            current_path,
         };
         return render_minijinja(&app_state, "error.html", context);
     }
@@ -1203,10 +1416,12 @@ pub async fn setup_swarm(
     State(app_state): State<crate::AppState>,
     headers: HeaderMap,
     auth_session: AuthSession,
+    uri: OriginalUri,
 ) -> Response {
     // Get theme preference from cookie
     let theme = get_theme_from_cookie(&headers);
     let is_authenticated = auth_session.user.is_some();
+    let current_path = uri.path().to_string();
     
     // Save mode to database immediately
     if let Err(e) = mode::save_mode(mode::DeploymentMode::Swarm, false).await {
@@ -1223,6 +1438,7 @@ pub async fn setup_swarm(
             back_text: "Back to Dashboard".to_string(),
             show_retry: true,
             retry_url: "/setup/swarm".to_string(),
+            current_path,
         };
         return render_minijinja(&app_state, "error.html", context);
     }

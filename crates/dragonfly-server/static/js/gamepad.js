@@ -33,6 +33,8 @@ class GamepadController {
         this.DEADZONE = 0.15; // Define the deadzone value
         this.isClicking = false; // ADD flag to debounce clicks
         this.isTogglingTheme = false; // Add flag to debounce theme toggle
+        this.aButtonHeldDown = false; // Add this flag, initialized to false
+        this.lbButtonHeldDown = false; // Flag for Left Bumper
         
         // Initialize
         this.init();
@@ -106,12 +108,18 @@ class GamepadController {
     checkForExistingGamepads() {
         const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
         console.log('Checking for existing gamepads:', gamepads);
+        let foundOne = false;
         for (let i = 0; i < gamepads.length; i++) {
             if (gamepads[i]) {
                 console.log('Found existing gamepad:', gamepads[i]);
                 // Manually trigger the connection handler for the existing gamepad
                 this.handleGamepadConnected({ gamepad: gamepads[i] });
+                foundOne = true;
             }
+        }
+        // If any existing gamepad was found, dispatch the connected event
+        if (foundOne) {
+            window.dispatchEvent(new CustomEvent('gamepad-connection-changed', { detail: { connected: true } }));
         }
     }
     
@@ -138,6 +146,9 @@ class GamepadController {
         this.gamepadConnected = true;
         this.showGamepadUI(); // Updates focusable elements and sets initial focus
         this.startGamepadPolling();
+        
+        // Dispatch event for Alpine.js
+        window.dispatchEvent(new CustomEvent('gamepad-connection-changed', { detail: { connected: true } }));
     }
     
     handleGamepadDisconnected(e) {
@@ -148,6 +159,8 @@ class GamepadController {
         if (!this.gamepadConnected) {
             this.hideGamepadUI();
             this.stopGamepadPolling();
+            // Dispatch event for Alpine.js ONLY when the *last* gamepad is disconnected
+            window.dispatchEvent(new CustomEvent('gamepad-connection-changed', { detail: { connected: false } }));
         }
     }
     
@@ -288,6 +301,11 @@ class GamepadController {
         this.focusableElements = this.focusableElements.filter(el => {
             return !el.closest('[x-cloak]');
         });
+
+        // Filter out elements specifically marked for exclusion from gamepad navigation
+        this.focusableElements = this.focusableElements.filter(el => 
+            !el.classList.contains('gamepad-nav-exclude')
+        );
     }
     
     focusElementAtIndex(index) {
@@ -679,11 +697,16 @@ class GamepadController {
     }
     
     toggleTheme() {
-        if (this.isTogglingTheme) return; // Prevent rapid toggling
-        
-        this.isTogglingTheme = true;
-        console.log('[Gamepad] Toggling theme (with debounce)');
-        
+        // Only toggle if LB is pressed AND wasn't already held down in the previous frame
+        if (!this.buttonStates.lb || this.lbButtonHeldDown) {
+            return; 
+        }
+
+        // Mark LB as held down for this cycle to prevent repeats until released
+        this.lbButtonHeldDown = true; 
+
+        console.log('[Gamepad] Toggling theme');
+        // Actual theme toggle logic
         const htmlElement = document.documentElement;
         if (htmlElement.classList.contains('dark')) {
             htmlElement.classList.remove('dark');
@@ -692,12 +715,8 @@ class GamepadController {
             htmlElement.classList.add('dark');
             localStorage.setItem('theme', 'dark');
         }
-        
-        // Reset the theme toggle flag after a delay
-        setTimeout(() => {
-            this.isTogglingTheme = false;
-            console.log('[Gamepad] Theme toggle debounce cleared.');
-        }, 60); // 0.1 second minimum between theme toggles
+
+        // No need for setTimeout or isTogglingTheme flag here anymore
     }
     
     toggleFullscreen() {
