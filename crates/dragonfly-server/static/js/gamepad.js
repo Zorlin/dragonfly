@@ -1707,6 +1707,40 @@ class GamepadController {
         if ((direction === 'up' || direction === 'down') &&
             (isOsDropdownTrigger || isTagsButton || isReimageButton || isApplyButton)) {
             
+            // FIRST CHECK: If on a dropdown trigger and pressing down, check if dropdown is open
+            if (isOsDropdownTrigger && direction === 'down') {
+                // Get the machine ID from the row containing this trigger
+                const parentRow = this.activeElement.closest('tr[data-machine-id]');
+                if (!parentRow) return this.currentElementIndex;
+                
+                const machineId = parentRow.getAttribute('data-machine-id');
+                console.log(`[Gamepad] On OS dropdown trigger for machine ${machineId}, checking if dropdown is open`);
+                
+                // Check if the dropdown is open by looking for visible dropdown options
+                const dropdownOptions = Array.from(document.querySelectorAll(`div[x-show*="osDropdowns"] a[href="#"]`))
+                    .filter(option => {
+                        const style = window.getComputedStyle(option);
+                        return style.display !== 'none' && style.visibility !== 'hidden';
+                    });
+                
+                if (dropdownOptions.length > 0) {
+                    console.log(`[Gamepad] Found ${dropdownOptions.length} visible dropdown options`);
+                    
+                    // Find first option that's in our focusable elements
+                    const firstOptionIndex = this.focusableElements.findIndex(el => 
+                        dropdownOptions.includes(el)
+                    );
+                    
+                    if (firstOptionIndex !== -1) {
+                        console.log(`[Gamepad] Moving to first dropdown option at index ${firstOptionIndex}`);
+                        return firstOptionIndex;
+                    }
+                } else {
+                    console.log('[Gamepad] No visible dropdown options found, dropdown is closed');
+                }
+            }
+            
+            // If dropdown is closed (or we're on a different button type), continue with row-to-row navigation
             // Get current row
             const currentRow = this.activeElement.closest('tr[data-machine-id]');
             if (!currentRow) return this.findAdjacentElementStandard(direction);
@@ -1788,6 +1822,61 @@ class GamepadController {
                 console.log(`[Gamepad] No equivalent found, focusing ${direction} row at index ${rowIndex}`);
                 return rowIndex;
             }
+        }
+        
+        // If on a dropdown option and pressing up/down, navigate between options
+        if (isOsDropdownOption && (direction === 'up' || direction === 'down')) {
+            // Get all visible options in this dropdown
+            const dropdown = this.activeElement.closest('[x-show*="osDropdowns"]');
+            if (!dropdown) return this.currentElementIndex;
+            
+            const allOptions = Array.from(dropdown.querySelectorAll('a[href="#"]'))
+                .filter(option => {
+                    const style = window.getComputedStyle(option);
+                    return style.display !== 'none' && style.visibility !== 'hidden' && 
+                          this.focusableElements.includes(option);
+                });
+            
+            // Find current option index
+            const currentOptionIndex = allOptions.indexOf(this.activeElement);
+            if (currentOptionIndex === -1) return this.currentElementIndex;
+            
+            if (direction === 'up') {
+                // If at first option and going up, go back to dropdown trigger
+                if (currentOptionIndex === 0) {
+                    const trigger = dropdown.closest('tr').querySelector('.cursor-pointer');
+                    if (trigger && this.focusableElements.includes(trigger)) {
+                        return this.focusableElements.indexOf(trigger);
+                    }
+                }
+                // Otherwise go to previous option
+                else {
+                    return this.focusableElements.indexOf(allOptions[currentOptionIndex - 1]);
+                }
+            } else { // down
+                // If at last option, close dropdown and go to next row
+                if (currentOptionIndex === allOptions.length - 1) {
+                    // Close dropdown programmatically
+                    document.body.click();
+                    
+                    // Find next row
+                    const currentRow = dropdown.closest('tr');
+                    if (currentRow) {
+                        const nextRow = currentRow.nextElementSibling;
+                        if (nextRow && nextRow.hasAttribute('data-machine-id') && 
+                            this.focusableElements.includes(nextRow)) {
+                            return this.focusableElements.indexOf(nextRow);
+                        }
+                    }
+                }
+                // Otherwise go to next option
+                else {
+                    return this.focusableElements.indexOf(allOptions[currentOptionIndex + 1]);
+                }
+            }
+            
+            // If we get here, we couldn't navigate within options
+            return this.currentElementIndex;
         }
         
         // For vertical navigation (up/down), only consider rows and Add Machine button

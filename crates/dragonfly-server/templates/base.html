@@ -339,11 +339,14 @@
                             <a href="/machines" class="gamepad-nav-exclude border-transparent text-gray-500 dark:text-gray-300 hover:border-indigo-400 hover:text-gray-700 dark:hover:text-white inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium transition-all duration-200 {% if current_path[:9] == '/machines' %} border-indigo-500 text-gray-900 dark:text-white {% endif %}">
                                 Machines
                             </a>
-                            <a href="/clusters" class="gamepad-nav-exclude border-transparent text-gray-500 dark:text-gray-300 hover:border-indigo-400 hover:text-gray-700 dark:hover:text-white inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium transition-all duration-200 {% if current_path[:9] == '/clusters' %} border-indigo-500 text-gray-900 dark:text-white {% endif %}">
-                                Clusters
+                            <a href="/compute" class="gamepad-nav-exclude border-transparent text-gray-500 dark:text-gray-300 hover:border-indigo-400 hover:text-gray-700 dark:hover:text-white inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium transition-all duration-200 {% if current_path[:9] == '/compute' %} border-indigo-500 text-gray-900 dark:text-white {% endif %}">
+                                Compute
                             </a>
                             <a href="/storage" class="gamepad-nav-exclude border-transparent text-gray-500 dark:text-gray-300 hover:border-indigo-400 hover:text-gray-700 dark:hover:text-white inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium transition-all duration-200 {% if current_path[:8] == '/storage' %} border-indigo-500 text-gray-900 dark:text-white {% endif %}">
                                 Storage
+                            </a>
+                            <a href="/monitoring" class="gamepad-nav-exclude border-transparent text-gray-500 dark:text-gray-300 hover:border-indigo-400 hover:text-gray-700 dark:hover:text-white inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium transition-all duration-200 {% if current_path[:11] == '/monitoring' %} border-indigo-500 text-gray-900 dark:text-white {% endif %}">
+                                Monitoring
                             </a>
                         </div>
                     </div>
@@ -654,7 +657,7 @@
         x-show="isOpen" 
         x-cloak
         @keydown.escape.window="close()"
-        class="fixed inset-0 bg-black/30 backdrop-blur-[3px] z-[1000] flex items-center justify-center transition-all duration-300"
+        class="fixed inset-0 bg-black/30 backdrop-blur-[2px] z-[1000] flex items-center justify-center transition-all duration-300"
         x-transition:enter="transition ease-out duration-300"
         x-transition:enter-start="opacity-0"
         x-transition:enter-end="opacity-100"
