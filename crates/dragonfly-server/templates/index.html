@@ -751,8 +751,12 @@
 
             evtSource.addEventListener('install_status', function(event) {
                 try {
-                    const statusUpdate = JSON.parse(event.data);
-                    console.log("Received 'install_status' SSE event:", statusUpdate);
+                    const outerData = JSON.parse(event.data); // Parse outer structure
+                    console.log("Received 'install_status' SSE event (outer):", outerData);
+                    
+                    // Parse the nested JSON string from the 'id' field
+                    const statusUpdate = JSON.parse(outerData.id); 
+                    console.log("Parsed inner status update:", statusUpdate);
                     
                     // Save current state for potential reconnects
                     if (statusUpdate.animation) {
@@ -773,21 +777,25 @@
             evtSource.addEventListener('browser_redirect', function(e) {
                 console.log("Received browser_redirect event:", e.data);
                 try {
-                    const data = JSON.parse(e.data);
-                    console.log("Redirect target:", data.url);
+                    const outerData = JSON.parse(e.data); // Parse the outer JSON
+                    // The actual payload is a JSON string within the 'id' field
+                    const payload = JSON.parse(outerData.id); 
+                    
+                    console.log("Redirect target URL:", payload.url);
+                    console.log("Redirect countdown:", payload.countdown);
                     
                     // Show a message about the redirect
                     const installerMessageEl = document.getElementById('installer-message');
                     if (installerMessageEl) {
                         installerMessageEl.textContent = 
-                            `Installation complete! Redirecting to Dragonfly in ${data.countdown || 1} second...`;
+                            `Installation complete! Redirecting to Dragonfly in ${payload.countdown || 1} second...`;
                     }
                     
-                    // After the countdown, redirect the browser
+                    // After the countdown, redirect the browser using the unpacked URL
                     setTimeout(() => {
-                        console.log("Redirecting to:", data.url);
-                        window.location.href = data.url;
-                    }, (data.countdown || 1) * 1000);
+                        console.log("Redirecting to:", payload.url);
+                        window.location.href = payload.url; // Use payload.url
+                    }, (payload.countdown || 1) * 1000); // Use payload.countdown
                     
                     // Close the SSE connection
                     evtSource.close();
