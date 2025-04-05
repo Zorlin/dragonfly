@@ -11,7 +11,7 @@
       hx-swap-oob="outerHTML">
     {% if machine.status == "Ready" %} Provisioned
     {% elif machine.status == "InstallingOS" %} Installing OS
-    {% elif machine.status == "AwaitingAssignment" %} Awaiting OS Selection
+    {% elif machine.status == "AwaitingAssignment" %} Choose OS
     {% else %} {{ machine.status }} {% endif %}
 </span>
 

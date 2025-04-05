@@ -452,7 +452,7 @@ async fn get_all_machines(
                         match &machine.status { 
                             MachineStatus::Ready => String::from("Ready for Adoption"),
                             MachineStatus::InstallingOS => String::from("Installing OS"),
-                            MachineStatus::AwaitingAssignment => String::from("Awaiting Assignment"),
+                            MachineStatus::AwaitingAssignment => String::from("Choose OS"),
                             _ => machine.status.to_string()
                         },
                         os_display,

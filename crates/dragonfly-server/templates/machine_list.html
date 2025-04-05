@@ -32,6 +32,11 @@
     originalValues: {}, // Track original values for fields
     pendingChanges: false, // Whether there are unsaved changes
     errorMessage: null, // Added for modals that might need it
+    reimageModalOpen: false,
+    reimageTargetMachine: null,
+    showBulkActions: false, // Controls visibility of bulk action header
+    selectAll: false, // State for the header checkbox
+    selectedMachines: {}, // Object to track selected machine IDs { machineId: true/false }
     
     // Just Type functionality
     startEditing(machineId, fieldName, currentValue) {
@@ -261,6 +266,23 @@
             this.errorMessage = `Failed to delete machine: ${error.message}`;
             showToast(this.errorMessage, 'error');
         });
+    },
+    
+    initMachineList() {
+        this.fetchMachines();
+        this.setupSSE();
+    },
+    
+    fetchMachines() {
+        // Implementation of fetchMachines method
+    },
+    
+    setupSSE() {
+        // Implementation of setupSSE method
+    },
+
+    toggleSelectAll() {
+        // Implementation of toggleSelectAll method
     }
 }" x-init="window.isAuthenticated = isAuthenticated"
    @close-tag-modal.window="tagModal = false"
@@ -307,6 +329,12 @@
                                 </th>
                                 <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-200 uppercase tracking-wider">
                                     Actions
+                                </th>
+                                <th scope="col" class="text-left text-xs font-medium text-gray-500 dark:text-gray-200 uppercase tracking-wider text-right">
+                                    <input type="checkbox" 
+                                            x-model="selectAll" 
+                                            @change="toggleSelectAll()"
+                                            class="" />
                                 </th>
                             </tr>
                         </thead>
@@ -424,7 +452,7 @@
                                         {% elif machine.status == "InstallingOS" %}
                                             Installing OS
                                         {% elif machine.status == "AwaitingAssignment" %}
-                                            Awaiting OS Selection
+                                            Choose OS
                                         {% elif machine.status == "ExistingOS" %}
                                             Existing OS
                                         {% else %}
@@ -542,12 +570,25 @@
                                             </button>
                                             {% endif %}
                                             
-                                            {# Delete Action #}
-                                            <button @click="openDeleteModal('{{ machine.id }}')" class="ml-3 inline-flex items-center p-1 border border-transparent text-sm leading-5 font-medium rounded text-red-700 bg-red-100 hover:bg-red-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 dark:bg-red-900 dark:text-red-200 dark:hover:bg-red-800"> {# Added ml-3 for spacing #}
-                                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4 h-4">
-                                                    <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
-                                                </svg>
-                                            </button>
+                                            <!-- Single Delete Icon (default) -->
+                                            <template x-if="!selectAll">
+                                                <button @click="confirmDelete('{{ machine.id }}', '{{ machine.hostname or machine.memorable_name or machine.mac_address }}')" 
+                                                        class="ml-3 inline-flex items-center p-1 border border-transparent text-sm leading-5 font-medium rounded text-red-700 bg-red-100 hover:bg-red-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 dark:bg-red-900 dark:text-red-200 dark:hover:bg-red-800"
+                                                        title="Delete Machine">
+                                                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4 h-4">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                                                    </svg>
+                                                </button>
+                                            </template>
+                                            
+                                            <!-- Bulk Action Checkbox -->
+                                            <template x-if="selectAll">
+                                                <input type="checkbox" 
+                                                       :id="'select-' + machine.id"
+                                                       :value="machine.id"
+                                                       x-model="selectedMachines[machine.id]"
+                                                       class="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 dark:bg-gray-700 dark:border-gray-600 dark:checked:bg-indigo-500 dark:focus:ring-indigo-600 dark:focus:ring-offset-gray-800">
+                                            </template>
                                         </div>
                                         {% endif %} {# End is_admin check for actions #}
                                     {% endif %}
@@ -990,7 +1031,7 @@
                         taskName = "Downloading kernel";
                     } else if (lowerFileName.includes("initrd") || lowerFileName.includes("initramfs")) {
                         taskName = "Downloading initramfs";
-                    } else if (lowerFileName.includes(".img") || lowerFileName.includes(".iso") || lowerFileName.includes("cloudimg") || lowerFileName.includes("stream image")) {
+                    } else if (lowerFileName.includes(".img") || fileName.includes(".iso") || fileName.includes("cloudimg") || fileName.includes("stream image")) {
                         taskName = "Streaming image"; // Use a consistent name
                     } else {
                         // If filename doesn't match known patterns, don't update progress bar based on this event

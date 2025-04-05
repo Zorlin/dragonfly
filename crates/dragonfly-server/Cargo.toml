@@ -7,6 +7,7 @@ description = "API server for Dragonfly bare metal infrastructure management"
 
 [features]
 default = []
+server-binary = []
 
 [dependencies]
 # Web Framework
@@ -105,9 +106,20 @@ urlencoding = "2.1"
 
 # Proxmox & Network Scanning
 # proxmox-rs = { version = "0.1" } # Adjust version as needed - Incorrect, it's a workspace
-proxmox-client = { git = "https://github.com/proxmox/proxmox-rs" } # Use proxmox-client from git repository
-netscan = { version = "0.28" } # User corrected this
-netdev = { version = "0.26" } # Required by netscan for network interface operations
-dns-lookup = "2.0.4" # For reverse DNS lookups
+proxmox-client = { git = "https://github.com/proxmox/proxmox-rs", features = ["hyper-client"] }
+proxmox-schema = { git = "https://github.com/proxmox/proxmox-rs", features = ["api-types"] }
+proxmox-http = { git = "https://github.com/proxmox/proxmox-rs" } # Remove client-sync feature if present
+proxmox-login = { git = "https://github.com/proxmox/proxmox-rs" } # ADDED
+hyper = { version = "0.14", features = ["client", "http1", "http2", "tcp"] } # ADDED
+hyper-tls = { version = "0.5" } # ADDED
+netscan = { version = "0.28" }
+netdev = { version = "0.26" }
+dns-lookup = "2.0"
+
+# Added regex dependency
+regex = "1"
+
+# Add http crate dependency
+http = "1"
 
 [dev-dependencies]

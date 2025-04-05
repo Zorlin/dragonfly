@@ -100,7 +100,8 @@ pub async fn init_db() -> Result<SqlitePool> {
 }
 
 // Get a reference to the database pool
-async fn get_pool() -> Result<&'static Pool<Sqlite>> {
+// Make this public so handlers can access it
+pub async fn get_pool() -> Result<&'static Pool<Sqlite>> {
     DB_POOL.get().ok_or_else(|| anyhow!("Database pool not initialized"))
 }
 
@@ -168,8 +169,8 @@ pub async fn register_machine(req: &RegisterRequest) -> Result<Uuid> {
     // Insert the new machine including hardware info
     let result = sqlx::query(
         r#"
-        INSERT INTO machines (id, mac_address, ip_address, hostname, os_choice, os_installed, status, disks, nameservers, created_at, updated_at, cpu_model, cpu_cores, total_ram_bytes, proxmox_vmid, proxmox_node)
-        VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO machines (id, mac_address, ip_address, hostname, os_choice, os_installed, status, disks, nameservers, created_at, updated_at, cpu_model, cpu_cores, total_ram_bytes, proxmox_vmid, proxmox_node, memorable_name)
+        VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(machine_id.to_string())
@@ -186,6 +187,7 @@ pub async fn register_machine(req: &RegisterRequest) -> Result<Uuid> {
     .bind(req.total_ram_bytes.map(|r| r as i64)) // Map Option<u64> to Option<i64>
     .bind(req.proxmox_vmid)
     .bind(req.proxmox_node.as_deref())
+    .bind(&dragonfly_common::mac_to_words::mac_to_words_safe(&req.mac_address)) // Add memorable name
     .execute(pool)
     .await;
     
@@ -1665,4 +1667,23 @@ pub async fn is_setup_completed() -> Result<bool> {
 pub async fn database_exists() -> bool {
     let db_path = "/var/lib/dragonfly/sqlite.db";
     Path::new(db_path).exists()
+}
+
+/// Gets all machines with Proxmox information (vmid or node is not null)
+pub async fn get_proxmox_machines() -> Result<Vec<Machine>> {
+    let pool = get_pool().await?;
+    
+    let rows = sqlx::query(
+        "SELECT * FROM machines WHERE proxmox_vmid IS NOT NULL OR proxmox_node IS NOT NULL ORDER BY hostname ASC"
+    )
+    .fetch_all(pool)
+    .await?;
+    
+    let mut machines = Vec::new();
+    for row in rows {
+        let machine = map_row_to_machine_with_hardware(row)?;
+        machines.push(machine);
+    }
+    
+    Ok(machines)
 } 

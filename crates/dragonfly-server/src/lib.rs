@@ -644,3 +644,10 @@ pub use db::database_exists;
 
 // Bring the middleware function into scope
 use crate::api::track_client_ip;
+
+// Add a filter to check if a string is a valid IP address
+fn is_valid_ip(ip: String) -> bool {
+    // Use regex to check if string is a valid IPv4 address
+    let ip_regex = regex::Regex::new(r"^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$").unwrap();
+    ip_regex.is_match(&ip)
+}
