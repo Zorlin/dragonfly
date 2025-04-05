@@ -92,7 +92,7 @@ class GamepadController {
         // Also start a recurring check every 2 seconds until a gamepad is found
         this.gamepadDetectionInterval = setInterval(() => {
             if (!this.gamepadConnected) {
-                console.log('[Gamepad] Polling for connected gamepads...');
+                //console.log('[Gamepad] Polling for connected gamepads...');
                 this.checkForExistingGamepads();
                 this.showGamepadConnectPrompt();
             } else {
@@ -246,7 +246,7 @@ class GamepadController {
     
     checkForExistingGamepads() {
         const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
-        console.log('Checking for existing gamepads:', gamepads);
+        //console.log('Checking for existing gamepads:', gamepads);
         let foundOne = false;
         
         for (let i = 0; i < gamepads.length; i++) {

@@ -242,6 +242,7 @@
     </div>
 </div>
 
+
 {# Add Machine Modal #}
 <div id="add-machine-modal" class="relative z-10" aria-labelledby="modal-title" role="dialog" aria-modal="true" x-show="addMachineModal" x-cloak>
     <!-- Remove the background overlay div -->
@@ -257,9 +258,9 @@
                 
                 <!-- Three card options similar to welcome.html -->
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    <!-- PXE Boot Machine -->
-                    <div @click="addMachineModal = false; addPxeModal = true" 
-                        class="bg-emerald-800 dark:bg-emerald-900/90 rounded-xl shadow-md overflow-hidden border border-emerald-700 dark:border-emerald-800 transition-all hover:shadow-lg hover:scale-[1.02] duration-300 flex flex-col cursor-pointer" 
+                    <!-- Managed Machine -->
+                    <div @click="addMachineModal = false; showManagedMachineModal = true"
+                        class="bg-emerald-800 dark:bg-emerald-900/90 rounded-xl shadow-md overflow-hidden border border-emerald-700 dark:border-emerald-800 transition-all hover:shadow-lg hover:scale-[1.02] duration-300 flex flex-col cursor-pointer"
                         style="height: 14em;">
                         <div class="p-4 flex-grow">
                             <div class="flex justify-center items-center mb-4">
@@ -314,254 +315,102 @@
                             </p>
                         </div>
                     </div>
-                <!-- Proxmox -->
-                <div @click="addMachineModal = false; proxmoxMachineModal = true" 
-                    class="rounded-xl shadow-md overflow-hidden border border-[#D96400]/50 dark:border-[#D96400]/30 transition-all hover:shadow-lg hover:scale-[1.02] duration-300 flex flex-col cursor-pointer" 
-                    style="height: 14em; background-color: #D96400;"> {# Use inline style for specific hex color #}
-                    <div class="p-4 flex-grow">
-                        <div class="flex justify-center items-center mb-4">
-                            <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-white dark:bg-white"> {# Reverted size to w-12 h-12 #}
-                                {# Light mode logo #}
-                                <img src="/static/logos/proxmox/proxmox-logo-stacked-color.svg" alt="Proxmox Logo" class="h-11 w-11"> {# Reverted logo size to h-8 w-8 #}
-                            </div>
-                        </div>
-                        <h3 class="text-center text-xl font-semibold text-white mb-2">Proxmox</h3>
-                        <p class="text-center text-white dark:text-white mt-2 text-sm"> {# Adjusted text color for contrast #}
-                            Add a Proxmox machine or cluster
-                        </p>
-                    </div>
-                </div>
 
-                <!-- Temporary -->
-                <div @click="addMachineModal = false; temporaryNodeModal = true" 
-                    class="rounded-xl shadow-md overflow-hidden border border-gray-300 dark:border-gray-600 transition-all hover:shadow-lg hover:scale-[1.02] duration-300 flex flex-col cursor-pointer" 
-                    style="height: 14em; background-color: #930006;">
-                    <div class="p-4 flex-grow">
-                        <div class="flex justify-center items-center mb-4">
-                            <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-white dark:bg-red-400">
-                                🧪
+                    <!-- Proxmox -->
+                    <div @click="addMachineModal = false; proxmoxMachineModal = true" 
+                        class="rounded-xl shadow-md overflow-hidden border border-[#D96400]/50 dark:border-[#D96400]/30 transition-all hover:shadow-lg hover:scale-[1.02] duration-300 flex flex-col cursor-pointer" 
+                        style="height: 14em; background-color: #D96400;"> {# Use inline style for specific hex color #}
+                        <div class="p-4 flex-grow">
+                            <div class="flex justify-center items-center mb-4">
+                                <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-white dark:bg-white"> {# Reverted size to w-12 h-12 #}
+                                    {# Light mode logo #}
+                                    <img src="/static/logos/proxmox/proxmox-logo-stacked-color.svg" alt="Proxmox Logo" class="h-11 w-11"> {# Reverted logo size to h-8 w-8 #}
+                                </div>
                             </div>
-                        </div>
-                        <h3 class="text-center text-xl font-semibold text-white dark:text-red- mb-2">Temporary</h3>
-                        <p class="text-center text-white dark:text-white mt-2 text-sm">
-                            Add a temporary machine for testing or development. Can be set to expire.
-                        </p>
-                    </div>
-                </div>
-
-                <!-- Create Machine --> 
-                <div @click="addMachineModal = false; createMachineModal = true" 
-                    class="rounded-xl shadow-md overflow-hidden border border-gray-300 dark:border-gray-600 transition-all hover:shadow-lg hover:scale-[1.02] duration-300 flex flex-col cursor-pointer bg-blue-500 dark:bg-blue-600" 
-                    style="height: 14em">
-                    <div class="p-4 flex-grow">
-                        <div class="flex justify-center items-center mb-4">
-                            <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-gray-200 dark:bg-blue-200">
-                                🔍
-                            </div>
-                        </div>
-                        <h3 class="text-center text-xl font-semibold text-white dark:text-white mb-2">Discover</h3>
-                        <p class="text-center text-white dark:text-white mt-2 text-sm">
-                            Discover machines on your network.
-                        </p>
-                    </div>
-                </div>
-                <!-- Cancel button -->
-                <div class="mt-6 text-center">
-                    <button type="button" @click="addMachineModal = false"
-                            class="inline-flex justify-center rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-4 py-2 text-base font-medium text-gray-700 dark:text-gray-200 shadow-sm hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 sm:text-sm">
-                        Cancel
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-{# PXE Boot Machine Modal #}
-<div id="add-pxe-modal" class="relative z-10" aria-labelledby="modal-title" role="dialog" aria-modal="true" x-show="addPxeModal" x-cloak>
-    <!-- Removed background overlay -->
-    <div class="fixed inset-0 z-10 overflow-y-auto" @click="addPxeModal = false">
-        <div class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
-            <div class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6" 
-                @click.stop x-data="addMachineForm()" x-init="initForm()">
-                <div>
-                    <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-900">
-                        <svg class="h-6 w-6 text-emerald-600 dark:text-emerald-300" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" />
-                        </svg>
-                    </div>
-                    <div class="mt-3 text-center sm:mt-5">
-                        <h3 class="text-lg font-medium leading-6 text-gray-900 dark:text-white" id="modal-title">Connect a Machine</h3>
-                        <div class="mt-2">
-                            <p class="text-sm text-gray-500 dark:text-gray-400">
-                                Add a machine that will be provisioned via PXE boot by providing its MAC address. You can optionally set a hostname and IP address.
+                            <h3 class="text-center text-xl font-semibold text-white mb-2">Proxmox</h3>
+                            <p class="text-center text-white dark:text-white mt-2 text-sm"> {# Adjusted text color for contrast #}
+                                Add a Proxmox machine or cluster
                             </p>
                         </div>
                     </div>
-                </div>
-                
-                <!-- Form fields -->
-                <div class="mt-5 sm:mt-6">
-                    <form @submit.prevent="submitForm">
-                        <div class="space-y-4">
-                            <!-- MAC Address (required) -->
-                            <div>
-                                <label for="mac-address" class="block text-sm font-medium text-gray-700 dark:text-gray-300">MAC Address <span class="text-red-500">*</span></label>
-                                <div class="mt-1">
-                                    <input type="text" name="mac_address" id="mac-address" 
-                                           x-model="formData.mac_address" 
-                                           class="block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-emerald-500 focus:ring-emerald-500 sm:text-sm"
-                                           placeholder="e.g., 00:11:22:33:44:55" required>
-                                </div>
-                                <p class="mt-1 text-xs text-red-500" x-show="errors.mac_address" x-text="errors.mac_address"></p>
-                            </div>
-                            
-                            <!-- Hostname (optional) -->
-                            <div>
-                                <label for="hostname" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Hostname</label>
-                                <div class="mt-1">
-                                    <input type="text" name="hostname" id="hostname" 
-                                           x-model="formData.hostname" 
-                                           class="block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-emerald-500 focus:ring-emerald-500 sm:text-sm"
-                                           placeholder="e.g., server01">
-                                </div>
-                                <p class="mt-1 text-xs text-red-500" x-show="errors.hostname" x-text="errors.hostname"></p>
-                            </div>
-                            
-                            <!-- IP Address (optional) -->
-                            <div>
-                                <label for="ip-address" class="block text-sm font-medium text-gray-700 dark:text-gray-300">IP Address</label>
-                                <div class="mt-1">
-                                    <input type="text" name="ip_address" id="ip-address" 
-                                           x-model="formData.ip_address" 
-                                           class="block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-emerald-500 focus:ring-emerald-500 sm:text-sm"
-                                           placeholder="e.g., 192.168.1.100">
-                                </div>
-                                <p class="mt-1 text-xs text-red-500" x-show="errors.ip_address" x-text="errors.ip_address"></p>
-                            </div>
-                            
-                            <!-- Initial Status -->
-                            <div>
-                                <label for="status" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Initial Status</label>
-                                <div class="mt-1">
-                                    <select id="status" name="status" x-model="formData.status" 
-                                            class="block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-emerald-500 focus:ring-emerald-500 sm:text-sm">
-                                        <option value="AwaitingAssignment">Awaiting OS Assignment</option>
-                                        <option value="ExistingOS">Existing OS</option>
-                                    </select>
+
+                    <!-- Temporary -->
+                    <div @click="addMachineModal = false; temporaryNodeModal = true" 
+                        class="rounded-xl shadow-md overflow-hidden border border-gray-300 dark:border-gray-600 transition-all hover:shadow-lg hover:scale-[1.02] duration-300 flex flex-col cursor-pointer" 
+                        style="height: 14em; background-color: #930006;">
+                        <div class="p-4 flex-grow">
+                            <div class="flex justify-center items-center mb-4">
+                                <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-white dark:bg-red-400">
+                                    🧪
                                 </div>
                             </div>
-                            
-                            <!-- Optional Descriptive Name -->
-                            <div>
-                                <label for="memorable-name" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Descriptive Name</label>
-                                <div class="mt-1">
-                                    <input type="text" name="memorable_name" id="memorable-name" 
-                                           x-model="formData.memorable_name" 
-                                           class="block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-emerald-500 focus:ring-emerald-500 sm:text-sm"
-                                           placeholder="e.g., Web Server">
-                                </div>
-                            </div>
+                            <h3 class="text-center text-xl font-semibold text-white dark:text-red- mb-2">Temporary</h3>
+                            <p class="text-center text-white dark:text-white mt-2 text-sm">
+                                Add a temporary machine for testing or development. Can be set to expire.
+                            </p>
                         </div>
-                        
-                        <!-- Error message -->
-                        <div class="mt-4" x-show="formError">
-                            <p class="text-sm text-red-600 dark:text-red-400" x-text="formError"></p>
+                    </div>
+
+                    <!-- Discover Machines -->
+                    <div @click="addMachineModal = false; discoverMachinesModal = true" 
+                        class="bg-blue-800 dark:bg-blue-900/90 rounded-xl shadow-md overflow-hidden border border-blue-700 dark:border-blue-800 transition-all hover:shadow-lg hover:scale-[1.02] duration-300 flex flex-col cursor-pointer" 
+                        style="height: 14em;">
+                        <div class="p-4 flex-grow">
+                            <div class="flex justify-center items-center mb-4">
+                                <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-blue-700 dark:bg-blue-700">
+                                    🔍
+                                </div>
+                            </div>
+                            <h3 class="text-center text-xl font-semibold text-white mb-2">Discover</h3>
+                            <p class="text-center text-blue-100 dark:text-blue-200 mt-2 text-sm">
+                                Discover machines on the network
+                            </p>
                         </div>
-                        
-                        <!-- Form buttons -->
-                        <div class="mt-5 sm:mt-6 sm:grid sm:grid-flow-row-dense sm:grid-cols-2 sm:gap-3">
-                            <button type="submit" 
-                                    class="inline-flex w-full justify-center rounded-md border border-transparent bg-emerald-600 px-4 py-2 text-base font-medium text-white shadow-sm hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 sm:col-start-2 sm:text-sm"
-                                    :disabled="isSubmitting">
-                                <span x-show="!isSubmitting">Add PXE Machine</span>
-                                <span x-show="isSubmitting" class="flex items-center">
-                                    <svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                    </svg>
-                                    Processing...
-                                </span>
-                            </button>
-                            <button type="button" @click="addPxeModal = false"
-                                    class="mt-3 inline-flex w-full justify-center rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-4 py-2 text-base font-medium text-gray-700 dark:text-gray-200 shadow-sm hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 sm:col-start-1 sm:mt-0 sm:text-sm">
-                                Cancel
-                            </button>
-                        </div>
-                    </form>
+                    </div>
+
                 </div>
             </div>
         </div>
     </div>
 </div>
 
-{# External Machine Modal #}
-<div id="external-machine-modal" class="relative z-10" aria-labelledby="modal-title" role="dialog" aria-modal="true" x-show="externalMachineModal" x-cloak>
-    <!-- Removed background overlay -->
-    <div class="fixed inset-0 z-10 overflow-y-auto" @click="externalMachineModal = false">
+{# Managed machine form modal #}
+<div id="managed-machine-modal" 
+     class="relative z-30" 
+     aria-labelledby="modal-title" 
+     role="dialog" 
+     aria-modal="true" 
+     x-show="showManagedMachineModal" 
+     x-cloak
+     x-transition:enter="ease-out duration-300"
+     x-transition:enter-start="opacity-0"
+     x-transition:enter-end="opacity-100"
+     x-transition:leave="ease-in duration-200"
+     x-transition:leave-start="opacity-100"
+     x-transition:leave-end="opacity-0">
+
+
+    <div class="fixed inset-0 z-10 overflow-y-auto">
         <div class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
-            <div class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6" 
-                @click.stop>
+            <div class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6"
+                 @click.stop> 
                 <div>
-                    <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-purple-100 dark:bg-purple-900">
-                        <svg class="h-6 w-6 text-purple-600 dark:text-purple-300" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-                        </svg>
-                    </div>
                     <div class="mt-3 text-center sm:mt-5">
-                        <h3 class="text-lg font-medium leading-6 text-gray-900 dark:text-white" id="modal-title">Add External Machine</h3>
+                        <h3 class="text-lg font-semibold leading-6 text-gray-900 dark:text-white" id="modal-title">New Managed Machine Form</h3>
                         <div class="mt-2">
                             <p class="text-sm text-gray-500 dark:text-gray-400">
-                                Add an existing machine that will not be provisioned by Dragonfly.
+                                This is the new, simplified modal content.
                             </p>
                             <p class="text-sm text-gray-500 dark:text-gray-400 mt-4">
-                                This feature is coming soon.
+                                Add your form fields here later.
                             </p>
                         </div>
                     </div>
                 </div>
-                
                 <div class="mt-5 sm:mt-6">
-                    <button type="button" @click="externalMachineModal = false"
-                            class="inline-flex w-full justify-center rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-4 py-2 text-base font-medium text-gray-700 dark:text-gray-200 shadow-sm hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 sm:text-sm">
-                        Close
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-{# BMC Machine Modal #}
-<div id="bmc-machine-modal" class="relative z-10" aria-labelledby="modal-title" role="dialog" aria-modal="true" x-show="bmcMachineModal" x-cloak>
-    <!-- Removed background overlay -->
-    <div class="fixed inset-0 z-10 overflow-y-auto" @click="bmcMachineModal = false">
-        <div class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
-            <div class="relative transform overflow-hidden rounded-lg bg-white dark:bg-gray-800 px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6" 
-                @click.stop>
-                <div>
-                    <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-cyan-100 dark:bg-cyan-900">
-                        <svg class="h-6 w-6 text-cyan-600 dark:text-cyan-300" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                        </svg>
-                    </div>
-                    <div class="mt-3 text-center sm:mt-5">
-                        <h3 class="text-lg font-medium leading-6 text-gray-900 dark:text-white" id="modal-title">Add BMC Managed Machine</h3>
-                        <div class="mt-2">
-                            <p class="text-sm text-gray-500 dark:text-gray-400">
-                                Add a machine with BMC (IPMI, Redfish, iDRAC) for power control and management.
-                            </p>
-                            <p class="text-sm text-gray-500 dark:text-gray-400 mt-4">
-                                This feature is coming soon.
-                            </p>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="mt-5 sm:mt-6">
-                    <button type="button" @click="bmcMachineModal = false"
-                            class="inline-flex w-full justify-center rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-4 py-2 text-base font-medium text-gray-700 dark:text-gray-200 shadow-sm hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2 sm:text-sm">
+                    <button type="button" 
+                            @click="showManagedMachineModal = false"
+                            class="inline-flex w-full justify-center rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-4 py-2 text-base font-medium text-gray-700 dark:text-gray-200 shadow-sm hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 sm:text-sm">
                         Close
                     </button>
                 </div>
