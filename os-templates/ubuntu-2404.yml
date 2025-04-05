@@ -1,11 +1,11 @@
 apiVersion: tinkerbell.org/v1alpha1
 kind: Template
 metadata:
-  name: ubuntu-2204
+  name: ubuntu-2404
   namespace: tink
 spec:
   data: |
-    name: ubuntu-2204
+    name: ubuntu-2404
     version: "0.1"
     global_timeout: 9800
     tasks:
@@ -21,7 +21,7 @@ spec:
             timeout: 9600
             environment:
               DEST_DISK: {{ index .Hardware.Disks 0 }}
-              IMG_URL: "http://{{ base_url_bare }}:3000/ipxe/ubuntu/jammy-server-cloudimg-amd64.img"
+              IMG_URL: "http://{{ base_url_bare }}:3000/ipxe/ubuntu/noble-server-cloudimg-amd64.img"
 
           - name: "write cloud-init config"
             image: quay.io/tinkerbell/actions/writefile:latest

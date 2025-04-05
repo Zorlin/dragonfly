@@ -1971,6 +1971,8 @@ pub async fn serve_ipxe_artifact(
                 "dragonfly-agent/modloop" => "https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64/netboot/modloop-lts",
                 // Ubuntu 22.04
                 "ubuntu/jammy-server-cloudimg-amd64.img" => "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img",
+                // Ubuntu 24.04
+                "ubuntu/noble-server-cloudimg-amd64.img" => "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img",
                 _ => {
                     // If it wasn't an .ipxe script and not a known binary, it's unknown.
                     warn!("Unknown artifact requested: {}", requested_path);
