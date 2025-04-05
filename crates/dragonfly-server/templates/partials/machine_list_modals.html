@@ -446,13 +446,13 @@
                             <!-- Light mode logo -->
                             <img src="/static/logos/proxmox/proxmox-logo-stacked-color.svg" alt="Proxmox Logo" class="h-8 w-8 mr-3">
                             <!-- Dark mode logo -->
-                            <img src="/static/logos/proxmox/proxmox-logo-stacked-color-dark.svg" alt="Proxmox Logo" class="h-8 w-8 mr-3 hidden dark:block">
+                            <img src="/static/logos/proxmox/proxmox-logo-stacked-inverted-color.svg" alt="Proxmox Logo" class="h-8 w-8 mr-3 hidden dark:block">
                             Connect to Proxmox
                         </h3>
                         
-                        {# Discovered Clusters Section #}
+                        {# Discovered Machines Section #}
                         <div class="mb-6">
-                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Discovered Clusters:</label>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Discovered Proxmox Machines:</label>
                             <div class="rounded-md border border-gray-300 dark:border-gray-600 p-4 min-h-[100px] flex flex-col space-y-2">
                                 {# Scan Button / Scanning Indicator #}
                                 <div class="text-center mb-2">
@@ -476,21 +476,68 @@
                                     <p class="text-sm text-center text-red-600 dark:text-red-400" x-text="scanErrorMessage"></p>
                                 </template>
 
-                                {# Discovered Cluster List #}
+                                {# Discovered Machine List - Now with max-height and scrolling #}
                                 <template x-if="!isScanning && discoveredClusters.length > 0">
-                                    <ul class="divide-y divide-gray-200 dark:divide-gray-700">
-                                        <template x-for="cluster in discoveredClusters" :key="cluster.host">
-                                            <li @click="selectDiscoveredCluster(cluster)" class="py-2 px-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded cursor-pointer flex justify-between items-center">
-                                                <span class="text-sm font-medium text-gray-900 dark:text-white" x-text="cluster.host"></span>
-                                                <span class="text-xs text-gray-500 dark:text-gray-400" x-text="cluster.port ? ':' + cluster.port : '(:8006)'"></span>
-                                            </li>
-                                        </template>
-                                    </ul>
+                                    <div class="max-h-56 overflow-y-auto pr-1"> <!-- Added max-height and scrolling -->
+                                        <ul class="divide-y divide-gray-200 dark:divide-gray-700">
+                                            <template x-for="machine in discoveredClusters" :key="machine.host">
+                                                <li @click="selectDiscoveredCluster(machine)" 
+                                                    class="py-2 px-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded cursor-pointer"
+                                                    :class="{
+                                                        'pl-2': machine.machine_type === 'proxmox-host' || machine.machine_type === 'host',
+                                                        'pl-4': machine.machine_type === 'proxmox-node',
+                                                        'pl-6': machine.machine_type === 'proxmox-vm'
+                                                    }">
+                                                    <div class="flex flex-col">
+                                                        <div class="flex justify-between items-center">
+                                                            <span class="text-sm font-medium text-gray-900 dark:text-white flex items-center">
+                                                                <!-- Icon based on machine type -->
+                                                                <span class="mr-1">
+                                                                    <template x-if="machine.machine_type === 'proxmox-host' || machine.machine_type === 'host'">
+                                                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-blue-500" viewBox="0 0 20 20" fill="currentColor">
+                                                                            <path fill-rule="evenodd" d="M2 5a2 2 0 012-2h12a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V5zm3.293 1.293a1 1 0 011.414 0l3 3a1 1 0 010 1.414l-3 3a1 1 0 01-1.414-1.414L7.586 10 5.293 7.707a1 1 0 010-1.414zM13 8a1 1 0 100 2h3a1 1 0 100-2h-3z" clip-rule="evenodd" />
+                                                                        </svg>
+                                                                    </template>
+                                                                    <template x-if="machine.machine_type === 'proxmox-node'">
+                                                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-purple-500" viewBox="0 0 20 20" fill="currentColor">
+                                                                            <path fill-rule="evenodd" d="M2 5a2 2 0 012-2h12a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V5zm3.293 1.293a1 1 0 011.414 0l3 3a1 1 0 010 1.414l-3 3a1 1 0 01-1.414-1.414L7.586 10 5.293 7.707a1 1 0 010-1.414zM13 8a1 1 0 100 2h3a1 1 0 100-2h-3z" clip-rule="evenodd" />
+                                                                        </svg>
+                                                                    </template>
+                                                                    <template x-if="machine.machine_type === 'proxmox-vm'">
+                                                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-green-500" viewBox="0 0 20 20" fill="currentColor">
+                                                                            <path d="M13 7H7v6h6V7z" />
+                                                                            <path fill-rule="evenodd" d="M7 2a1 1 0 012 0v1h2V2a1 1 0 112 0v1h2a2 2 0 012 2v2h1a1 1 0 110 2h-1v2h1a1 1 0 110 2h-1v2a2 2 0 01-2 2h-2v1a1 1 0 11-2 0v-1H9v1a1 1 0 11-2 0v-1H5a2 2 0 01-2-2v-2H2a1 1 0 110-2h1V9H2a1 1 0 010-2h1V5a2 2 0 012-2h2V2zM5 5h10v10H5V5z" clip-rule="evenodd" />
+                                                                        </svg>
+                                                                    </template>
+                                                                </span>
+                                                                <span x-text="machine.hostname ? machine.hostname : machine.host"></span>
+                                                                <template x-if="machine.vmid">
+                                                                    <span class="ml-1 text-xs text-gray-500 dark:text-gray-400">
+                                                                        (VMID: <span x-text="machine.vmid"></span>)
+                                                                    </span>
+                                                                </template>
+                                                            </span>
+                                                            <span class="text-xs text-gray-500 dark:text-gray-400" x-text="machine.port ? ':' + machine.port : ''"></span>
+                                                        </div>
+                                                        <div class="flex flex-col text-xs">
+                                                            <span x-if="machine.hostname && machine.host !== machine.hostname" class="text-gray-500 dark:text-gray-400" x-text="machine.host"></span>
+                                                            <span x-if="machine.mac_address" class="text-gray-500 dark:text-gray-400 font-mono">
+                                                                <span class="font-normal text-gray-400 dark:text-gray-500">MAC: </span>
+                                                                <span x-text="machine.mac_address"></span>
+                                                            </span>
+                                                            <span class="text-xs text-gray-400 dark:text-gray-500" 
+                                                                  x-text="machine.machine_type.replace('proxmox-', '')"></span>
+                                                        </div>
+                                                    </div>
+                                                </li>
+                                            </template>
+                                        </ul>
+                                    </div>
                                 </template>
 
-                                {# Initial state / No clusters found (and not scanning) #}
+                                {# Initial state / No machines found (and not scanning) #}
                                 <template x-if="!isScanning && discoveredClusters.length === 0 && !scanErrorMessage">
-                                    <p class="text-sm text-center text-gray-500 dark:text-gray-400">Click Scan Network to find Proxmox hosts.</p>
+                                    <p class="text-sm text-center text-gray-500 dark:text-gray-400">Click Scan Network to find Proxmox machines.</p>
                                 </template>
                             </div>
                         </div>

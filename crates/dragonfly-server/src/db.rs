@@ -63,7 +63,9 @@ pub async fn init_db() -> Result<SqlitePool> {
             -- Add new hardware columns
             cpu_model TEXT,
             cpu_cores INTEGER,
-            total_ram_bytes INTEGER
+            total_ram_bytes INTEGER,
+            proxmox_vmid INTEGER,
+            proxmox_node TEXT
         )
         "#,
     )
@@ -166,8 +168,8 @@ pub async fn register_machine(req: &RegisterRequest) -> Result<Uuid> {
     // Insert the new machine including hardware info
     let result = sqlx::query(
         r#"
-        INSERT INTO machines (id, mac_address, ip_address, hostname, os_choice, os_installed, status, disks, nameservers, created_at, updated_at, cpu_model, cpu_cores, total_ram_bytes)
-        VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO machines (id, mac_address, ip_address, hostname, os_choice, os_installed, status, disks, nameservers, created_at, updated_at, cpu_model, cpu_cores, total_ram_bytes, proxmox_vmid, proxmox_node)
+        VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(machine_id.to_string())
@@ -182,6 +184,8 @@ pub async fn register_machine(req: &RegisterRequest) -> Result<Uuid> {
     .bind(&req.cpu_model) // Bind new hardware info
     .bind(req.cpu_cores)
     .bind(req.total_ram_bytes.map(|r| r as i64)) // Map Option<u64> to Option<i64>
+    .bind(req.proxmox_vmid)
+    .bind(req.proxmox_node.as_deref())
     .execute(pool)
     .await;
     
@@ -298,6 +302,33 @@ pub async fn get_machine_by_ip(ip_address: &str) -> Result<Option<Machine>> {
     
     if let Some(row) = result {
         let machine = map_row_to_machine_with_hardware(row)?; // Use a new helper
+        Ok(Some(machine))
+    } else {
+        Ok(None)
+    }
+}
+
+// Get machine by Proxmox VMID
+pub async fn get_machine_by_proxmox_vmid(vmid: u32) -> Result<Option<Machine>> {
+    let pool = get_pool().await?;
+    
+    let result = sqlx::query(
+        r#"
+        SELECT id, mac_address, ip_address, hostname, os_choice, os_installed, status, 
+               disks, nameservers, created_at, updated_at, bmc_credentials, 
+               installation_progress, installation_step, 
+               cpu_model, cpu_cores, total_ram_bytes, 
+               proxmox_vmid, proxmox_node
+        FROM machines 
+        WHERE proxmox_vmid = ?
+        "#,
+    )
+    .bind(vmid as i64) // Convert u32 to i64 for SQLite
+    .fetch_optional(pool)
+    .await?;
+    
+    if let Some(row) = result {
+        let machine = map_row_to_machine_with_hardware(row)?;
         Ok(Some(machine))
     } else {
         Ok(None)
@@ -842,6 +873,30 @@ async fn migrate_db(pool: &Pool<Sqlite>) -> Result<()> {
     if column_exists == 0 {
         info!("Adding total_ram_bytes column to machines table");
         sqlx::query("ALTER TABLE machines ADD COLUMN total_ram_bytes INTEGER").execute(pool).await?;
+    }
+    
+    // Add proxmox_vmid column if it doesn't exist
+    let result = sqlx::query("SELECT COUNT(*) FROM pragma_table_info('machines') WHERE name = 'proxmox_vmid'").fetch_one(pool).await?;
+    let column_exists: i64 = result.get(0);
+    if column_exists == 0 {
+        info!("Adding proxmox_vmid column to machines table");
+        sqlx::query("ALTER TABLE machines ADD COLUMN proxmox_vmid INTEGER").execute(pool).await?;
+    }
+    
+    // Add proxmox_node column if it doesn't exist
+    let result = sqlx::query("SELECT COUNT(*) FROM pragma_table_info('machines') WHERE name = 'proxmox_node'").fetch_one(pool).await?;
+    let column_exists: i64 = result.get(0);
+    if column_exists == 0 {
+        info!("Adding proxmox_node column to machines table");
+        sqlx::query("ALTER TABLE machines ADD COLUMN proxmox_node TEXT").execute(pool).await?;
+    }
+    
+    // Add memorable_name column if it doesn't exist
+    let result = sqlx::query("SELECT COUNT(*) FROM pragma_table_info('machines') WHERE name = 'memorable_name'").fetch_one(pool).await?;
+    let column_exists: i64 = result.get(0);
+    if column_exists == 0 {
+        info!("Adding memorable_name column to machines table");
+        sqlx::query("ALTER TABLE machines ADD COLUMN memorable_name TEXT").execute(pool).await?;
     }
     
     Ok(())
@@ -1409,8 +1464,16 @@ fn map_row_to_machine_with_hardware(row: sqlx::sqlite::SqliteRow) -> Result<Mach
     let total_ram_bytes_i64: Option<i64> = row.try_get("total_ram_bytes")?;
     let total_ram_bytes: Option<u64> = total_ram_bytes_i64.map(|r| r as u64);
     
-    // Generate memorable name from MAC address
-    let memorable_name = dragonfly_common::mac_to_words::mac_to_words_safe(&mac_address);
+    // Map Proxmox specific fields
+    let proxmox_vmid_i64: Option<i64> = row.try_get("proxmox_vmid").ok();
+    let proxmox_vmid: Option<u32> = proxmox_vmid_i64.map(|vmid| vmid as u32);
+    let proxmox_node: Option<String> = row.try_get("proxmox_node").ok();
+    let memorable_name: Option<String> = row.try_get("memorable_name").ok();
+    
+    // Generate memorable name from MAC address if not already stored
+    let memorable_name = memorable_name.unwrap_or_else(|| 
+        dragonfly_common::mac_to_words::mac_to_words_safe(&mac_address)
+    );
     
     // Deserialize disks and nameservers from JSON or use empty vectors if null
     let mut disks = if let Some(json) = disks_json {
@@ -1472,10 +1535,13 @@ fn map_row_to_machine_with_hardware(row: sqlx::sqlite::SqliteRow) -> Result<Mach
         installation_progress: row.try_get::<Option<i64>, _>("installation_progress").unwrap_or(None).unwrap_or(0) as u8,
         installation_step: row.try_get("installation_step")?,
         last_deployment_duration,
-        // Add new hardware fields
+        // Add hardware fields
         cpu_model,
         cpu_cores,
         total_ram_bytes,
+        // Add Proxmox fields
+        proxmox_vmid,
+        proxmox_node,
     })
 }
 

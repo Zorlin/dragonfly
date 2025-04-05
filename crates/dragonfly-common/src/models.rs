@@ -31,6 +31,11 @@ pub struct Machine {
     pub cpu_cores: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_ram_bytes: Option<u64>,
+    // Proxmox specific fields
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxmox_vmid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxmox_node: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -92,6 +97,8 @@ pub struct RegisterRequest {
     pub cpu_model: Option<String>,
     pub cpu_cores: Option<u32>,
     pub total_ram_bytes: Option<u64>,
+    pub proxmox_vmid: Option<u32>,
+    pub proxmox_node: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

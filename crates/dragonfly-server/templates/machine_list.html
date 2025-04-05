@@ -1226,7 +1226,7 @@
                 password: '',
             },
             vmSelectionOption: 'all', // 'all', 'none', 'tags'
-            discoveredClusters: [], // Array to hold discovered clusters {host: string, port?: number}
+            discoveredClusters: [], // Array to hold discovered machines {host: string, port?: number, hostname?: string}
             isConnecting: false,
             isScanning: false, // NEW state for scanning
             errorMessage: null,
@@ -1245,19 +1245,22 @@
                 console.log("Proxmox modal initialized.");
             },
 
-            selectDiscoveredCluster(cluster) {
-                this.formData.host = cluster.host;
-                this.formData.port = cluster.port || 8006;
-                this.errorMessage = null; // Clear errors when selecting a cluster
+            selectDiscoveredCluster(machine) {
+                // Make sure we're handling the machine object correctly
+                if (!machine) return;
+                
+                this.formData.host = machine.host || '';
+                this.formData.port = machine.port || 8006;
+                this.errorMessage = null; // Clear errors when selecting a machine
                 this.scanErrorMessage = null;
-                console.log(`Selected discovered cluster: ${cluster.host}`);
+                console.log(`Selected discovered machine: ${machine.hostname || machine.host}`);
             },
 
             scanForClusters() {
                 this.isScanning = true;
                 this.scanErrorMessage = null;
                 this.discoveredClusters = []; // Clear previous results before scanning
-                console.log("Scanning for Proxmox clusters...");
+                console.log("Scanning for Proxmox machines...");
 
                 fetch('/api/proxmox/discover') // NEW API endpoint
                     .then(response => {
@@ -1267,14 +1270,30 @@
                         return response.json();
                     })
                     .then(data => {
-                        this.discoveredClusters = data.clusters || []; // Expecting { clusters: [...] }
+                        // Make sure we have an array of machines, even if the API returns an empty array or undefined
+                        this.discoveredClusters = data.machines || [];
+                        
+                        // Sort machines by type and hostname
+                        this.discoveredClusters.sort((a, b) => {
+                            // Sort by type first (host, then node, then VM)
+                            const typeOrder = { 'host': 1, 'proxmox-host': 1, 'proxmox-node': 2, 'proxmox-vm': 3 };
+                            const typeA = typeOrder[a.machine_type] || 99;
+                            const typeB = typeOrder[b.machine_type] || 99;
+                            if (typeA !== typeB) return typeA - typeB;
+                            
+                            // Then sort by hostname
+                            const hostA = a.hostname || a.host;
+                            const hostB = b.hostname || b.host;
+                            return hostA.localeCompare(hostB);
+                        });
+                        
                         if (this.discoveredClusters.length === 0) {
-                            this.scanErrorMessage = "No clusters found on the network.";
+                            this.scanErrorMessage = "No Proxmox machines found on the network.";
                         }
-                        console.log("Scan complete. Found clusters:", this.discoveredClusters);
+                        console.log("Scan complete. Found machines:", this.discoveredClusters);
                     })
                     .catch(error => {
-                        console.error("Error scanning for Proxmox clusters:", error);
+                        console.error("Error scanning for Proxmox machines:", error);
                         this.scanErrorMessage = `Scan failed: ${error.message}`;
                     })
                     .finally(() => {
@@ -1285,40 +1304,66 @@
             connectProxmox() {
                 this.isConnecting = true;
                 this.errorMessage = null;
-                console.log("Attempting to connect to Proxmox...", this.formData, this.vmSelectionOption);
+                console.log("Connecting to Proxmox host...", this.formData, this.vmSelectionOption);
 
-                // --- TODO: Backend API Call --- 
-                // 1. Validate formData
+                // Validate form data
                 if (!this.formData.host || !this.formData.username || !this.formData.password) {
                     this.errorMessage = "Host, Username, and Password/Token are required.";
                     this.isConnecting = false;
                     return;
                 }
                 
-                // 2. Make fetch request to a new backend endpoint (e.g., /api/proxmox/connect)
-                //    Send formData and vmSelectionOption
-                // 3. Handle success: 
-                //    - Close modal (this.proxmoxMachineModal = false)
-                //    - Show success toast
-                //    - Refresh machine list (refreshMachineList())
-                // 4. Handle error:
-                //    - Set this.errorMessage
-                //    - Set this.isConnecting = false
-                
-                // Placeholder for timeout simulation
-                setTimeout(() => {
-                    // Simulate success/error
-                    const success = Math.random() > 0.3; // Simulate success most times
-                    if (success) {
-                        showToast(`Successfully connected to Proxmox host ${this.formData.host} (Simulated)`, 'success');
-                        this.$dispatch('close-modal'); // Assuming a close-modal event or similar is handled
-                        // refreshMachineList(); // Uncomment when backend is ready
-                        this.proxmoxMachineModal = false; // Close directly for now
-                    } else {
-                        this.errorMessage = "Failed to connect to Proxmox host. Check credentials and reachability. (Simulated)";
+                // Make API call to connect to Proxmox
+                fetch('/api/proxmox/connect', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        host: this.formData.host,
+                        port: this.formData.port || 8006,
+                        username: this.formData.username,
+                        password: this.formData.password,
+                        vm_selection_option: this.vmSelectionOption.toLowerCase()
+                    })
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        return response.json().then(err => { 
+                            throw new Error(err.error || `HTTP error! status: ${response.status}`);
+                        });
                     }
+                    return response.json();
+                })
+                .then(data => {
+                    // Handle success
+                    let message = data.message;
+                    
+                    // Display more detailed results if available
+                    if (data.machines && data.machines.length > 0) {
+                        // Count the different types of machines
+                        const hostCount = data.machines.filter(m => m.machine_type === 'proxmox-host').length;
+                        const nodeCount = data.machines.filter(m => m.machine_type === 'proxmox-node').length;
+                        const vmCount = data.machines.filter(m => m.machine_type === 'proxmox-vm').length;
+                        
+                        message = `Successfully connected to ${hostCount} Proxmox host(s) with ${nodeCount} node(s) and ${vmCount} VM(s)`;
+                    }
+                    
+                    showToast(message, 'success');
+                    this.proxmoxMachineModal = false; // Close the modal
+                    
+                    // Refresh machine list to show newly added VMs
+                    if (data.added_vms && data.added_vms > 0) {
+                        refreshMachineList();
+                    }
+                })
+                .catch(error => {
+                    console.error("Error connecting to Proxmox:", error);
+                    this.errorMessage = `Failed to connect to Proxmox host: ${error.message}`;
+                })
+                .finally(() => {
                     this.isConnecting = false;
-                }, 1500);
+                });
             }
         };
     }

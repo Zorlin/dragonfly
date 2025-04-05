@@ -372,6 +372,8 @@ fn create_demo_machine(
         cpu_model: None,
         cpu_cores: None,
         total_ram_bytes: None,
+        proxmox_vmid: None,
+        proxmox_node: None,
     }
 }
 

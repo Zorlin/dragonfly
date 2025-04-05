@@ -133,6 +133,7 @@
     --text-6xl: 3.75rem;
     --text-6xl--line-height: 1;
     --font-weight-light: 300;
+    --font-weight-normal: 400;
     --font-weight-medium: 500;
     --font-weight-semibold: 600;
     --font-weight-bold: 700;
@@ -566,6 +567,9 @@
   }
   .h-full {
     height: 100%;
+  }
+  .max-h-56 {
+    max-height: calc(var(--spacing) * 56);
   }
   .min-h-\[100px\] {
     min-height: 100px;
@@ -1246,11 +1250,20 @@
   .pb-20 {
     padding-bottom: calc(var(--spacing) * 20);
   }
+  .pl-2 {
+    padding-left: calc(var(--spacing) * 2);
+  }
   .pl-2\.5 {
     padding-left: calc(var(--spacing) * 2.5);
   }
   .pl-3 {
     padding-left: calc(var(--spacing) * 3);
+  }
+  .pl-4 {
+    padding-left: calc(var(--spacing) * 4);
+  }
+  .pl-6 {
+    padding-left: calc(var(--spacing) * 6);
   }
   .text-center {
     text-align: center;
@@ -1329,6 +1342,10 @@
   .font-medium {
     --tw-font-weight: var(--font-weight-medium);
     font-weight: var(--font-weight-medium);
+  }
+  .font-normal {
+    --tw-font-weight: var(--font-weight-normal);
+    font-weight: var(--font-weight-normal);
   }
   .font-semibold {
     --tw-font-weight: var(--font-weight-semibold);
