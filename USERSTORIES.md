@@ -251,21 +251,9 @@ They see an Add Machine + button.
 
 They see a list of options for machines they want to add, with a friendly UI like the Welcome UI from welcome.html.
 
-They see the following options:
-- Name: Physical machine or virtual machine
-  slug: machine
-  Description: Any normal machine that can network boot (PXE).
-- Name: Proxmox host or cluster
-  slug: proxmox
-  Description: A Proxmox host running zero or more VMs.
-- Name: Cloud host
-  slug: cloud
-  Description: A cloud host, such as one on DigitalOcean.
-- Name: Container host
-  slug: container
-  Description: A container host, such as Docker, Podman, or LXD.
+They see a modal with six options.
 
-They select Proxmox host option. An interface pops up that allows them to select from autodiscovered Proxmox clusters in their network (a very lightweight scan of port 8006 on the network) with an option to manually enter the address of a Proxmox host or cluster.
+They select Proxmox option. An interface pops up that allows them to select from autodiscovered Proxmox clusters in their network (a very lightweight scan of port 8006 on the network) with an option to manually enter the address of a Proxmox host or cluster.
 
 They select a Proxmox cluster and see (selected by default) an option to select all VMs in the cluster and display them in the machine list. There are also options to select no VMs by default (but allow VMs to be selected later), select only VMs with specific tags or sets of tags, or prevented from selecting VMs at all.
 

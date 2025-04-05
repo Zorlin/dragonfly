@@ -418,3 +418,186 @@
         </div>
     </div>
 </div>
+
+{# --- NEW Proxmox Machine Modal --- #}
+<div id="proxmox-machine-modal"
+     class="relative z-30" 
+     aria-labelledby="proxmox-modal-title" 
+     role="dialog" 
+     aria-modal="true" 
+     x-show="proxmoxMachineModal" 
+     x-cloak
+     x-transition:enter="ease-out duration-300"
+     x-transition:enter-start="opacity-0"
+     x-transition:enter-end="opacity-100"
+     x-transition:leave="ease-in duration-200"
+     x-transition:leave-start="opacity-100"
+     x-transition:leave-end="opacity-0">
+
+    <div class="fixed inset-0 z-30 overflow-y-auto flex items-center justify-center p-4 backdrop-blur-[3px] pointer-events-none">
+        {# Removed sm:items-center sm:p-0 from the inner flex div #}
+        <div class="flex justify-center text-center w-full max-w-2xl pointer-events-auto"> 
+            {# Changed dark background to black, adjusted border/shadow for dark #}
+            <div class="relative transform overflow-hidden rounded-lg bg-white dark:bg-black px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:p-6 border border-gray-300 dark:border-gray-700"
+                 @click.stop x-data="proxmoxData()" x-init="if (proxmoxMachineModal) initModal()"> 
+                <div>
+                    <div class="mt-3 text-center sm:mt-0 sm:text-left">
+                        <h3 class="text-xl font-semibold leading-6 text-gray-900 dark:text-white mb-6 flex items-center" id="proxmox-modal-title">
+                            <!-- Light mode logo -->
+                            <img src="/static/logos/proxmox/proxmox-logo-stacked-color.svg" alt="Proxmox Logo" class="h-8 w-8 mr-3">
+                            <!-- Dark mode logo -->
+                            <img src="/static/logos/proxmox/proxmox-logo-stacked-color-dark.svg" alt="Proxmox Logo" class="h-8 w-8 mr-3 hidden dark:block">
+                            Connect to Proxmox
+                        </h3>
+                        
+                        {# Discovered Clusters Section #}
+                        <div class="mb-6">
+                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Discovered Clusters:</label>
+                            <div class="rounded-md border border-gray-300 dark:border-gray-600 p-4 min-h-[100px] flex flex-col space-y-2">
+                                {# Scan Button / Scanning Indicator #}
+                                <div class="text-center mb-2">
+                                    <button type="button" 
+                                            @click="scanForClusters()" 
+                                            :disabled="isScanning"
+                                            class="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 disabled:opacity-50 disabled:cursor-not-allowed">
+                                        <svg x-show="isScanning" class="animate-spin -ml-0.5 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                        </svg>
+                                        <svg x-show="!isScanning" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="-ml-0.5 mr-1.5 h-5 w-5">
+                                            <path fill-rule="evenodd" d="M9 3.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11zM2 9a7 7 0 1112.452 4.391l3.328 3.329a.75.75 0 11-1.06 1.06l-3.329-3.328A7 7 0 012 9z" clip-rule="evenodd" />
+                                        </svg>
+                                        <span x-text="isScanning ? 'Scanning...' : 'Scan Network'"></span>
+                                    </button>
+                                </div>
+
+                                {# Scan Error Message #}
+                                <template x-if="scanErrorMessage">
+                                    <p class="text-sm text-center text-red-600 dark:text-red-400" x-text="scanErrorMessage"></p>
+                                </template>
+
+                                {# Discovered Cluster List #}
+                                <template x-if="!isScanning && discoveredClusters.length > 0">
+                                    <ul class="divide-y divide-gray-200 dark:divide-gray-700">
+                                        <template x-for="cluster in discoveredClusters" :key="cluster.host">
+                                            <li @click="selectDiscoveredCluster(cluster)" class="py-2 px-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded cursor-pointer flex justify-between items-center">
+                                                <span class="text-sm font-medium text-gray-900 dark:text-white" x-text="cluster.host"></span>
+                                                <span class="text-xs text-gray-500 dark:text-gray-400" x-text="cluster.port ? ':' + cluster.port : '(:8006)'"></span>
+                                            </li>
+                                        </template>
+                                    </ul>
+                                </template>
+
+                                {# Initial state / No clusters found (and not scanning) #}
+                                <template x-if="!isScanning && discoveredClusters.length === 0 && !scanErrorMessage">
+                                    <p class="text-sm text-center text-gray-500 dark:text-gray-400">Click Scan Network to find Proxmox hosts.</p>
+                                </template>
+                            </div>
+                        </div>
+
+                        <hr class="my-6 border-gray-300 dark:border-gray-600">
+
+                        {# Manual Connection Form #}
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Or Connect Manually:</label>
+                            <div class="grid grid-cols-1 gap-y-4 sm:grid-cols-2 sm:gap-x-4">
+                                <div>
+                                    <label for="proxmox-host" class="block text-xs font-medium text-gray-600 dark:text-gray-400">Host Address (IP or FQDN)</label>
+                                    <input type="text" name="proxmox-host" id="proxmox-host" x-model="formData.host" placeholder="e.g., 192.168.1.100 or pve.example.com"
+                                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                                </div>
+                                <div>
+                                    <label for="proxmox-port" class="block text-xs font-medium text-gray-600 dark:text-gray-400">Port</label>
+                                    <input type="number" name="proxmox-port" id="proxmox-port" x-model="formData.port" value="8006"
+                                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                                </div>
+                                <div>
+                                    <label for="proxmox-user" class="block text-xs font-medium text-gray-600 dark:text-gray-400">Username</label>
+                                    <input type="text" name="proxmox-user" id="proxmox-user" x-model="formData.username" placeholder="e.g., root@pam or user@pve"
+                                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                                </div>
+                                <div>
+                                    <label for="proxmox-password" class="block text-xs font-medium text-gray-600 dark:text-gray-400">Password or API Token</label>
+                                    <input type="password" name="proxmox-password" id="proxmox-password" x-model="formData.password" 
+                                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                                </div>
+                            </div>
+                        </div>
+
+                        <hr class="my-6 border-gray-300 dark:border-gray-600">
+
+                        {# VM Selection Options (Placeholder) #}
+                        <div class="mb-6">
+                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">VM Selection:</label>
+                            <fieldset class="space-y-2">
+                                <div class="relative flex items-start">
+                                    <div class="flex h-6 items-center">
+                                        <input id="proxmox-vms-all" name="proxmox-vm-selection" type="radio" value="all" x-model="vmSelectionOption" checked
+                                               class="h-4 w-4 border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:bg-gray-700 dark:border-gray-600">
+                                    </div>
+                                    <div class="ml-3 text-sm leading-6">
+                                        <label for="proxmox-vms-all" class="font-medium text-gray-900 dark:text-white">Select all VMs (Default)</label>
+                                        <p class="text-xs text-gray-500 dark:text-gray-400">Automatically add all virtual machines found in the cluster.</p>
+                                    </div>
+                                </div>
+                                <div class="relative flex items-start">
+                                    <div class="flex h-6 items-center">
+                                        <input id="proxmox-vms-none" name="proxmox-vm-selection" type="radio" value="none" x-model="vmSelectionOption"
+                                               class="h-4 w-4 border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:bg-gray-700 dark:border-gray-600">
+                                    </div>
+                                    <div class="ml-3 text-sm leading-6">
+                                        <label for="proxmox-vms-none" class="font-medium text-gray-900 dark:text-white">Select no VMs initially</label>
+                                        <p class="text-xs text-gray-500 dark:text-gray-400">Connect to the cluster, but don't add any VMs yet.</p>
+                                    </div>
+                                </div>
+                                <div class="relative flex items-start">
+                                    <div class="flex h-6 items-center">
+                                        <input id="proxmox-vms-tags" name="proxmox-vm-selection" type="radio" value="tags" x-model="vmSelectionOption" disabled
+                                               class="h-4 w-4 border-gray-300 text-indigo-600 focus:ring-indigo-600 dark:bg-gray-700 dark:border-gray-600 disabled:opacity-50">
+                                    </div>
+                                    <div class="ml-3 text-sm leading-6">
+                                        <label for="proxmox-vms-tags" class="font-medium text-gray-900 dark:text-white">Select VMs by tags (Coming Soon)</label>
+                                        <p class="text-xs text-gray-500 dark:text-gray-400">Add only VMs matching specific Proxmox tags.</p>
+                                        {# TODO: Add input for tags when enabled #}
+                                    </div>
+                                </div>
+                            </fieldset>
+                        </div>
+                        
+                        {# Error Message Display #}
+                        <template x-if="errorMessage">
+                            <div class="mt-4 rounded-md bg-red-50 p-4 border border-red-200 dark:bg-red-900/20 dark:border-red-600/30">
+                                <div class="flex">
+                                    <div class="flex-shrink-0">
+                                        <svg class="h-5 w-5 text-red-400 dark:text-red-500" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm-8-8a8 8 0 1116 0A8 8 0 012 10zm10.293-4.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293z" clip-rule="evenodd" />
+                                        </svg>
+                                    </div>
+                                    <div class="ml-3">
+                                        <p class="text-sm font-medium text-red-800 dark:text-red-200" x-text="errorMessage"></p>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+
+                    </div>
+                </div>
+                <div class="mt-8 sm:flex sm:flex-row-reverse sm:gap-x-3">
+                    <button type="button" 
+                            @click="connectProxmox()"
+                            :disabled="isConnecting"
+                            class="inline-flex w-full justify-center rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 sm:w-auto disabled:opacity-50">
+                        <span x-show="!isConnecting">Connect</span>
+                        <span x-show="isConnecting">Connecting...</span>
+                    </button>
+                    <button type="button" 
+                            @click="proxmoxMachineModal = false"
+                            :disabled="isConnecting"
+                            class="mt-3 inline-flex w-full justify-center rounded-md bg-white dark:bg-gray-700 px-4 py-2 text-sm font-semibold text-gray-900 dark:text-gray-200 shadow-sm ring-1 ring-inset ring-gray-300 dark:ring-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600 sm:mt-0 sm:w-auto disabled:opacity-50">
+                        Cancel
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

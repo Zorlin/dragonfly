@@ -69,6 +69,9 @@ pub fn api_router() -> Router<crate::AppState> {
         .route("/installation/progress", put(update_installation_progress))
         .route("/events", get(machine_events))
         .route("/heartbeat", get(heartbeat))
+        // --- Proxmox Routes ---
+        .route("/proxmox/connect", post(crate::handlers::proxmox::connect_proxmox_handler))
+        .route("/proxmox/discover", get(crate::handlers::proxmox::discover_proxmox_handler))
 }
 
 // Content constants

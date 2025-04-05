@@ -17,6 +17,11 @@
     macConfirmModal: false,
     addMachineModal: false, // New modal for adding machines
     showManagedMachineModal: false, // NEW modal for the managed machine form
+    externalMachineModal: false, // Placeholder for external machine modal state
+    cloudMachineModal: false, // Placeholder for cloud machine modal state
+    proxmoxMachineModal: false, // << NEW Proxmox Machine modal state >>
+    temporaryNodeModal: false, // Placeholder for temporary node modal state
+    discoverMachinesModal: false, // Placeholder for discover machines modal state
     bmcMachineModal: false, // BMC Machine modal
     currentMachineId: null,
     currentMachineName: null,
@@ -1209,6 +1214,113 @@
             .catch(error => {
                 // Handle error silently
             });
+    }
+
+    // --- NEW Proxmox Modal Logic ---
+    function proxmoxData() {
+        return {
+            formData: {
+                host: '',
+                port: 8006,
+                username: '',
+                password: '',
+            },
+            vmSelectionOption: 'all', // 'all', 'none', 'tags'
+            discoveredClusters: [], // Array to hold discovered clusters {host: string, port?: number}
+            isConnecting: false,
+            isScanning: false, // NEW state for scanning
+            errorMessage: null,
+            scanErrorMessage: null, // NEW state for scan errors
+
+            initModal() {
+                // Reset state when modal opens
+                this.formData = { host: '', port: 8006, username: '', password: '' };
+                this.vmSelectionOption = 'all';
+                this.isConnecting = false;
+                this.isScanning = false;
+                this.errorMessage = null;
+                this.scanErrorMessage = null;
+                this.discoveredClusters = []; // Clear previous results
+                // Don't trigger scan automatically, wait for button click
+                console.log("Proxmox modal initialized.");
+            },
+
+            selectDiscoveredCluster(cluster) {
+                this.formData.host = cluster.host;
+                this.formData.port = cluster.port || 8006;
+                this.errorMessage = null; // Clear errors when selecting a cluster
+                this.scanErrorMessage = null;
+                console.log(`Selected discovered cluster: ${cluster.host}`);
+            },
+
+            scanForClusters() {
+                this.isScanning = true;
+                this.scanErrorMessage = null;
+                this.discoveredClusters = []; // Clear previous results before scanning
+                console.log("Scanning for Proxmox clusters...");
+
+                fetch('/api/proxmox/discover') // NEW API endpoint
+                    .then(response => {
+                        if (!response.ok) {
+                            return response.json().then(err => { throw new Error(err.error || `HTTP error! status: ${response.status}`); });
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        this.discoveredClusters = data.clusters || []; // Expecting { clusters: [...] }
+                        if (this.discoveredClusters.length === 0) {
+                            this.scanErrorMessage = "No clusters found on the network.";
+                        }
+                        console.log("Scan complete. Found clusters:", this.discoveredClusters);
+                    })
+                    .catch(error => {
+                        console.error("Error scanning for Proxmox clusters:", error);
+                        this.scanErrorMessage = `Scan failed: ${error.message}`;
+                    })
+                    .finally(() => {
+                        this.isScanning = false;
+                    });
+            },
+
+            connectProxmox() {
+                this.isConnecting = true;
+                this.errorMessage = null;
+                console.log("Attempting to connect to Proxmox...", this.formData, this.vmSelectionOption);
+
+                // --- TODO: Backend API Call --- 
+                // 1. Validate formData
+                if (!this.formData.host || !this.formData.username || !this.formData.password) {
+                    this.errorMessage = "Host, Username, and Password/Token are required.";
+                    this.isConnecting = false;
+                    return;
+                }
+                
+                // 2. Make fetch request to a new backend endpoint (e.g., /api/proxmox/connect)
+                //    Send formData and vmSelectionOption
+                // 3. Handle success: 
+                //    - Close modal (this.proxmoxMachineModal = false)
+                //    - Show success toast
+                //    - Refresh machine list (refreshMachineList())
+                // 4. Handle error:
+                //    - Set this.errorMessage
+                //    - Set this.isConnecting = false
+                
+                // Placeholder for timeout simulation
+                setTimeout(() => {
+                    // Simulate success/error
+                    const success = Math.random() > 0.3; // Simulate success most times
+                    if (success) {
+                        showToast(`Successfully connected to Proxmox host ${this.formData.host} (Simulated)`, 'success');
+                        this.$dispatch('close-modal'); // Assuming a close-modal event or similar is handled
+                        // refreshMachineList(); // Uncomment when backend is ready
+                        this.proxmoxMachineModal = false; // Close directly for now
+                    } else {
+                        this.errorMessage = "Failed to connect to Proxmox host. Check credentials and reachability. (Simulated)";
+                    }
+                    this.isConnecting = false;
+                }, 1500);
+            }
+        };
     }
 </script>
 {% endblock %}

@@ -40,6 +40,7 @@ mod auth;
 mod api;
 mod db;
 mod filters; // Uncomment unused module
+pub mod handlers;
 pub mod ui;
 pub mod tinkerbell;
 pub mod event_manager;

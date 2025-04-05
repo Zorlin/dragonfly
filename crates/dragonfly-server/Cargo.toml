@@ -103,4 +103,9 @@ base64 = "0.22"
 oauth2 = { version = "4.4", features = ["reqwest"] }
 urlencoding = "2.1"
 
+# Proxmox & Network Scanning
+# proxmox-rs = { version = "0.1" } # Adjust version as needed - Incorrect, it's a workspace
+proxmox-client = { git = "https://github.com/proxmox/proxmox-rs" } # Use proxmox-client via git
+netscan = { version = "0.28" } # User corrected this
+
 [dev-dependencies]
