@@ -997,6 +997,15 @@ pub struct SettingsForm {
     pub password: Option<String>,
     pub password_confirm: Option<String>,
     pub setup_completed: Option<String>,
+    pub admin_email: Option<String>,
+    pub oauth_enabled: Option<String>, // Changed from bool to Option<String>
+    pub oauth_provider: Option<String>,
+    pub oauth_client_id: Option<String>,
+    pub oauth_client_secret: Option<String>,
+    pub proxmox_host: Option<String>,
+    pub proxmox_username: Option<String>,
+    pub proxmox_password: Option<String>,
+    pub proxmox_port: Option<String>,
 }
 
 // Handler for settings form submission
@@ -1018,7 +1027,15 @@ pub async fn update_settings(
         form.username.is_some() || 
         form.password.is_some() || 
         form.password_confirm.is_some() ||
-        form.setup_completed.is_some()) && !is_authenticated {
+        form.setup_completed.is_some() ||
+        form.admin_email.is_some() ||
+        form.oauth_provider.is_some() ||
+        form.oauth_client_id.is_some() ||
+        form.oauth_client_secret.is_some() ||
+        form.proxmox_host.is_some() ||
+        form.proxmox_username.is_some() ||
+        form.proxmox_password.is_some() ||
+        form.proxmox_port.is_some()) && !is_authenticated {
         return Redirect::to("/login").into_response();
     }
 
@@ -1034,21 +1051,27 @@ pub async fn update_settings(
             }
         };
 
+        // Get the current password hash
+        let hashed_password = current_settings.admin_password_hash.clone();
+        
         // Construct the new settings, preserving existing setup_completed
         let new_settings = Settings {
             require_login: form.require_login.is_some(),
             // Handle optional default_os correctly by filtering out empty strings
-            default_os: form.default_os.filter(|os| !os.is_empty()),
-            // Use the setup_completed value from the form if present (checkbox is checked),
-            // otherwise keep the current value from the database.
-            setup_completed: form.setup_completed.is_some().then_some(true).unwrap_or(current_settings.setup_completed),
-            admin_username: current_settings.admin_username.clone(),
-            admin_password_hash: current_settings.admin_password_hash.clone(),
-            oauth_client_id: current_settings.oauth_client_id.clone(),
-            oauth_client_secret: current_settings.oauth_client_secret.clone(),
-            oauth_auth_url: current_settings.oauth_auth_url.clone(),
-            oauth_token_url: current_settings.oauth_token_url.clone(),
-            oauth_redirect_url: current_settings.oauth_redirect_url.clone(),
+            default_os: form.default_os.as_ref().filter(|os| !os.is_empty()).cloned(),
+            setup_completed: form.setup_completed.is_some() || current_settings.setup_completed,
+            admin_username: form.username.unwrap_or_else(|| current_settings.admin_username.clone()),
+            admin_password_hash: hashed_password,
+            admin_email: form.admin_email.unwrap_or_else(|| "".to_string()),
+            oauth_enabled: form.oauth_enabled.is_some(),
+            oauth_provider: form.oauth_provider.clone(),
+            oauth_client_id: form.oauth_client_id.clone(),
+            oauth_client_secret: form.oauth_client_secret.clone(),
+            // Preserve existing Proxmox settings or use None
+            proxmox_host: current_settings.proxmox_host.clone(),
+            proxmox_username: current_settings.proxmox_username.clone(),
+            proxmox_password: current_settings.proxmox_password.clone(),
+            proxmox_port: current_settings.proxmox_port,
         };
 
         info!("Saving settings: require_login={}, default_os={:?}, setup_completed={:?}", 

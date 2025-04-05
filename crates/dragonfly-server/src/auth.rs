@@ -145,14 +145,19 @@ pub struct Settings {
     pub require_login: bool,
     pub default_os: Option<String>,
     pub setup_completed: bool,
-    // Add fields from previous Credentials/AdminBackend if needed by new Settings
-    pub admin_username: String, 
-    pub admin_password_hash: String, 
+    pub admin_username: String,
+    pub admin_password_hash: String,
+    pub admin_email: String,
+    pub oauth_enabled: bool,
+    pub oauth_provider: Option<String>,
     pub oauth_client_id: Option<String>,
     pub oauth_client_secret: Option<String>,
-    pub oauth_auth_url: Option<String>,
-    pub oauth_token_url: Option<String>,
-    pub oauth_redirect_url: Option<String>,
+    
+    // Add the missing Proxmox fields
+    pub proxmox_host: Option<String>,
+    pub proxmox_username: Option<String>,
+    pub proxmox_password: Option<String>,
+    pub proxmox_port: Option<u16>,
 }
 
 impl Default for Settings {
@@ -163,11 +168,15 @@ impl Default for Settings {
             setup_completed: false,
             admin_username: "admin".to_string(),
             admin_password_hash: String::new(), // Default to empty, should be set
+            admin_email: String::new(),
+            oauth_enabled: false,
+            oauth_provider: None,
             oauth_client_id: None,
             oauth_client_secret: None,
-            oauth_auth_url: None,
-            oauth_token_url: None,
-            oauth_redirect_url: None,
+            proxmox_host: None,
+            proxmox_username: None,
+            proxmox_password: None,
+            proxmox_port: None,
         }
     }
 }
