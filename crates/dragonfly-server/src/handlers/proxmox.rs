@@ -2,6 +2,7 @@ use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 use std::net::IpAddr;
+use uuid::Uuid;
 
 use crate::AppState;
 
@@ -288,6 +289,49 @@ pub async fn connect_proxmox_handler(
         vmid: None,
         parent_host: None,
     });
+    
+    // Add the host to the database
+    info!("Adding Proxmox host {} to machines", payload.host);
+    // Create a unique deterministic machine ID based on host address
+    let host_machine_id = Uuid::new_v5(&Uuid::NAMESPACE_URL, format!("proxmox:{}", payload.host).as_bytes());
+    // Create a register request for the host
+    let host_register_req = dragonfly_common::models::RegisterRequest {
+        // Generate a deterministic MAC address for the host based on its address
+        mac_address: format!("22:22:22:{:02x}:{:02x}:{:02x}", 
+            payload.host.as_bytes().iter().fold(0, |acc, &x| acc ^ x),
+            (payload.host.len() % 256) as u8,
+            (payload.port % 256) as u8),
+        ip_address: payload.host.clone(),
+        hostname: Some(payload.host.clone()),
+        disks: Vec::new(),
+        nameservers: Vec::new(),
+        cpu_model: None,
+        cpu_cores: None,
+        total_ram_bytes: None,
+        proxmox_vmid: None,
+        proxmox_node: None,
+    };
+    
+    // Check if host already exists by ID first
+    match crate::db::get_machine_by_id(&host_machine_id).await {
+        Ok(Some(_)) => {
+            info!("Proxmox host {} already exists in database", payload.host);
+            // Host already exists, no need to add it again
+        },
+        _ => {
+            // Host doesn't exist, register it
+            match crate::db::register_machine(&host_register_req).await {
+                Ok(_) => {
+                    info!("Successfully registered Proxmox host {}", payload.host);
+                    added_vms_count += 1;
+                },
+                Err(e) => {
+                    error!("Failed to register Proxmox host {}: {}", payload.host, e);
+                    vm_errors.push(format!("Failed to register host {}: {}", payload.host, e));
+                }
+            }
+        }
+    }
 
     if payload.vm_selection_option == VmSelectionOption::All {
         // Fetch VMs from all nodes
@@ -305,6 +349,51 @@ pub async fn connect_proxmox_handler(
                 vmid: None,
                 parent_host: Some(payload.host.clone()),
             });
+
+            // Add node to the database
+            info!("Adding Proxmox node {} to machines", node_name);
+            let node_fqdn = format!("{}.{}", node_name, payload.host);
+            // Create a unique deterministic machine ID based on node address
+            let node_machine_id = Uuid::new_v5(&Uuid::NAMESPACE_URL, format!("proxmox:node:{}", node_fqdn).as_bytes());
+            
+            // Create a register request for the node
+            let node_register_req = dragonfly_common::models::RegisterRequest {
+                // Generate a deterministic MAC address for the node based on its name
+                mac_address: format!("22:22:33:{:02x}:{:02x}:{:02x}", 
+                    node_name.as_bytes().iter().fold(0, |acc, &x| acc ^ x),
+                    (node_name.len() % 256) as u8,
+                    (payload.port % 256) as u8),
+                ip_address: node_fqdn.clone(), // Use FQDN as IP for now
+                hostname: Some(node_name.clone()),
+                disks: Vec::new(),
+                nameservers: Vec::new(),
+                cpu_model: None,
+                cpu_cores: None,
+                total_ram_bytes: None,
+                proxmox_vmid: None,
+                proxmox_node: Some(node_name.clone()),
+            };
+            
+            // Check if node already exists by ID first
+            match crate::db::get_machine_by_id(&node_machine_id).await {
+                Ok(Some(_)) => {
+                    info!("Proxmox node {} already exists in database", node_name);
+                    // Node already exists, no need to add it again
+                },
+                _ => {
+                    // Node doesn't exist, register it
+                    match crate::db::register_machine(&node_register_req).await {
+                        Ok(_) => {
+                            info!("Successfully registered Proxmox node {}", node_name);
+                            added_vms_count += 1;
+                        },
+                        Err(e) => {
+                            error!("Failed to register Proxmox node {}: {}", node_name, e);
+                            vm_errors.push(format!("Failed to register node {}: {}", node_name, e));
+                        }
+                    }
+                }
+            }
 
             let vms_url = format!("{}/nodes/{}/qemu", base_url, node_name);
             let vms_response = match client.get(&vms_url).headers(headers.clone()).send().await {
@@ -408,63 +497,70 @@ pub async fn connect_proxmox_handler(
                 
                 all_machines.push(vm_machine.clone());
                 
-                // Add to database if we have a MAC address
-                if let Some(mac) = vm_machine.mac_address {
-                    // Check if machine already exists by MAC
-                    match crate::db::get_machine_by_mac(&mac).await {
-                        Ok(Some(existing_machine)) => {
-                            // Machine exists, update its Proxmox info
-                            info!("Updating existing machine {} with Proxmox VMID {}", existing_machine.id, vmid);
-                            let mut machine = existing_machine.clone();
-                            machine.proxmox_vmid = Some(vmid);
-                            machine.proxmox_node = Some(node_name.clone());
-                            if machine.hostname.is_none() {
-                                machine.hostname = Some(vm_name.clone());
-                            }
-                            match crate::db::update_machine(&machine).await {
-                                Ok(_) => added_vms_count += 1,
-                                Err(e) => {
-                                    error!("Failed to update machine {}: {}", machine.id, e);
-                                    vm_errors.push(format!("Failed to update VM {}: {}", vm_name, e));
-                                }
+                // Create a unique deterministic ID for this VM
+                let vm_id = Uuid::new_v5(&Uuid::NAMESPACE_URL, format!("proxmox:vm:{}:{}", node_name, vmid).as_bytes());
+                
+                // Generate a MAC if none exists
+                let generated_mac = if let Some(ref mac) = vm_machine.mac_address {
+                    mac.clone()
+                } else {
+                    // Generate a deterministic MAC based on VMID and node
+                    format!("22:22:44:{:02x}:{:02x}:{:02x}", 
+                        (vmid & 0xFF) as u8,
+                        ((vmid >> 8) & 0xFF) as u8,
+                        node_name.as_bytes().iter().fold(0, |acc, &x| acc ^ x))
+                };
+                
+                // Check if machine already exists by ID
+                match crate::db::get_machine_by_id(&vm_id).await {
+                    Ok(Some(existing_machine)) => {
+                        // Machine exists, update its Proxmox info
+                        info!("Updating existing machine {} (by ID) with Proxmox VMID {}", existing_machine.id, vmid);
+                        let mut machine = existing_machine.clone();
+                        machine.proxmox_vmid = Some(vmid);
+                        machine.proxmox_node = Some(node_name.clone());
+                        if machine.hostname.is_none() {
+                            machine.hostname = Some(vm_name.clone());
+                        }
+                        match crate::db::update_machine(&machine).await {
+                            Ok(_) => added_vms_count += 1,
+                            Err(e) => {
+                                error!("Failed to update machine {}: {}", machine.id, e);
+                                vm_errors.push(format!("Failed to update VM {}: {}", vm_name, e));
                             }
                         }
-                        Ok(None) => {
-                            // Machine doesn't exist, register a new one
-                            info!("Adding new machine for VM {} with MAC {}", vmid, mac);
-                            
-                            // Create a RegisterRequest
-                            let register_req = dragonfly_common::models::RegisterRequest {
-                                mac_address: mac.clone(),
-                                ip_address: "0.0.0.0".to_string(), // Placeholder until we discover the IP
-                                hostname: Some(vm_name.clone()),
-                                disks: Vec::new(), // We don't have disk info yet
-                                nameservers: Vec::new(), // No nameserver info yet
-                                cpu_model: None, // No CPU info yet
-                                cpu_cores: None, // No CPU info yet
-                                total_ram_bytes: None, // No RAM info yet
-                                proxmox_vmid: Some(vmid),
-                                proxmox_node: Some(node_name.clone()),
-                            };
-                            
-                            match crate::db::register_machine(&register_req).await {
-                                Ok(_) => {
-                                    added_vms_count += 1;
-                                    info!("Successfully registered VM {} with MAC {}", vm_name, mac);
-                                }
-                                Err(e) => {
-                                    error!("Failed to register VM {}: {}", vm_name, e);
-                                    vm_errors.push(format!("Failed to register VM {}: {}", vm_name, e));
+                    },
+                    _ => {
+                        // Check if machine already exists by MAC address (if we have one)
+                        if let Some(ref mac) = vm_machine.mac_address {
+                            match crate::db::get_machine_by_mac(mac).await {
+                                Ok(Some(existing_machine)) => {
+                                    // Machine exists, update its Proxmox info
+                                    info!("Updating existing machine {} (by MAC) with Proxmox VMID {}", existing_machine.id, vmid);
+                                    let mut machine = existing_machine.clone();
+                                    machine.proxmox_vmid = Some(vmid);
+                                    machine.proxmox_node = Some(node_name.clone());
+                                    if machine.hostname.is_none() {
+                                        machine.hostname = Some(vm_name.clone());
+                                    }
+                                    match crate::db::update_machine(&machine).await {
+                                        Ok(_) => added_vms_count += 1,
+                                        Err(e) => {
+                                            error!("Failed to update machine {}: {}", machine.id, e);
+                                            vm_errors.push(format!("Failed to update VM {}: {}", vm_name, e));
+                                        }
+                                    }
+                                },
+                                _ => {
+                                    // Machine doesn't exist by MAC either, register a new one
+                                    register_new_vm(&vm_name, &generated_mac, vmid, node_name, &payload.host, &mut added_vms_count, &mut vm_errors).await;
                                 }
                             }
-                        }
-                        Err(e) => {
-                            error!("Failed to check if machine exists: {}", e);
-                            vm_errors.push(format!("Database error for VM {}: {}", vm_name, e));
+                        } else {
+                            // No MAC address, just register as new VM
+                            register_new_vm(&vm_name, &generated_mac, vmid, node_name, &payload.host, &mut added_vms_count, &mut vm_errors).await;
                         }
                     }
-                } else {
-                    warn!("No MAC address found for VM {} ({}), cannot add to database", vmid, vm_name);
                 }
             }
         }
@@ -722,6 +818,44 @@ fn calculate_network_address(ip: std::net::Ipv4Addr, prefix_len: u8) -> std::net
 fn generate_ip_in_subnet(network_addr: std::net::Ipv4Addr, host_num: u32) -> std::net::Ipv4Addr {
     let network_u32 = u32::from(network_addr);
     std::net::Ipv4Addr::from(network_u32 + host_num)
+}
+
+// Helper function to register a new VM
+async fn register_new_vm(
+    vm_name: &str,
+    mac_address: &str,
+    vmid: u32,
+    node_name: &str,
+    host: &str,
+    added_vms_count: &mut usize,
+    vm_errors: &mut Vec<String>
+) {
+    info!("Adding new machine for VM {} with MAC {}", vmid, mac_address);
+    
+    // Create a RegisterRequest
+    let register_req = dragonfly_common::models::RegisterRequest {
+        mac_address: mac_address.to_string(),
+        ip_address: "0.0.0.0".to_string(), // Placeholder until we discover the IP
+        hostname: Some(vm_name.to_string()),
+        disks: Vec::new(), // We don't have disk info yet
+        nameservers: Vec::new(), // No nameserver info yet
+        cpu_model: None, // No CPU info yet
+        cpu_cores: None, // No CPU info yet
+        total_ram_bytes: None, // No RAM info yet
+        proxmox_vmid: Some(vmid),
+        proxmox_node: Some(node_name.to_string()),
+    };
+    
+    match crate::db::register_machine(&register_req).await {
+        Ok(_) => {
+            *added_vms_count += 1;
+            info!("Successfully registered VM {} with MAC {}", vm_name, mac_address);
+        }
+        Err(e) => {
+            error!("Failed to register VM {}: {}", vm_name, e);
+            vm_errors.push(format!("Failed to register VM {}: {}", vm_name, e));
+        }
+    }
 }
 
 // TODO: Add handler for /api/proxmox/discover 
