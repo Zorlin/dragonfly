@@ -4,21 +4,29 @@ use tower_sessions::{SessionManagerLayer};
 use tower_sessions_sqlx_store::SqliteStore;
 use std::sync::{Arc};
 use tokio::sync::Mutex;
-use tower_http::trace::{TraceLayer, DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse};
+use tower_http::trace::{TraceLayer, DefaultOnRequest, DefaultOnResponse};
 use tracing::{info, error, warn, debug, Level, Span};
 use std::net::SocketAddr;
 use tower_cookies::CookieManagerLayer;
 use tower_http::services::ServeDir;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::watch;
-use anyhow::{Result, Context, anyhow, bail};
+use anyhow::{Context, anyhow};
 use listenfd::ListenFd;
-use axum::middleware; // Import middleware
 use axum::extract::MatchedPath;
 
-use crate::auth::{AdminBackend, auth_router, load_credentials, generate_default_credentials, load_settings, Settings, Credentials};
-use crate::db::init_db;
-use crate::event_manager::EventManager;
+use crate::{
+    // handlers::proxmox,
+    // handlers::machines,
+    auth::{self, AuthError, AuthSession, Credentials}, // Removed unused load/save/generate functions from here
+    db::{self, init_db, run_migrations, setup_connection_pool},
+    event_manager::{self, EventManager},
+    // handlers,
+    mode::AppMode,
+    settings::{self, Settings}, // Removed unused load_settings
+    tasks::{self, start_background_tasks},
+    ui::TemplateEnv,
+};
 
 // Add MiniJinja imports
 use minijinja::path_loader;
@@ -312,10 +320,10 @@ pub async fn run() -> anyhow::Result<()> {
     }
 
     // Load or generate admin credentials
-    let credentials = match auth::load_credentials().await {
-        Ok(creds) => {
+    let _credentials = match auth::load_credentials().await {
+        Ok(cred) => {
             info!("Loaded admin credentials successfully");
-            creds
+            cred
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             info!("No existing admin credentials found, generating default");
@@ -462,7 +470,7 @@ pub async fn run() -> anyhow::Result<()> {
 
     // Auth backend setup
     // Pass the pool and settings directly from AppState
-    let backend = AdminBackend::new(app_state.dbpool.clone(), app_state.settings.lock().await.clone());
+    let backend = auth::AdminBackend::new(app_state.dbpool.clone(), app_state.settings.lock().await.clone());
     
     // Build the auth layer
     let auth_layer = AuthManagerLayerBuilder::new(backend, session_layer)
@@ -470,7 +478,7 @@ pub async fn run() -> anyhow::Result<()> {
 
     // --- Build Router --- 
     let app = Router::new()
-        .merge(auth_router())
+        .merge(auth::auth_router())
         .merge(ui::ui_router())
         .route("/favicon.ico", get(handle_favicon))
         .route("/{mac}", get(api::ipxe_script))
@@ -489,8 +497,6 @@ pub async fn run() -> anyhow::Result<()> {
         .layer(CookieManagerLayer::new())
         .layer(auth_layer)
         .layer(Extension(db_pool.clone()))
-        // Add middleware to track client IP globally
-        .layer(axum::middleware::from_fn_with_state(app_state.clone(), api::track_client_ip))
         // Configure a more verbose TraceLayer (after IP tracking)
         .layer(
             TraceLayer::new_for_http()
@@ -641,9 +647,6 @@ async fn handle_favicon() -> impl IntoResponse {
 
 // Access functions for main.rs to use
 pub use db::database_exists;
-
-// Bring the middleware function into scope
-use crate::api::track_client_ip;
 
 // Add a filter to check if a string is a valid IP address
 fn is_valid_ip(ip: String) -> bool {

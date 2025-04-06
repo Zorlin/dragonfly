@@ -7,6 +7,7 @@ use axum::{
     },
     http::{StatusCode, header::HeaderValue, HeaderMap},
     response::{IntoResponse, Html, Response, sse::{Event, Sse, KeepAlive}, Redirect},
+    Extension,
 };
 use std::convert::Infallible;
 use serde_json::json;

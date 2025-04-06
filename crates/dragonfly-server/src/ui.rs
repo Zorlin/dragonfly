@@ -936,11 +936,10 @@ pub async fn settings_page(
     
     let show_admin_settings = is_authenticated;
     
-    // Get admin username if authenticated
-    let admin_username = if let Some(user) = &auth_session.user {
-        user.username.clone()
-    } else {
-        "admin".to_string()
+    // Correctly access the username from the AdminUser struct within the Option
+    let admin_username = match &auth_session.user {
+        Some(user) => user.username.clone(),
+        None => "(Not logged in)".to_string(),
     };
     
     // Check if initial password file exists (only for admins)
@@ -1641,19 +1640,18 @@ impl AddAlert for Response {
         match serde_json::to_string(&alert) {
             Ok(json_alert) => {
                 // Use Cookie builder for better configuration
-                let mut cookie = Cookie::build(("dragonfly_alert", json_alert))
+                let cookie = cookie::Cookie::build(("dragonfly_alert", json_alert))
                     .path("/")
-                    // Make SameSite::Lax for broader compatibility with redirects
-                    .same_site(SameSite::Lax)
-                    // Set HttpOnly to false so JavaScript can read it
-                    .http_only(false)
-                    // Set MaxAge to 0 so it's a session cookie (or short duration)
-                    .max_age(time::Duration::seconds(5)); // Expires after 5 seconds
+                    .http_only(true)
+                    .secure(false) // Set to true in production with HTTPS
+                    .same_site(cookie::SameSite::Lax);
+                    // .finish(); // Removed deprecated finish
 
-                // Add the cookie header
-                self.headers_mut().append(
-                    header::SET_COOKIE,
-                    cookie.finish().to_string().parse().unwrap(),
+                // The CookieBuilder itself can often be used directly
+                self.headers_mut().insert(
+                    axum::http::header::SET_COOKIE,
+                    // Use build() to get the final Cookie if needed, or pass builder directly if allowed
+                    cookie.build().to_string().parse().unwrap(), 
                 );
             }
             Err(e) => {

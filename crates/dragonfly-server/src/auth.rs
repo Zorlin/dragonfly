@@ -1,48 +1,34 @@
-use anyhow::Context;
-use async_session::{MemoryStore, Session, SessionStore};
-use async_trait::async_trait;
+use async_session;
 use axum::{
-    extract::{FromRef, FromRequestParts, Path, Query, State},
-    http::{header, request::Parts, HeaderMap, Request, StatusCode},
-    middleware::Next,
-    response::{IntoResponse, Redirect, Response, Html},
+    extract::{State, Query},
+    http::{Request as AxumRequest, StatusCode},
+    response::{IntoResponse, Redirect, Html},
     routing::{get, post},
-    Extension, Form,
     Router,
+    Form,
 };
-use axum_extra::extract::{cookie::Key, SignedCookieJar};
-use base64::engine::Engine;
-use oauth2::{
-    basic::BasicClient,
-    reqwest::async_http_client,
-    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, PkceCodeChallenge,
-    PkceCodeVerifier, RedirectUrl, Scope, TokenResponse, TokenUrl,
-};
+use axum_extra::extract::SignedCookieJar;
+// use openidconnect::core::{CoreAuthenticationFlow, CoreClient, CoreProviderMetadata, CoreResponseType};
+// use openidconnect::{AuthenticationFlow, AuthorizationCode, CsrfToken, Nonce, PkceCodeChallenge, PkceCodeVerifier, Scope, TokenResponse, reqwest::async_http_client};
+// use openidconnect::url::Url;
+use tracing::{error, info, warn};
 use serde::{Deserialize, Serialize};
-use std::env;
-use tower_http::trace::TraceLayer;
-use tracing::{debug, error, info, warn};
-use argon2::{
-    password_hash::{PasswordHash, PasswordVerifier as ArgonPasswordVerifier, SaltString},
-    Argon2, PasswordHasher,
-};
+use crate::AppState;
+use argon2::{password_hash::{Error as PasswordHashError, PasswordHash, PasswordVerifier as ArgonPasswordVerifier, SaltString}, Argon2, PasswordHasher};
 use rand::rngs::OsRng;
-use minijinja::{Error as MiniJinjaError, ErrorKind as MiniJinjaErrorKind};
 use axum_login::{AuthUser, AuthnBackend, UserId};
-use std::io;
-use std::fs;
-use std::collections::HashMap;
-use std::path::Path as StdPath;
+use std::{io, path::Path as StdPath, fs, collections::HashMap};
 use rand::{Rng, distributions::Alphanumeric};
 use crate::ui::AddAlert;
 use thiserror::Error;
-use std::sync::Arc;
+use minijinja::{Error as MiniJinjaError, ErrorKind as MiniJinjaErrorKind};
+use crate::ui::AlertMessage;
+use axum::response::Response;
+use cookie;
+// use oauth2::basic::BasicClient; // Assuming BasicClient is also related to openidconnect for now
+// use oauth2;
 use urlencoding;
-
-use crate::{
-    ui::AlertMessage,
-    AppState,
-};
+use async_trait::async_trait;
 
 // Constants for the initial password file (not for loading, just for UX)
 const INITIAL_PASSWORD_FILE: &str = "initial_password.txt";
@@ -108,35 +94,78 @@ impl AuthUser for AdminUser {
     }
 }
 
-// Define a basic AuthError for OAuth callback
+// Define a custom error type for the AuthnBackend
 #[derive(Debug, Error)]
 pub enum AuthError {
-    #[error("OAuth state mismatch")]
-    StateMismatch,
-    #[error("Missing query parameter: {0}")]
-    MissingParam(String),
-    #[error("Cookie error: {0}")]
-    CookieError(String),
-    #[error("OAuth token exchange failed: {0}")]
-    TokenExchangeFailed(String),
-    #[error("Failed to get user info: {0}")]
-    UserInfoFailed(String),
-    #[error("Session login error: {0}")]
-    SessionLoginError(String),
-    #[error(transparent)]
-    RequestTokenError(#[from] oauth2::RequestTokenError<oauth2::reqwest::Error<reqwest::Error>, oauth2::StandardErrorResponse<oauth2::basic::BasicErrorResponseType>>),
-    #[error(transparent)]
-    Other(#[from] anyhow::Error),
+    #[error("Invalid credentials provided.")]
+    InvalidCredentials,
+
+    #[error("User not found: {0}")]
+    UserNotFound(String),
+
+    #[error("Database error during authentication: {0}")]
+    DatabaseError(#[from] sqlx::Error),
+
+    #[error("Password hashing error: {0}")]
+    HashingError(PasswordHashError),
+
+    #[error("Internal task join error: {0}")]
+    JoinError(#[from] tokio::task::JoinError),
+
+    #[error("Configuration error: {0}")]
+    ConfigError(String),
+
+    // Wrap MiniJinjaError if needed, though it might not be strictly necessary
+    // depending on where errors originate
+    #[error("Template/Rendering Error: {0}")]
+    TemplateError(#[from] MiniJinjaError),
+
+    // Add variants for OAuth if/when re-enabled
+    // #[error("Missing OAuth parameter: {0}")]
+    // MissingParam(String),
+    // #[error("OAuth state mismatch")]
+    // StateMismatch,
+    // #[error("OAuth token exchange failed: {0}")]
+    // TokenExchangeFailed(String),
 }
 
-// Implement IntoResponse for AuthError to return appropriate HTTP responses
+// Manually implement From for argon2::password_hash::Error
+impl From<PasswordHashError> for AuthError {
+    fn from(err: PasswordHashError) -> Self {
+        // Log the specific hashing error for debugging if needed
+        error!("Password hashing error occurred: {}", err);
+        AuthError::HashingError(err)
+    }
+}
+
+// Implement IntoResponse for AuthError to handle login failures gracefully
 impl IntoResponse for AuthError {
     fn into_response(self) -> Response {
-        error!("Authentication error: {}", self);
-        // Redirect to login with an error message
-        Redirect::to(&format!("/login?error={}", urlencoding::encode(&self.to_string())))
-            .into_response()
-            .add_alert(AlertMessage::error(&self.to_string())) // Use AddAlert here
+        error!("Authentication/Authorization Error: {}", self);
+
+        // Determine the HTTP status code and potentially a user-facing message
+        let (status, user_message) = match self {
+            AuthError::InvalidCredentials | AuthError::UserNotFound(_) => {
+                (StatusCode::UNAUTHORIZED, "Invalid username or password.".to_string())
+            }
+            AuthError::DatabaseError(_) | AuthError::HashingError(_) | AuthError::JoinError(_) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "An internal server error occurred during login.".to_string())
+            }
+            AuthError::ConfigError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            AuthError::TemplateError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "An internal error occurred.".to_string()),
+            // Add cases for OAuth errors if re-enabled
+        };
+
+        // In a real application, you might redirect back to the login page
+        // with an error query parameter, or return a JSON error.
+        // For now, just return the status code and a simple message.
+
+        // Redirect back to login page with an error message
+        let redirect_url = format!("/login?error={}", urlencoding::encode(&user_message));
+        (status, Redirect::to(&redirect_url)).into_response()
+
+        // Alternatively, return JSON:
+        // (status, Json(json!({ "error": self.to_string(), "message": user_message }))).into_response()
     }
 }
 
@@ -197,28 +226,9 @@ impl AdminBackend {
         let new_credentials = Credentials::create(username, password)?;
         
         // Save to database
-        save_credentials(&new_credentials).await?;
+        crate::db::save_admin_credentials(&new_credentials).await?;
         
         Ok(new_credentials)
-    }
-}
-
-impl Default for AdminBackend {
-    fn default() -> Self {
-        // NOTE: This default implementation likely won't work without a valid DB connection.
-        // Consider removing it or making it connect to an in-memory DB for tests.
-        // For now, let it panic if the connection fails.
-        let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite::memory:".to_string());
-        let pool = tokio::runtime::Runtime::new().unwrap().block_on(async {
-            sqlx::sqlite::SqlitePoolOptions::new()
-                .connect(&db_url)
-                .await
-        }).expect("Failed to create SQLite pool in AdminBackend::default");
-
-        Self {
-            db: pool,
-            settings: Settings::default(),
-        }
     }
 }
 
@@ -226,95 +236,107 @@ impl Default for AdminBackend {
 impl AuthnBackend for AdminBackend {
     type User = AdminUser;
     type Credentials = Credentials;
-    type Error = MiniJinjaError;
+    type Error = AuthError; // Use the new AuthError type
 
     async fn authenticate(
         &self,
         creds: Self::Credentials,
     ) -> Result<Option<Self::User>, Self::Error> {
         let username = creds.username.clone();
-
-        // Fetch the stored hash from the database
-        let stored_hash = match sqlx::query!(
-            "SELECT password_hash FROM admin_credentials WHERE username = ?",
-            creds.username
-        )
-        .fetch_optional(&self.db)
-        .await
-        {
-            Ok(Some(record)) => record.password_hash,
-            Ok(None) => {
-                info!("Authentication failed: User '{}' not found", creds.username);
-                return Ok(None);
-            }
-            Err(e) => {
-                error!("Database error fetching credentials for user '{}': {}", creds.username, e);
-                return Err(MiniJinjaError::new(MiniJinjaErrorKind::InvalidOperation, format!("Database error: {}", e)));
+        let password_bytes = match creds.password {
+            Some(p) => p.into_bytes(),
+            None => {
+                info!("Authentication attempt for user '{}' failed: No password provided", username);
+                return Ok(None); // No password, treat as invalid credentials for simplicity
             }
         };
 
-        // Convert password to owned bytes Option
-        let password_bytes = creds.password.map(|p| p.into_bytes());
+        // Fetch the stored hash from the database
+        let record = sqlx::query!(
+            "SELECT id, password_hash FROM admin_credentials WHERE username = ?",
+            username
+        )
+        .fetch_optional(&self.db)
+        .await?;
+
+        let (user_id, stored_hash) = match record {
+            Some(r) => (r.id, r.password_hash),
+            None => {
+                info!("Authentication failed: User '{}' not found", username);
+                // Instead of returning Ok(None), consider returning an error
+                // return Err(AuthError::UserNotFound(username)); 
+                // Or, to obscure whether user exists, return InvalidCredentials
+                 return Err(AuthError::InvalidCredentials); // More secure - doesn't reveal if user exists
+            }
+        };
+
+        // Clone username *before* the move closure for later use
+        let username_for_log = username.clone(); 
 
         // Verify the password using Argon2 within a blocking task
-        let is_valid = match password_bytes {
-            Some(bytes) => {
-                // Move stored_hash and bytes into the closure
-                match tokio::task::spawn_blocking(move || {
-                    match PasswordHash::new(&stored_hash) {
-                        Ok(parsed_hash) => {
-                            Argon2::default().verify_password(&bytes, &parsed_hash).is_ok()
-                        }
-                        Err(_) => false // Error parsing hash means invalid
-                    }
-                }).await {
-                    Ok(result) => result,
-                    Err(e) => {
-                        error!("Spawn blocking task failed during password verification for user '{}': {}", username, e);
-                        false // Treat join errors as verification failure
-                    }
+        let verification_result = tokio::task::spawn_blocking(move || {
+            // This closure now returns Result<bool, PasswordHashError>
+            match PasswordHash::new(&stored_hash) {
+                Ok(parsed_hash) => {
+                    // verify_password returns Result<(), Error>
+                    Ok(Argon2::default().verify_password(&password_bytes, &parsed_hash).is_ok())
+                }
+                Err(e) => {
+                    // Error parsing the stored hash
+                    // Use the original username moved into the closure here
+                    error!("Error parsing stored password hash for user '{}': {}", username, e);
+                    Err(e) // Propagate the hash parsing error
                 }
             }
-            None => {
-                info!("Authentication failed for user '{}': No password provided", username);
-                false // No password provided
+        }).await?; // First '?' handles the JoinError (converted via From)
+
+        // Check the inner Result from the blocking task
+        let is_valid = match verification_result {
+            Ok(valid) => valid, // Successfully verified (or not)
+            Err(hash_error) => {
+                // Handle the PasswordHashError from PasswordHash::new or potentially verify_password
+                // Convert it using the manual From impl we added
+                return Err(AuthError::from(hash_error));
             }
         };
 
         if is_valid {
-            info!("Authentication successful for user '{}'", username);
-            // Fetch the user ID from the database to create the AdminUser
-             match sqlx::query_as!(AdminUser, "SELECT id, username FROM admin_credentials WHERE username = ?", username)
-                .fetch_one(&self.db)
-                .await {
-                    Ok(user) => Ok(Some(user)),
-                    Err(e) => {
-                        error!("Database error fetching user details for '{}': {}", username, e);
-                         Err(MiniJinjaError::new(MiniJinjaErrorKind::InvalidOperation, format!("Database error fetching user: {}", e)))
-                    }
-                }
+            info!("Authentication successful for user '{}'", username_for_log);
+            // Return the minimal user info needed for the session
+            // Move the original username (if needed) or use the clone
+            Ok(Some(AdminUser { id: user_id, username: username_for_log })) 
         } else {
-            info!("Authentication failed: Invalid password for user '{}'", username);
-            Ok(None)
+            info!("Authentication failed: Invalid password for user '{}'", username_for_log);
+            Err(AuthError::InvalidCredentials)
         }
     }
 
     async fn get_user(&self, user_id: &UserId<Self>) -> Result<Option<Self::User>, Self::Error> {
-        // Fetch the user from the database based on the user_id
-        match sqlx::query_as!(
-            AdminUser,
+        // Fetch user details by ID
+        // The `?` propagates sqlx::Error, converted via #[from]
+        // The result of this expression is Option<AdminUser>
+        let user_option = sqlx::query_as!( 
+            AdminUser, 
             "SELECT id, username FROM admin_credentials WHERE id = ?",
             user_id
         )
         .fetch_optional(&self.db)
-        .await
+        .await?;
+
+        // The match statement is no longer needed here as `?` handled the error
+        // and the result is directly the Option we need to return.
+        // If user_option is Some, return Ok(Some(user)). If None, return Ok(None).
+        Ok(user_option)
+        
+        /* // Old incorrect match:
         {
             Ok(user_opt) => Ok(user_opt),
             Err(e) => {
-                error!("Database error fetching user by ID '{}': {}", user_id, e);
-                 Err(MiniJinjaError::new(MiniJinjaErrorKind::InvalidOperation, format!("Database error fetching user by ID: {}", e)))
+                 error!("Database error fetching user by ID '{}': {}", user_id, e);
+                 Err(e.into())
             }
         }
+        */
     }
 }
 
@@ -636,69 +658,6 @@ async fn login_test_handler(auth_session: AuthSession) -> impl IntoResponse {
     Html(html)
 }
 
-pub async fn oauth_callback(
-    State(app_state): State<AppState>,
-    State(client): State<BasicClient>,
-    Query(params): Query<HashMap<String, String>>,
-    jar: SignedCookieJar,
-    mut auth_session: AuthSession,
-) -> Result<impl IntoResponse, AuthError> {
-    info!("Handling OAuth callback");
-
-    // Verify state parameter
-    let state_cookie = jar.get("oauth_state").ok_or(AuthError::CookieError("Missing state cookie".to_string()))?;
-    let expected_state = state_cookie.value().to_string();
-    let received_state = params.get("state").ok_or(AuthError::MissingParam("state".to_string()))?;
-
-    if expected_state != *received_state {
-        return Err(AuthError::StateMismatch);
-    }
-
-    // Get PKCE verifier from cookie
-    let pkce_verifier_cookie = jar.get("oauth_pkce_verifier").ok_or(AuthError::CookieError("Missing PKCE verifier cookie".to_string()))?;
-    let pkce_verifier = PkceCodeVerifier::new(pkce_verifier_cookie.value().to_string());
-
-    // Get authorization code
-    let code = params.get("code").ok_or(AuthError::MissingParam("code".to_string()))?;
-
-    // Get settings directly from the passed-in app_state
-    let settings = app_state.settings.lock().await;
-
-    // Exchange authorization code for tokens
-    let token_result = client
-        .exchange_code(AuthorizationCode::new(code.to_string()))
-        .set_pkce_verifier(pkce_verifier)
-        .request_async(oauth2::reqwest::async_http_client)
-        .await
-        .map_err(|e| AuthError::TokenExchangeFailed(e.to_string()))?;
-        //.map_err(AuthError::RequestTokenError)?;
-
-    // Here you would typically fetch user info using the access token
-    // let user_info = fetch_user_info(token_result.access_token()).await?;
-    
-    // For now, let's just create a placeholder user
-    let user = AdminUser {
-        id: 1, // Or generate a unique ID based on OAuth provider info
-        username: "oauth_user".to_string(), // Use actual username from provider
-    };
-
-    // Log the user into the session (use the extracted auth_session)
-    // let mut auth_session = AuthSession::from_request_parts(&mut Default::default(), &app_state)
-    //     .await
-    //     .map_err(|_| AuthError::SessionLoginError("Failed to extract auth session".to_string()))?;
-        
-    auth_session.login(&user).await.map_err(|e| AuthError::SessionLoginError(format!("Session login failed: {}", e)))?;
-
-    info!("OAuth login successful for user: {}", user.username);
-
-    // Remove used cookies
-    let jar = jar.remove(cookie::Cookie::named("oauth_state"));
-    let jar = jar.remove(cookie::Cookie::named("oauth_pkce_verifier"));
-
-    // Redirect to the main page
-    Ok((jar, Redirect::to("/")).into_response())
-}
-
 pub async fn login(
     State(_app_state): State<AppState>, // Mark as unused for now
     mut _auth_session: AuthSession, // Mark as unused for now
@@ -717,6 +676,20 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
+    use axum_login::axum_sessions::{SessionLayer, SessionManagerLayer, async_session::MemoryStore};
+    use axum_login::secrecy::SecretVec;
+    use axum::response::Response;
+    use axum::routing::get;
+    use std::sync::Arc;
+    use axum_login::Key;
+
+    // Helper function to hash password for tests
+    async fn hash_password(password: String) -> Result<String, argon2::password_hash::Error> {
+        let salt = SaltString::generate(&mut OsRng);
+        Argon2::default()
+            .hash_password(password.as_bytes(), &salt)
+            .map(|hash| hash.to_string())
+    }
 
     async fn setup_test_app() -> (Router, AppState) {
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
@@ -754,7 +727,7 @@ mod tests {
             .with_secure(false)
             .with_signed(secret.clone());
 
-        let auth_layer = AuthManagerLayerBuilder::new(backend.clone(), session_layer).build();
+        let auth_layer = axum_login::AuthManagerLayerBuilder::new(backend.clone(), session_layer).build();
 
         // Create AppState with necessary components
         let app_state = AppState {

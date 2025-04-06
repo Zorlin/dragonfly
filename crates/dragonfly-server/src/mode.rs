@@ -16,8 +16,7 @@ use sqlx::Row;
 use serde_yaml;
 use std::path::Path as StdPath;
 use crate::{
-    INSTALL_STATE_REF,
-    db::{self, get_machine_by_ip},
+    db,
     auth::{Settings, AuthSession},
     AppState,
     InstallationState
