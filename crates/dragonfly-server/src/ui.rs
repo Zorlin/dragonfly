@@ -137,6 +137,7 @@ pub struct ErrorTemplate {
 #[derive(Debug, Clone, Serialize)]
 pub struct ProxmoxCluster {
     pub host: String,
+    pub cluster_name: Option<String>, // Added cluster name field
     pub machines: Vec<Machine>,
 }
 
@@ -391,6 +392,7 @@ fn create_demo_machine(
         total_ram_bytes: None,
         proxmox_vmid: None,
         proxmox_node: None,
+        is_proxmox_host: false, // Add the new field, default to false for demo data
     }
 }
 
@@ -1664,28 +1666,17 @@ impl AddAlert for Response {
 }
 
 pub async fn compute_page(
-    State(app_state): State<crate::AppState>,
-    headers: HeaderMap,
+    State(app_state): State<AppState>,
     auth_session: AuthSession,
+    headers: HeaderMap,
     uri: OriginalUri,
 ) -> Response {
     let theme = get_theme_from_cookie(&headers);
     let is_authenticated = auth_session.user.is_some();
     let is_admin = is_authenticated;
     let current_path = uri.path().to_string();
-    
-    let require_login = app_state.settings.lock().await.require_login;
 
-    // Redirect to welcome if installed but no mode selected
-    if app_state.is_installed && !app_state.is_demo_mode {
-        let current_mode = mode::get_current_mode().await.unwrap_or(None);
-        if current_mode.is_none() {
-            info!("/compute accessed before mode selection, redirecting to /welcome");
-            let mut response = Redirect::to("/welcome").into_response();
-            response.headers_mut().insert("HX-Redirect", "/welcome".parse().unwrap());
-            return response;
-        }
-    }
+    let require_login = app_state.settings.lock().await.require_login;
 
     // Login check
     if require_login && !is_authenticated {
@@ -1695,50 +1686,65 @@ pub async fn compute_page(
         return response;
     }
 
-    // Get Proxmox machines from database, or generate demo data if in demo mode
-    let machines = if app_state.is_demo_mode {
-        // Generate demo Proxmox machines
-        generate_demo_proxmox_machines()
-    } else {
-        // Get real Proxmox machines from database
-        match db::get_proxmox_machines().await {
-            Ok(m) => m,
-            Err(e) => {
-                error!("Error fetching Proxmox machines: {}", e);
-                vec![]
-            }
+    // Fetch all machines from the database
+    let all_machines = match db::get_all_machines().await {
+        Ok(machines) => machines,
+        Err(e) => {
+            error!("Error fetching machines for compute page: {}", e);
+            // Optionally render an error page or return an empty list
+            vec![]
         }
     };
 
-    // Group machines by proxmox host
+    // Group machines by Proxmox node
     let mut clusters_map: HashMap<String, Vec<Machine>> = HashMap::new();
-    
-    for machine in machines {
-        // For VMs, use the parent_host field
-        // For hosts/nodes, use the hostname
-        let host = if machine.proxmox_vmid.is_some() {
-            // This is a VM, should have a proxmox_node
-            machine.proxmox_node.clone().unwrap_or_else(|| "Unknown Host".to_string())
-        } else if let Some(hostname) = &machine.hostname {
-            // This is likely a host or node
-            hostname.clone()
+    let mut standalone_machines: Vec<Machine> = Vec::new(); // Machines not associated with a Proxmox node
+
+    for machine in all_machines {
+        if let Some(node_name) = &machine.proxmox_node {
+            clusters_map.entry(node_name.clone()).or_default().push(machine);
         } else {
-            // Fallback
-            "Unknown Host".to_string()
-        };
-        
-        clusters_map.entry(host).or_insert_with(Vec::new).push(machine);
+            // If a machine is NOT a VM and has no proxmox_node, consider it standalone?
+            // Or maybe it's a Proxmox host itself? The logic might need refinement based on how hosts are stored.
+            // For now, let's put non-node-associated machines aside.
+            // Let's specifically check if it's a Proxmox host (no VMID, but might have node name filled later?)
+            if machine.proxmox_vmid.is_none() {
+                 // It's likely a physical machine not yet identified as a Proxmox host or associated with one.
+                 // We could potentially group these under a "Standalone" or "Unclustered" section if needed.
+                 standalone_machines.push(machine);
+            } else {
+                // This is a VM without a parent node specified, which is unusual. Log a warning.
+                warn!("VM with ID {:?} found without a proxmox_node association. Machine ID: {}", machine.proxmox_vmid, machine.id);
+                standalone_machines.push(machine); // Add to standalone for now
+            }
+        }
     }
 
-    // Convert to sorted vector of ProxmoxCluster
-    let mut clusters: Vec<ProxmoxCluster> = clusters_map
-        .into_iter()
-        .map(|(host, machines)| ProxmoxCluster { host, machines })
+    // Convert the map into the Vec<ProxmoxCluster> structure for the template
+    let clusters: Vec<ProxmoxCluster> = clusters_map.into_iter()
+        .map(|(node_name, machines)| {
+            // Find the host machine within the group (the one without a vmid)
+            let host_machine = machines.iter().find(|m| m.proxmox_vmid.is_none());
+            let host_display_name = host_machine
+                .map(|h| h.hostname.as_deref().unwrap_or(&node_name)) // Use hostname if available, else node_name
+                .unwrap_or(&node_name); // Fallback to node_name if host machine not found (shouldn't happen ideally)
+
+            ProxmoxCluster {
+                // Use the host's hostname or node name as the cluster identifier for display
+                host: host_display_name.to_string(), // This field seems to be used as the main display name in the template
+                cluster_name: Some(node_name.clone()), // Store the actual node name here
+                machines, // Keep all machines (hosts and VMs) in this vec
+            }
+        })
         .collect();
-    
-    // Sort clusters by host name
-    clusters.sort_by(|a, b| a.host.cmp(&b.host));
-    
+
+    // Add standalone machines as a separate "cluster" if needed, or handle them differently
+    // For now, they are ignored in the `clusters` vec sent to the template.
+    // If you want to display them, you'd need to modify the template or add another field to ComputeTemplate.
+    if !standalone_machines.is_empty() {
+        warn!("Found {} standalone/unassociated machines not displayed on the Compute page.", standalone_machines.len());
+    }
+
     let context = ComputeTemplate {
         theme,
         is_authenticated,
@@ -1750,142 +1756,4 @@ pub async fn compute_page(
     render_minijinja(&app_state, "compute.html", context)
 }
 
-// Function to generate demo Proxmox machines for the compute page
-fn generate_demo_proxmox_machines() -> Vec<Machine> {
-    let mut machines = Vec::new();
-    let base_time = Utc.with_ymd_and_hms(2023, 4, 15, 12, 0, 0).unwrap();
-    let base_mac = [0x52, 0x54, 0x00, 0xAB, 0xCD, 0x00];
-    let base_ip = Ipv4Addr::new(10, 0, 42, 0);
-    
-    // Generate Proxmox host "proxmox1.example.com"
-    let host_1 = "proxmox1.example.com";
-    machines.push(Machine {
-        id: Uuid::new_v5(&Uuid::NAMESPACE_URL, format!("proxmox:{}", host_1).as_bytes()),
-        hostname: Some(host_1.to_string()),
-        mac_address: "52:54:00:AB:CD:01".to_string(),
-        ip_address: "10.0.42.100".to_string(),
-        status: MachineStatus::Ready,
-        os_choice: Some("proxmox".to_string()),
-        os_installed: Some("Proxmox VE 8.0".to_string()),
-        disks: vec![DiskInfo {
-            device: "/dev/sda".to_string(),
-            size_bytes: 1_099_511_627_776, // 1TB
-            model: Some("DEMO DISK 1TB".to_string()),
-            calculated_size: Some("1 TB".to_string()),
-        }],
-        nameservers: vec!["8.8.8.8".to_string()],
-        memorable_name: Some("demo-proxmox-1".to_string()),
-        created_at: base_time,
-        updated_at: base_time,
-        bmc_credentials: None,
-        installation_progress: 100,
-        installation_step: None,
-        last_deployment_duration: None,
-        cpu_model: Some("AMD EPYC 7302P 16-Core Processor".to_string()),
-        cpu_cores: Some(16),
-        total_ram_bytes: Some(68_719_476_736), // 64GB
-        proxmox_vmid: None,
-        proxmox_node: Some("pve".to_string()),
-    });
-    
-    // Generate Proxmox host "proxmox2.example.com"
-    let host_2 = "proxmox2.example.com";
-    machines.push(Machine {
-        id: Uuid::new_v5(&Uuid::NAMESPACE_URL, format!("proxmox:{}", host_2).as_bytes()),
-        hostname: Some(host_2.to_string()),
-        mac_address: "52:54:00:AB:CD:02".to_string(),
-        ip_address: "10.0.42.101".to_string(),
-        status: MachineStatus::Ready,
-        os_choice: Some("proxmox".to_string()),
-        os_installed: Some("Proxmox VE 8.0".to_string()),
-        disks: vec![DiskInfo {
-            device: "/dev/sda".to_string(),
-            size_bytes: 1_099_511_627_776, // 1TB
-            model: Some("DEMO DISK 1TB".to_string()),
-            calculated_size: Some("1 TB".to_string()),
-        }],
-        nameservers: vec!["8.8.8.8".to_string()],
-        memorable_name: Some("demo-proxmox-2".to_string()),
-        created_at: base_time,
-        updated_at: base_time,
-        bmc_credentials: None,
-        installation_progress: 100,
-        installation_step: None,
-        last_deployment_duration: None,
-        cpu_model: Some("AMD EPYC 7302P 16-Core Processor".to_string()),
-        cpu_cores: Some(16),
-        total_ram_bytes: Some(68_719_476_736), // 64GB
-        proxmox_vmid: None,
-        proxmox_node: Some("pve".to_string()),
-    });
-    
-    // Generate 5 VMs on proxmox1
-    for i in 1..=5 {
-        let vm_name = format!("vm{:03}-proxmox1", i);
-        let vmid = 100 + i;
-        machines.push(Machine {
-            id: Uuid::new_v5(&Uuid::NAMESPACE_URL, format!("proxmox:vm:pve:{}", vmid).as_bytes()),
-            hostname: Some(vm_name.clone()),
-            mac_address: format!("52:54:00:A1:{:02X}:{:02X}", i, i),
-            ip_address: format!("10.0.42.{}", 110 + i),
-            status: MachineStatus::Ready,
-            os_choice: Some("ubuntu-2204".to_string()),
-            os_installed: Some("Ubuntu 22.04".to_string()),
-            disks: vec![DiskInfo {
-                device: "/dev/sda".to_string(),
-                size_bytes: 107_374_182_400, // 100GB
-                model: Some("QEMU DISK".to_string()),
-                calculated_size: Some("100 GB".to_string()),
-            }],
-            nameservers: vec!["8.8.8.8".to_string()],
-            memorable_name: Some(format!("demo-vm-{}", i)),
-            created_at: base_time + chrono::Duration::days(i),
-            updated_at: base_time + chrono::Duration::days(i),
-            bmc_credentials: None,
-            installation_progress: 100,
-            installation_step: None,
-            last_deployment_duration: None,
-            cpu_model: Some("QEMU Virtual CPU".to_string()),
-            cpu_cores: Some(2),
-            total_ram_bytes: Some(4_294_967_296), // 4GB
-            proxmox_vmid: Some(vmid as u32),
-            proxmox_node: Some("pve".to_string()),
-        });
-    }
-    
-    // Generate 3 VMs on proxmox2
-    for i in 1..=3 {
-        let vm_name = format!("vm{:03}-proxmox2", i);
-        let vmid = 200 + i;
-        machines.push(Machine {
-            id: Uuid::new_v5(&Uuid::NAMESPACE_URL, format!("proxmox:vm:pve:{}", vmid).as_bytes()),
-            hostname: Some(vm_name.clone()),
-            mac_address: format!("52:54:00:A2:{:02X}:{:02X}", i, i),
-            ip_address: format!("10.0.42.{}", 210 + i),
-            status: MachineStatus::Ready,
-            os_choice: Some("debian-12".to_string()),
-            os_installed: Some("Debian 12".to_string()),
-            disks: vec![DiskInfo {
-                device: "/dev/sda".to_string(),
-                size_bytes: 107_374_182_400, // 100GB
-                model: Some("QEMU DISK".to_string()),
-                calculated_size: Some("100 GB".to_string()),
-            }],
-            nameservers: vec!["8.8.8.8".to_string()],
-            memorable_name: Some(format!("demo-vm2-{}", i)),
-            created_at: base_time + chrono::Duration::days(i + 10),
-            updated_at: base_time + chrono::Duration::days(i + 10),
-            bmc_credentials: None,
-            installation_progress: 100,
-            installation_step: None,
-            last_deployment_duration: None,
-            cpu_model: Some("QEMU Virtual CPU".to_string()),
-            cpu_cores: Some(2),
-            total_ram_bytes: Some(4_294_967_296), // 4GB
-            proxmox_vmid: Some(vmid as u32),
-            proxmox_node: Some("pve".to_string()),
-        });
-    }
-    
-    machines
-} 
+// ... existing code ...

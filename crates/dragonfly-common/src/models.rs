@@ -36,6 +36,8 @@ pub struct Machine {
     pub proxmox_vmid: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proxmox_node: Option<String>,
+    // New flag for Proxmox hosts
+    pub is_proxmox_host: bool, // Defaults to false if not specified in JSON
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]

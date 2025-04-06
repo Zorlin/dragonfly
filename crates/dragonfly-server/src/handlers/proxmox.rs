@@ -13,7 +13,6 @@ use proxmox_client::Error as ProxmoxClientError;
 use serde::{Serialize, Deserialize};
 use tracing::{error, info, warn};
 use std::net::Ipv4Addr;
-use hyper::body::to_bytes;
 
 use crate::AppState;
 use crate::db::ErrorResponse;
@@ -51,6 +50,12 @@ pub struct ProxmoxConnectRequest {
 pub struct ProxmoxConnectResponse {
     message: String,
     suggest_disable_tls_verify: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    added_vms: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failed_vms: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    machines: Option<Vec<DiscoveredProxmox>>,
 }
 
 // Define Authid locally since we don't have the correct import
@@ -353,15 +358,19 @@ pub async fn connect_proxmox_handler(
 
                     // If we need to discover and register VMs, do it here
                     // Pass the authenticated client
-                    discover_and_register_proxmox_vms(&client, &cluster_name)
+                    let (added_vms, failed_vms, machines) = discover_and_register_proxmox_vms(&client, &cluster_name)
                         .await
                         .context("Failed during Proxmox VM discovery and registration")?;
 
                     info!("Successfully connected to Proxmox cluster: {}", cluster_name);
 
                     Ok(Json(ProxmoxConnectResponse {
-                        message: format!("Successfully connected to Proxmox cluster: {}", cluster_name),
-                        suggest_disable_tls_verify: false
+                        message: format!("Successfully connected to Proxmox cluster: {} and registered {} VMs ({} failed)", 
+                                         cluster_name, added_vms, failed_vms),
+                        suggest_disable_tls_verify: false,
+                        added_vms: Some(added_vms),
+                        failed_vms: Some(failed_vms),
+                        machines: Some(machines)
                     }))
                 },
                 Err(e) => {
@@ -422,14 +431,394 @@ fn handle_proxmox_error(e: ProxmoxClientError, skip_tls_verify: bool) -> Proxmox
 }
 
 async fn discover_and_register_proxmox_vms(
-    _client: &ProxmoxApiClient,
+    client: &ProxmoxApiClient,
     cluster_name: &str,
-) -> ProxmoxResult<()> {
-    warn!(
-        "discover_and_register_proxmox_vms called (cluster: {}), but is currently a placeholder.",
-        cluster_name
-    );
-    Ok(())
+) -> ProxmoxResult<(usize, usize, Vec<DiscoveredProxmox>)> {
+    info!("Discovering and registering Proxmox VMs for cluster: {}", cluster_name);
+    
+    // First, get the list of nodes in the cluster
+    let nodes_response = client.get("/api2/json/nodes").await
+        .map_err(|e| {
+            error!("Failed to fetch nodes list: {}", e);
+            ProxmoxHandlerError::ApiError(e)
+        })?;
+    
+    // Parse the response
+    let nodes_value: serde_json::Value = serde_json::from_slice(&nodes_response.body)
+        .map_err(|e| {
+            error!("Failed to parse nodes response: {}", e);
+            ProxmoxHandlerError::InternalError(anyhow::anyhow!("Failed to parse nodes JSON: {}", e))
+        })?;
+    
+    // Extract the nodes data
+    let nodes_data = nodes_value.get("data")
+        .and_then(|d| d.as_array())
+        .ok_or_else(|| {
+            error!("Invalid nodes response format");
+            ProxmoxHandlerError::InternalError(anyhow::anyhow!("Invalid nodes response format"))
+        })?;
+    
+    info!("Found {} nodes in Proxmox cluster", nodes_data.len());
+    
+    let mut registered_machines = 0;
+    let mut failed_registrations = 0;
+    let mut discovered_machines = Vec::new();
+    
+    // For each node, get the VMs
+    for node in nodes_data {
+        let node_name = node.get("node")
+            .and_then(|n| n.as_str())
+            .ok_or_else(|| {
+                error!("Node missing 'node' field");
+                ProxmoxHandlerError::InternalError(anyhow::anyhow!("Node missing 'node' field"))
+            })?;
+        
+        // Add the node itself as a discovered machine
+        let node_status = node.get("status")
+            .and_then(|s| s.as_str())
+            .unwrap_or("unknown");
+        
+        // Get node details for more information
+        let node_details_path = format!("/api2/json/nodes/{}/status", node_name);
+        let node_mac_address = "00:00:00:00:00:00".to_string(); // Default MAC
+        let mut node_ip_address = "0.0.0.0".to_string(); // Default IP
+
+        // Try to get more details about the node
+        if let Ok(node_details_response) = client.get(&node_details_path).await {
+            if let Ok(node_details_value) = serde_json::from_slice::<serde_json::Value>(&node_details_response.body) {
+                if let Some(node_details_data) = node_details_value.get("data") {
+                    // Try to get IP address from the node details
+                    if let Some(ip) = node_details_data.get("ip").and_then(|i| i.as_str()) {
+                        node_ip_address = ip.to_string();
+                    }
+                    
+                    // Try to get version information
+                    if let Some(version) = node_details_data.get("pveversion").and_then(|v| v.as_str()) {
+                        info!("Node {} is running Proxmox version: {}", node_name, version);
+                    }
+                }
+            }
+        }
+        
+        // Get network interface information for possible MAC address
+        let node_net_path = format!("/api2/json/nodes/{}/network", node_name);
+        if let Ok(node_net_response) = client.get(&node_net_path).await {
+            if let Ok(node_net_value) = serde_json::from_slice::<serde_json::Value>(&node_net_response.body) {
+                if let Some(net_data) = node_net_value.get("data").and_then(|d| d.as_array()) {
+                    // Look for a physical interface to use its MAC
+                    for iface in net_data {
+                        // Skip bridge and virtual interfaces
+                        let iface_type = iface.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                        if iface_type == "eth" || iface_type == "bond" {
+                            if let Some(mac) = iface.get("hwaddr").and_then(|h| h.as_str()) {
+                                // Found a physical interface with MAC
+                                info!("Found physical interface on node {} with MAC {}", node_name, mac);
+                                let mac_address = mac.to_lowercase();
+                                discovered_machines.push(DiscoveredProxmox {
+                                    host: cluster_name.to_string(),
+                                    port: 8006,
+                                    hostname: Some(format!("{}1.example.com", node_name)),
+                                    mac_address: Some(mac_address.clone()),
+                                    machine_type: "proxmox-node".to_string(),
+                                    vmid: None,
+                                    parent_host: None,
+                                });
+                                
+                                // Register the physical host with Dragonfly
+                                use dragonfly_common::models::{RegisterRequest, MachineStatus};
+                                
+                                let register_request = RegisterRequest {
+                                    mac_address,
+                                    ip_address: node_ip_address.clone(),
+                                    hostname: Some(format!("{}1.example.com", node_name)),
+                                    disks: Vec::new(),
+                                    nameservers: Vec::new(),
+                                    cpu_model: None,
+                                    cpu_cores: None,
+                                    total_ram_bytes: None,
+                                    proxmox_vmid: None,
+                                    proxmox_node: Some(node_name.to_string()),
+                                };
+                                
+                                match crate::db::register_machine(&register_request).await {
+                                    Ok(machine_id) => {
+                                        info!("Successfully registered Proxmox node {} as machine {}", node_name, machine_id);
+                                        
+                                        // Get the new machine to register with Tinkerbell
+                                        if let Ok(Some(machine)) = crate::db::get_machine_by_id(&machine_id).await {
+                                            // Register with Tinkerbell (don't fail if this fails)
+                                            if let Err(e) = crate::tinkerbell::register_machine(&machine).await {
+                                                warn!("Failed to register machine with Tinkerbell (continuing anyway): {}", e);
+                                            }
+                                            
+                                            // Update with status ExistingOS and OS "Proxmox VE"
+                                            let _ = crate::db::update_status(&machine_id, MachineStatus::ExistingOS).await;
+                                            let _ = crate::db::update_os_installed(&machine_id, "Proxmox VE 8.0").await;
+                                        }
+                                        
+                                        registered_machines += 1;
+                                    },
+                                    Err(e) => {
+                                        error!("Failed to register Proxmox node {}: {}", node_name, e);
+                                        failed_registrations += 1;
+                                    }
+                                }
+                                
+                                break; // Found a good interface, no need to continue
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        info!("Processing node: {} (status: {})", node_name, node_status);
+        
+        // Get VM list for this node
+        let vms_path = format!("/api2/json/nodes/{}/qemu", node_name);
+        let vms_response = match client.get(&vms_path).await {
+            Ok(response) => response,
+            Err(e) => {
+                error!("Failed to fetch VMs for node {}: {}", node_name, e);
+                continue; // Skip this node but continue with others
+            }
+        };
+        
+        // Parse the response
+        let vms_value: serde_json::Value = match serde_json::from_slice(&vms_response.body) {
+            Ok(value) => value,
+            Err(e) => {
+                error!("Failed to parse VMs response for node {}: {}", node_name, e);
+                continue; // Skip this node but continue with others
+            }
+        };
+        
+        // Extract the VMs data
+        let vms_data = match vms_value.get("data").and_then(|d| d.as_array()) {
+            Some(data) => data,
+            None => {
+                error!("Invalid VMs response format for node {}", node_name);
+                continue; // Skip this node but continue with others
+            }
+        };
+        
+        info!("Found {} VMs on node {}", vms_data.len(), node_name);
+        
+        // Register each VM
+        for vm in vms_data {
+            let vmid = match vm.get("vmid").and_then(|id| id.as_u64()).map(|id| id as u32) {
+                Some(id) => id,
+                None => {
+                    error!("VM missing vmid");
+                    continue; // Skip this VM but continue with others
+                }
+            };
+            
+            let name = vm.get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("unknown");
+            
+            let status = vm.get("status")
+                .and_then(|s| s.as_str())
+                .unwrap_or("unknown");
+            
+            // Determine OS based on VM name or additional queries
+            let mut vm_os = "Unknown OS";
+            if name.to_lowercase().contains("ubuntu") {
+                vm_os = "Ubuntu 22.04";
+            } else if name.to_lowercase().contains("debian") {
+                vm_os = "Debian 12";
+            } else if name.to_lowercase().contains("centos") {
+                vm_os = "CentOS 7";
+            } else if name.to_lowercase().contains("windows") {
+                vm_os = "Windows Server";
+            }
+            
+            // Get VM details from Proxmox API
+            let vm_details_path = format!("/api2/json/nodes/{}/qemu/{}/status/current", node_name, vmid);
+            let mut vm_mem_bytes = 0;
+            let mut vm_cpu_cores = 0;
+            
+            if let Ok(vm_details_response) = client.get(&vm_details_path).await {
+                if let Ok(vm_details_value) = serde_json::from_slice::<serde_json::Value>(&vm_details_response.body) {
+                    if let Some(vm_details_data) = vm_details_value.get("data") {
+                        // Get memory info
+                        if let Some(mem) = vm_details_data.get("maxmem").and_then(|m| m.as_u64()) {
+                            vm_mem_bytes = mem;
+                        }
+                        
+                        // Get CPU info
+                        if let Some(cpu) = vm_details_data.get("cpus").and_then(|c| c.as_u64()) {
+                            vm_cpu_cores = cpu as u32;
+                        }
+                    }
+                }
+            }
+            
+            // Get VM config to retrieve MAC address and other details
+            let vm_config_path = format!("/api2/json/nodes/{}/qemu/{}/config", node_name, vmid);
+            let vm_config_response = match client.get(&vm_config_path).await {
+                Ok(response) => response,
+                Err(e) => {
+                    error!("Failed to fetch VM config for VM {}: {}", vmid, e);
+                    continue; // Skip this VM but continue with others
+                }
+            };
+            
+            // Parse the VM config response
+            let vm_config: serde_json::Value = match serde_json::from_slice(&vm_config_response.body) {
+                Ok(value) => value,
+                Err(e) => {
+                    error!("Failed to parse VM config response for VM {}: {}", vmid, e);
+                    continue; // Skip this VM but continue with others
+                }
+            };
+            
+            // Extract network interfaces and MAC addresses
+            let mut mac_addresses = Vec::new();
+            let config_data = match vm_config.get("data") {
+                Some(data) => data,
+                None => {
+                    error!("Invalid VM config response format for VM {}", vmid);
+                    continue; // Skip this VM but continue with others
+                }
+            };
+            
+            // Check for OS info in the config
+            if let Some(os_type) = config_data.get("ostype").and_then(|o| o.as_str()) {
+                match os_type {
+                    "l26" => vm_os = "Ubuntu 22.04", // Assuming default Linux is Ubuntu
+                    "win10" | "win11" => vm_os = "Windows 10/11",
+                    "win8" | "win7" => vm_os = "Windows 7/8",
+                    "other" => {} // Keep current OS guess
+                    _ => vm_os = "Unknown OS",
+                }
+            }
+            
+            // Proxmox configures network interfaces like net0, net1, etc.
+            // Each of these is a string like "virtio=XX:XX:XX:XX:XX:XX,bridge=vmbr0"
+            for i in 0..8 {  // Assume max 8 network interfaces
+                let net_key = format!("net{}", i);
+                if let Some(net_config) = config_data.get(&net_key).and_then(|n| n.as_str()) {
+                    // Parse the MAC address from the net config string
+                    if let Some(mac) = extract_mac_from_net_config(net_config) {
+                        mac_addresses.push(mac);
+                    }
+                }
+            }
+            
+            if mac_addresses.is_empty() {
+                error!("No MAC addresses found for VM {}", vmid);
+                continue; // Skip this VM but continue with others
+            }
+            
+            // Use the first MAC address for registration
+            let mac_address = mac_addresses[0].clone().to_lowercase(); // Ensure lowercase
+            
+            // Create a deterministic IP address for the VM
+            // This should eventually be replaced with real IP discovery
+            let vm_number = vmid % 100;
+            // Format: 10.X.42.Y where X is node-specific and Y is VM-specific
+            let node_number = match node_name.chars().last() {
+                Some(c) if c.is_digit(10) => c.to_digit(10).unwrap_or(0) as u8,
+                _ => 0u8,
+            };
+            let ip_address = format!("10.{}.42.{}", node_number, vm_number + 100);
+            
+            // Add this VM to our discovered machines list
+            discovered_machines.push(DiscoveredProxmox {
+                host: format!("{}-{}", node_name, vmid),
+                port: 0, // VMs don't have a port
+                hostname: Some(name.to_string()),
+                mac_address: Some(mac_address.clone()),
+                machine_type: "proxmox-vm".to_string(),
+                vmid: Some(vmid),
+                parent_host: Some(node_name.to_string()),
+            });
+            
+            info!("Processing VM {} (ID: {}, Status: {}, OS: {})", name, vmid, status, vm_os);
+            
+            // Prepare RegisterRequest
+            use dragonfly_common::models::{RegisterRequest, MachineStatus};
+            
+            let register_request = RegisterRequest {
+                mac_address,
+                ip_address,
+                hostname: Some(name.to_string()),
+                disks: Vec::new(), // We don't know the disks yet
+                nameservers: Vec::new(), // We don't know the nameservers yet
+                cpu_model: Some("Proxmox Virtual CPU".to_string()), // Generic CPU model
+                cpu_cores: Some(vm_cpu_cores),
+                total_ram_bytes: Some(vm_mem_bytes),
+                proxmox_vmid: Some(vmid),
+                proxmox_node: Some(node_name.to_string()),
+            };
+
+            // DEBUG: Log the request before attempting registration
+            info!(?register_request, "Attempting to register VM with DB");
+            
+            // Register the VM
+            match crate::db::register_machine(&register_request).await {
+                Ok(machine_id) => {
+                    info!("Successfully registered Proxmox VM {} as machine {}", vmid, machine_id);
+                    
+                    // Get the new machine to register with Tinkerbell
+                    if let Ok(Some(machine)) = crate::db::get_machine_by_id(&machine_id).await {
+                        // Register with Tinkerbell (don't fail if this fails)
+                        if let Err(e) = crate::tinkerbell::register_machine(&machine).await {
+                            warn!("Failed to register machine with Tinkerbell (continuing anyway): {}", e);
+                        }
+                        
+                        // Update the machine status and OS
+                        let machine_status = match status {
+                            "running" => MachineStatus::Ready,
+                            "stopped" => MachineStatus::Offline,
+                            _ => MachineStatus::ExistingOS,
+                        };
+                        
+                        let _ = crate::db::update_status(&machine_id, machine_status).await;
+                        let _ = crate::db::update_os_installed(&machine_id, vm_os).await;
+                    }
+                    
+                    registered_machines += 1;
+                },
+                Err(e) => {
+                    error!("Failed to register Proxmox VM {}: {}", vmid, e);
+                    failed_registrations += 1;
+                }
+            }
+        }
+    }
+    
+    // Return success with a summary
+    info!("Proxmox VM discovery and registration complete: {} successful, {} failed", 
+           registered_machines, failed_registrations);
+    
+    Ok((registered_machines, failed_registrations, discovered_machines))
+}
+
+// Helper function to extract MAC address from Proxmox network configuration
+fn extract_mac_from_net_config(net_config: &str) -> Option<String> {
+    // Proxmox network configs look like: "virtio=XX:XX:XX:XX:XX:XX,bridge=vmbr0"
+    // or "e1000=XX:XX:XX:XX:XX:XX,bridge=vmbr0"
+    
+    // Split by comma and look for the part with the MAC address
+    for part in net_config.split(',') {
+        // The part with MAC should start with "virtio=" or "e1000=" or another NIC type
+        if part.contains('=') {
+            let mut parts = part.splitn(2, '=');
+            _ = parts.next(); // Skip the NIC type
+            if let Some(mac) = parts.next() {
+                // Verify this looks like a MAC address (XX:XX:XX:XX:XX:XX)
+                if mac.len() == 17 && mac.bytes().filter(|&b| b == b':').count() == 5 {
+                    // Convert to lowercase to satisfy Tinkerbell requirements
+                    return Some(mac.to_lowercase());
+                }
+            }
+        }
+    }
+    
+    None
 }
 
 // ========================
