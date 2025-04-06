@@ -37,6 +37,8 @@ class GamepadController {
         this.aButtonHeldDown = false; // Add this flag, initialized to false
         this.lbButtonHeldDown = false; // Flag for Left Bumper
         this.menuActive = false; // Flag to track if the gamepad menu is open
+        this.isTagsPage = false;
+        this.tagManagerComponent = null;
         
         // Initialize
         this.init();
@@ -123,6 +125,20 @@ class GamepadController {
             // Find top navigation tabs once DOM is ready
             this.findTopTabs();
         });
+        
+        // Check if we are on the tags page
+        if (window.location.pathname === '/tags') {
+            this.isTagsPage = true;
+            // Wait for Alpine component to initialize
+            setTimeout(() => {
+                this.tagManagerComponent = window.Alpine.store('tagManager');
+                if (this.tagManagerComponent) {
+                    console.log('[Gamepad] Tag Manager component found');
+                } else {
+                    console.warn('[Gamepad] Tag Manager component not found after delay');
+                }
+            }, 1000); // Adjust delay if needed
+        }
     }
     
     setupModalObserver() {
@@ -947,6 +963,42 @@ class GamepadController {
                 console.log('[Gamepad] First few elements:', this.focusableElements.slice(0, 3));
             }
         }
+        
+        // If on tags page, add specific focusable elements
+        if (this.isTagsPage) {
+            const tagsPageElements = Array.from(
+                document.querySelectorAll(
+                    `[data-gamepad-focusable="true"],
+                     .node-card,
+                     .tag-bucket,
+                     .hot-zone`
+                )
+            ).filter(el => {
+                // Basic visibility check
+                try {
+                    const style = window.getComputedStyle(el);
+                    if (style.display === 'none' || style.visibility === 'hidden') {
+                        return false;
+                    }
+                } catch (e) {
+                    return false;
+                }
+                return true;
+            });
+            
+            // Add these elements, ensuring no duplicates
+            tagsPageElements.forEach(el => {
+                if (!this.focusableElements.includes(el)) {
+                    this.focusableElements.push(el);
+                }
+            });
+            
+            // Initial sort might be needed here based on visual layout
+            // Sort by DOM order initially, more complex sorting later if needed
+            this.focusableElements.sort((a, b) => {
+                return a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+            });
+        }
     }
     
     focusElementAtIndex(index, shouldScroll = true) {
@@ -1525,6 +1577,118 @@ class GamepadController {
         } else if (this.freeCursorVisible) {
             // Stick is neutral, potentially start hide timer (handled in showFreeCursor)
         }
+        
+        // --- Process Button Presses (Tags Page Specific) ---
+        if (this.isTagsPage && this.tagManagerComponent) {
+            // A button (Select Node / Activate Control)
+            if (gamepad.buttons[0]?.pressed && !this.buttonStates.a) {
+                console.log('[Gamepad Tags] Button A PRESSED.');
+                this.buttonStates.a = true;
+                
+                if (this.activeElement && this.activeElement.classList.contains('node-card')) {
+                    const nodeId = this.activeElement.dataset.nodeId;
+                    if (nodeId) {
+                        console.log(`[Gamepad Tags] Toggling selection for node ${nodeId}`);
+                        this.tagManagerComponent.toggleNodeSelection(nodeId);
+                        // Add visual feedback if needed
+                    }
+                } else if (this.activeElement && this.activeElement.dataset.gamepadDroptarget) {
+                    // If a node is selected, assign it to this target tag/zone
+                    if (this.tagManagerComponent.selectedNodeId) {
+                        const targetTag = this.activeElement.dataset.tagName;
+                        if (targetTag) {
+                            console.log(`[Gamepad Tags] Assigning selected node to ${targetTag}`);
+                            this.tagManagerComponent.assignSelectedNodeToTag(targetTag);
+                        } else {
+                            console.warn('[Gamepad Tags] Drop target has no tag name');
+                        }
+                    } else {
+                        console.log('[Gamepad Tags] A pressed on target, but no node selected');
+                        // Optionally provide feedback (e.g., slight shake)
+                    }
+                } else if (this.activeElement && this.activeElement.dataset.tagAction === 'preview') {
+                    const tagName = this.activeElement.dataset.tagName;
+                    console.log(`[Gamepad Tags] Toggling preview for tag ${tagName}`);
+                    this.tagManagerComponent.togglePreviewTag(tagName);
+                } else if (this.activeElement && this.activeElement.dataset.tagAction === 'delete') {
+                    const tagName = this.activeElement.dataset.tagName;
+                    console.log(`[Gamepad Tags] Deleting tag ${tagName}`);
+                    this.tagManagerComponent.deleteTag(tagName); // Assumes deleteTag includes confirmation
+                } else if (this.activeElement && this.activeElement.tagName === 'BUTTON' || this.activeElement.tagName === 'INPUT') {
+                    // General button/input click
+                    console.log('[Gamepad Tags] Clicking active element');
+                    this.activeElement.click();
+                    // If it's an input, maybe focus it explicitly
+                    if (this.activeElement.tagName === 'INPUT') {
+                        this.activeElement.focus();
+                    }
+                }
+            }
+            
+            // X button (Toggle Preview for focused Tag Bucket)
+            if (gamepad.buttons[2]?.pressed && !this.buttonStates.x) { // Assuming X is button 2
+                console.log('[Gamepad Tags] Button X PRESSED.');
+                this.buttonStates.x = true;
+                if (this.activeElement && this.activeElement.classList.contains('tag-bucket')) {
+                    const tagName = this.activeElement.dataset.tagName;
+                    if (tagName && !tagName.startsWith('hot-zone')) {
+                        console.log(`[Gamepad Tags] Toggling preview for tag bucket ${tagName}`);
+                        this.tagManagerComponent.togglePreviewTag(tagName);
+                    } else {
+                        console.log('[Gamepad Tags] X pressed on non-previewable bucket');
+                    }
+                }
+            }
+            
+            // Y button (Cycle Filter)
+            if (gamepad.buttons[3]?.pressed && !this.buttonStates.y) { // Assuming Y is button 3
+                console.log('[Gamepad Tags] Button Y PRESSED.');
+                this.buttonStates.y = true;
+                console.log('[Gamepad Tags] Cycling filter');
+                this.tagManagerComponent.cycleFilter();
+                // Need to update focusable elements and potentially refocus
+                setTimeout(() => this.updateFocusableElements(), 100);
+            }
+            
+            // RT button (Assign selected node to focused tag bucket)
+            if (gamepad.buttons[7]?.pressed && !this.buttonStates.rt) {
+                console.log('[Gamepad Tags] Button RT PRESSED.');
+                this.buttonStates.rt = true;
+                if (this.tagManagerComponent.selectedNodeId && 
+                    this.activeElement && this.activeElement.dataset.gamepadDroptarget) {
+                    const targetTag = this.activeElement.dataset.tagName;
+                    if (targetTag) {
+                        console.log(`[Gamepad Tags] RT: Assigning selected node to ${targetTag}`);
+                        this.tagManagerComponent.assignSelectedNodeToTag(targetTag);
+                    }
+                }
+            }
+
+            // LT (Box Select - Placeholder)
+            if (gamepad.buttons[6]?.pressed && !this.buttonStates.lt) {
+                console.log('[Gamepad Tags] Button LT PRESSED (Box Select - Not Implemented).');
+                this.buttonStates.lt = true;
+                // Future: Implement box selection logic
+            }
+            
+            // RB (Additive Select - Placeholder)
+            if (gamepad.buttons[5]?.pressed && !this.buttonStates.rb) { // Assuming RB is button 5
+                console.log('[Gamepad Tags] Button RB PRESSED (Additive Select - Not Implemented).');
+                this.buttonStates.rb = true;
+                // Future: Implement additive selection logic
+            }
+            
+            // RT + RB (Multi-target - Placeholder)
+            if (gamepad.buttons[7]?.pressed && gamepad.buttons[5]?.pressed && 
+                (!this.buttonStates.rt || !this.buttonStates.rb)) {
+                console.log('[Gamepad Tags] Buttons RT+RB PRESSED (Multi-target - Not Implemented).');
+                this.buttonStates.rt = true;
+                this.buttonStates.rb = true;
+                // Future: Implement multi-target assignment
+            }
+        }
+
+        // --- End Tags Page Specific --- 
     }
     
     navigateUp() {
@@ -1587,559 +1751,77 @@ class GamepadController {
     
     findAdjacentElement(direction) {
         if (!this.activeElement || this.focusableElements.length <= 1) {
-            // If no active element or only one element, just focus the first one
-            return this.focusableElements.length > 0 ? 0 : -1;
-        }
-        
-        // If we're in a modal, only navigate between elements in that modal
-        // Use improved modal detection
-        let modalVisible = null;
-        const possibleModals = document.querySelectorAll('div[aria-modal="true"], div[id="add-machine-modal"], div[class*="modal"]');
-        
-        for (const modal of possibleModals) {
-            if (modal.hasAttribute('x-cloak') || 
-                window.getComputedStyle(modal).display === 'none' ||
-                window.getComputedStyle(modal).visibility === 'hidden') {
-                continue;
-            }
-            
-            const rect = modal.getBoundingClientRect();
-            if (rect.width > 0 && rect.height > 0) {
-                modalVisible = modal;
-                break;
-            }
-        }
-        
-        const currentInModal = modalVisible && modalVisible.contains(this.activeElement);
-        
-        // If in modal, use standard navigation logic
-        if (currentInModal) {
-            return this.findAdjacentElementStandard(direction, modalVisible);
-        }
-        
-        // Special grid-based navigation when no modal is active
-        const currentRect = this.activeElement.getBoundingClientRect();
-        const currentCenterX = currentRect.left + currentRect.width / 2;
-        const currentCenterY = currentRect.top + currentRect.height / 2;
-        
-        // Check if current element is a row or an action button
-        const isMachineRow = this.activeElement.tagName === 'TR' && 
-                         this.activeElement.hasAttribute('data-machine-id');
-        
-        // Check if it's an Add Machine button
-        const isAddMachineButton = this.activeElement.textContent && 
-                               this.activeElement.textContent.trim().includes('Add Machine');
-        
-        // Check if it's an action button (inside a row)
-        const isActionButton = (this.activeElement.tagName === 'BUTTON' || 
-                            (this.activeElement.tagName === 'A' && this.activeElement.hasAttribute('href'))) && 
-                            this.activeElement.closest('tr[data-machine-id]');
-                            
-        // Check if this is an OS dropdown trigger
-        const isOsDropdownTrigger = this.activeElement.classList.contains('cursor-pointer') && 
-                              (this.activeElement.getAttribute('x-on:click')?.includes('toggleOsDropdown') ||
-                               this.activeElement.getAttribute('@click')?.includes('toggleOsDropdown') ||
-                               this.activeElement.getAttribute('x-on:click')?.includes('osDropdowns') ||
-                               this.activeElement.getAttribute('@click')?.includes('osDropdowns'));
-        
-        // Check if this is an OS dropdown option (inside a dropdown)
-        const isOsDropdownOption = this.activeElement.closest('[x-show*="osDropdowns"]') && 
-                             this.activeElement.tagName === 'A' && 
-                             this.activeElement.getAttribute('href') === '#';
-        
-        // Check if current element is a Tags button
-        const isTagsButton = this.activeElement.textContent && 
-                          this.activeElement.textContent.includes('Tags');
-                          
-        // Check if current element is Reimage or Apply button
-        const isReimageButton = this.activeElement.textContent && 
-                             this.activeElement.textContent.includes('Reimage');
-        const isApplyButton = this.activeElement.textContent && 
-                           this.activeElement.textContent.includes('Apply');
-        
-        console.log(`[Gamepad] Navigation context: isMachineRow=${isMachineRow}, isAddMachineButton=${isAddMachineButton}, isActionButton=${isActionButton}, isOsDropdownTrigger=${isOsDropdownTrigger}, isOsDropdownOption=${isOsDropdownOption}, isTagsButton=${isTagsButton}, isReimageButton=${isReimageButton}, isApplyButton=${isApplyButton}, direction=${direction}`);
-        
-        // SPECIAL CASE: Direct row-to-row navigation when pressing up/down while on a row
-        if (isMachineRow && (direction === 'up' || direction === 'down')) {
-            console.log('[Gamepad] Special case: Row-to-row vertical navigation');
-            // Get the adjacent row
-            const adjacentRow = direction === 'down' 
-                ? this.activeElement.nextElementSibling 
-                : this.activeElement.previousElementSibling;
-            
-            // If the adjacent row is valid and in our focusable elements, focus it
-            if (adjacentRow && 
-                adjacentRow.tagName === 'TR' && 
-                adjacentRow.hasAttribute('data-machine-id') && 
-                this.focusableElements.includes(adjacentRow)) {
-                
-                const rowIndex = this.focusableElements.indexOf(adjacentRow);
-                console.log(`[Gamepad] Found adjacent row at index ${rowIndex}`);
-                return rowIndex;
-            }
-            
-            // If we couldn't find an adjacent row, use standard navigation
-            return this.findAdjacentElementStandard(direction);
-        }
-        
-        // Special case for OS dropdown trigger when navigating left - go to row
-        if (isOsDropdownTrigger && direction === 'left') {
-            // Get the parent row
-            const parentRow = this.activeElement.closest('tr[data-machine-id]');
-            if (parentRow && this.focusableElements.includes(parentRow)) {
-                console.log('[Gamepad] Special case: Moving from OS dropdown to row');
-                return this.focusableElements.indexOf(parentRow);
-            }
-        }
-        
-        // Special case for Tags button when navigating left - go to OS dropdown
-        if (isTagsButton && direction === 'left') {
-            // Get the parent row
-            const parentRow = this.activeElement.closest('tr[data-machine-id]');
-            if (parentRow) {
-                // Find the OS dropdown trigger
-                const osDropdownTrigger = parentRow.querySelector('.cursor-pointer');
-                if (osDropdownTrigger && this.focusableElements.includes(osDropdownTrigger)) {
-                    console.log('[Gamepad] Special case: Moving from Tags button to OS dropdown');
-                    return this.focusableElements.indexOf(osDropdownTrigger);
-                }
-            }
-        }
-        
-        // Special case for vertical navigation between equivalent elements in different rows
-        if ((direction === 'up' || direction === 'down') &&
-            (isOsDropdownTrigger || isTagsButton || isReimageButton || isApplyButton)) {
-            
-            // FIRST CHECK: If on a dropdown trigger and pressing down, check if dropdown is open
-            if (isOsDropdownTrigger && direction === 'down') {
-                // Get the machine ID from the row containing this trigger
-                const parentRow = this.activeElement.closest('tr[data-machine-id]');
-                if (!parentRow) return this.currentElementIndex;
-                
-                const machineId = parentRow.getAttribute('data-machine-id');
-                console.log(`[Gamepad] On OS dropdown trigger for machine ${machineId}, checking if dropdown is open`);
-                
-                // Check if the dropdown is open by looking for visible dropdown options
-                const dropdownOptions = Array.from(document.querySelectorAll(`div[x-show*="osDropdowns"] a[href="#"]`))
-                    .filter(option => {
-                        const style = window.getComputedStyle(option);
-                        return style.display !== 'none' && style.visibility !== 'hidden';
-                    });
-                
-                if (dropdownOptions.length > 0) {
-                    console.log(`[Gamepad] Found ${dropdownOptions.length} visible dropdown options`);
-                    
-                    // Find first option that's in our focusable elements
-                    const firstOptionIndex = this.focusableElements.findIndex(el => 
-                        dropdownOptions.includes(el)
-                    );
-                    
-                    if (firstOptionIndex !== -1) {
-                        console.log(`[Gamepad] Moving to first dropdown option at index ${firstOptionIndex}`);
-                        return firstOptionIndex;
-                    }
-                } else {
-                    console.log('[Gamepad] No visible dropdown options found, dropdown is closed');
-                }
-            }
-            
-            // If dropdown is closed (or we're on a different button type), continue with row-to-row navigation
-            // Get current row
-            const currentRow = this.activeElement.closest('tr[data-machine-id]');
-            if (!currentRow) return this.findAdjacentElementStandard(direction);
-            
-            // Get adjacent row (next row for down, previous row for up)
-            const adjacentRow = direction === 'down' 
-                ? currentRow.nextElementSibling 
-                : currentRow.previousElementSibling;
-                
-            if (!adjacentRow || !adjacentRow.hasAttribute('data-machine-id')) {
-                return this.findAdjacentElementStandard(direction);
-            }
-            
-            console.log(`[Gamepad] Looking for equivalent element in ${direction} row`);
-            
-            // Try to find equivalent element in adjacent row
-            let targetElement = null;
-            
-            if (isOsDropdownTrigger) {
-                // Find OS dropdown in adjacent row
-                targetElement = adjacentRow.querySelector('.cursor-pointer');
-                console.log('[Gamepad] Looking for OS dropdown trigger:', targetElement);
-            }
-            else if (isTagsButton) {
-                // Find Tags button in adjacent row
-                const buttons = Array.from(adjacentRow.querySelectorAll('button, a'));
-                targetElement = buttons.find(btn => 
-                    btn.textContent && btn.textContent.includes('Tags')
-                );
-                console.log('[Gamepad] Looking for Tags button:', targetElement);
-            }
-            else if (isReimageButton) {
-                // From Reimage, look for Reimage or Apply (prefer Apply)
-                const buttons = Array.from(adjacentRow.querySelectorAll('button, a'));
-                
-                // First check for Apply button
-                targetElement = buttons.find(btn => 
-                    btn.textContent && btn.textContent.includes('Apply')
-                );
-                
-                // If no Apply found, look for Reimage
-                if (!targetElement) {
-                    targetElement = buttons.find(btn => 
-                        btn.textContent && btn.textContent.includes('Reimage')
-                    );
-                }
-                
-                console.log('[Gamepad] From Reimage, looking for Apply/Reimage button:', targetElement);
-            }
-            else if (isApplyButton) {
-                // From Apply, look for Apply or Reimage (prefer Apply)
-                const buttons = Array.from(adjacentRow.querySelectorAll('button, a'));
-                
-                // First check for Apply button
-                targetElement = buttons.find(btn => 
-                    btn.textContent && btn.textContent.includes('Apply')
-                );
-                
-                // If no Apply found, look for Reimage
-                if (!targetElement) {
-                    targetElement = buttons.find(btn => 
-                        btn.textContent && btn.textContent.includes('Reimage')
-                    );
-                }
-                
-                console.log('[Gamepad] From Apply, looking for Apply/Reimage button:', targetElement);
-            }
-            
-            // If we found a matching element that's focusable, use it
-            if (targetElement && this.focusableElements.includes(targetElement)) {
-                const targetIndex = this.focusableElements.indexOf(targetElement);
-                console.log(`[Gamepad] Found equivalent element in ${direction} row at index ${targetIndex}`);
-                return targetIndex;
-            }
-            
-            // If we didn't find an equivalent, just focus the row
-            if (this.focusableElements.includes(adjacentRow)) {
-                const rowIndex = this.focusableElements.indexOf(adjacentRow);
-                console.log(`[Gamepad] No equivalent found, focusing ${direction} row at index ${rowIndex}`);
-                return rowIndex;
-            }
-        }
-        
-        // If on a dropdown option and pressing up/down, navigate between options
-        if (isOsDropdownOption && (direction === 'up' || direction === 'down')) {
-            // Get all visible options in this dropdown
-            const dropdown = this.activeElement.closest('[x-show*="osDropdowns"]');
-            if (!dropdown) return this.currentElementIndex;
-            
-            const allOptions = Array.from(dropdown.querySelectorAll('a[href="#"]'))
-                .filter(option => {
-                    const style = window.getComputedStyle(option);
-                    return style.display !== 'none' && style.visibility !== 'hidden' && 
-                          this.focusableElements.includes(option);
-                });
-            
-            // Find current option index
-            const currentOptionIndex = allOptions.indexOf(this.activeElement);
-            if (currentOptionIndex === -1) return this.currentElementIndex;
-            
-            if (direction === 'up') {
-                // If at first option and going up, go back to dropdown trigger
-                if (currentOptionIndex === 0) {
-                    const trigger = dropdown.closest('tr').querySelector('.cursor-pointer');
-                    if (trigger && this.focusableElements.includes(trigger)) {
-                        return this.focusableElements.indexOf(trigger);
-                    }
-                }
-                // Otherwise go to previous option
-                else {
-                    return this.focusableElements.indexOf(allOptions[currentOptionIndex - 1]);
-                }
-            } else { // down
-                // If at last option, close dropdown and go to next row
-                if (currentOptionIndex === allOptions.length - 1) {
-                    // Close dropdown programmatically
-                    document.body.click();
-                    
-                    // Find next row
-                    const currentRow = dropdown.closest('tr');
-                    if (currentRow) {
-                        const nextRow = currentRow.nextElementSibling;
-                        if (nextRow && nextRow.hasAttribute('data-machine-id') && 
-                            this.focusableElements.includes(nextRow)) {
-                            return this.focusableElements.indexOf(nextRow);
-                        }
-                    }
-                }
-                // Otherwise go to next option
-                else {
-                    return this.focusableElements.indexOf(allOptions[currentOptionIndex + 1]);
-                }
-            }
-            
-            // If we get here, we couldn't navigate within options
             return this.currentElementIndex;
         }
-        
-        // For vertical navigation (up/down), only consider rows and Add Machine button
-        if (direction === 'up' || direction === 'down') {
-            // If on a dropdown option and pressing up/down, navigate between options
-            if (isOsDropdownOption) {
-                // ... existing code ...
+
+        // Tags Page Specific Layout Navigation
+        if (this.isTagsPage) {
+        const currentRect = this.activeElement.getBoundingClientRect();
+            const currentColumn = this.activeElement.closest('[data-gamepad-column]')?.dataset.gamepadColumn;
+            
+            let bestCandidateIndex = -1;
+            let minDistance = Infinity;
+            
+            for (let i = 0; i < this.focusableElements.length; i++) {
+                if (i === this.currentElementIndex) continue;
+                
+                const candidate = this.focusableElements[i];
+                const candidateRect = candidate.getBoundingClientRect();
+                const candidateColumn = candidate.closest('[data-gamepad-column]')?.dataset.gamepadColumn;
+
+                let dx = (candidateRect.left + candidateRect.width / 2) - (currentRect.left + currentRect.width / 2);
+                let dy = (candidateRect.top + candidateRect.height / 2) - (currentRect.top + currentRect.height / 2);
+                let distance = Math.sqrt(dx * dx + dy * dy);
+
+                let isBest = false;
+
+                switch (direction) {
+                    case 'up':
+                        if (dy < 0 && Math.abs(dx) < currentRect.width * 1.5) { // Prioritize vertical alignment
+                            if (distance < minDistance) isBest = true;
+                        }
+                        break;
+                    case 'down':
+                        if (dy > 0 && Math.abs(dx) < currentRect.width * 1.5) { // Prioritize vertical alignment
+                            if (distance < minDistance) isBest = true;
+                        }
+                        break;
+                    case 'left':
+                        if (dx < 0) {
+                            // Prefer elements in the same column or the column to the left
+                            if (currentColumn === 'tags' && candidateColumn === 'nodes') distance *= 0.5; // Bias towards jumping columns
+                            if (currentColumn === candidateColumn) distance *= 0.8; // Bias towards same column
+                            if (distance < minDistance) isBest = true;
+                        }
+                        break;
+                    case 'right':
+                        if (dx > 0) {
+                            // Prefer elements in the same column or the column to the right
+                             if (currentColumn === 'nodes' && candidateColumn === 'tags') distance *= 0.5; // Bias towards jumping columns
+                            if (currentColumn === candidateColumn) distance *= 0.8; // Bias towards same column
+                            if (distance < minDistance) isBest = true;
+                        }
+                        break;
+                }
+
+                if (isBest) {
+                    minDistance = distance;
+                    bestCandidateIndex = i;
+                }
+            }
+
+            if (bestCandidateIndex !== -1) {
+                return bestCandidateIndex;
             }
         }
         
-        // For horizontal navigation (left/right)
-        else if (direction === 'left' || direction === 'right') {
-            // If on a row, only find action buttons within that row
-            if (isMachineRow) {
-                // Log to help debug
-                console.log('[Gamepad] Looking for action buttons in row:', this.activeElement);
-                
-                // Get all action buttons in this row - the issue is these might not be direct children
-                let actionButtons = [];
-                
-                // CUSTOM DOM TRAVERSAL: Since the buttons aren't in cells, but directly within row elements
-                // and might be in a div container, we need a more comprehensive search
-                
-                // First try to find buttons with Alpine click handlers (@click)
-                const rowButtons = Array.from(this.activeElement.querySelectorAll('[class*="inline-flex"], [class*="rounded"], [class*="py-1"], [class*="px-3"]'));
-                console.log(`[Gamepad] Found ${rowButtons.length} potential action buttons with button styling`);
-                
-                if (rowButtons.length > 0) {
-                    // Filter to likely action buttons
-                    actionButtons = rowButtons.filter(btn => {
-                        // Check various properties that suggest this is an action button
-                        const hasClickHandler = btn.hasAttribute('@click') || 
-                                               btn.hasAttribute('x-on:click') ||
-                                               btn.hasAttribute('v-on:click') ||
-                                               btn.hasAttribute('ng-click') ||
-                                               btn.hasAttribute('data-action');
-                                               
-                        const isActionLike = btn.classList.contains('rounded') || 
-                                           btn.classList.contains('btn') || 
-                                           btn.classList.contains('button') ||
-                                           btn.tagName === 'BUTTON' ||
-                                           (btn.tagName === 'A' && btn.hasAttribute('href'));
-                                           
-                        return isActionLike || hasClickHandler;
-                    });
-                }
-                
-                // If that failed, try for any buttons or links
-                if (actionButtons.length === 0) {
-                    // Look for any buttons or links within the row
-                    actionButtons = Array.from(this.activeElement.querySelectorAll('button, a[href]'));
-                    console.log(`[Gamepad] Found ${actionButtons.length} basic buttons and links`);
-                }
-                
-                // If that failed too, look for tag buttons specifically
-                if (actionButtons.length === 0) {
-                    const allElements = Array.from(this.activeElement.querySelectorAll('*'));
-                    actionButtons = allElements.filter(el => {
-                        const text = el.textContent?.trim();
-                        return text === '🏷️ Tags' || text === '♻️ Reimage' || text === '⏻ Power';
-                    });
-                    console.log(`[Gamepad] Found ${actionButtons.length} buttons by text content`);
-                }
-                
-                // Filter to only include buttons that are focusable and not excluded
-                actionButtons = actionButtons.filter(button => {
-                    // Basic visibility check
-                    try {
-                        const style = window.getComputedStyle(button);
-                        if (style.display === 'none' || style.visibility === 'hidden') {
-                            return false;
-                        }
-                    } catch (e) {
-                        return false;
-                    }
-                    
-                    // Check if it's already in focusable elements
-                    const isIncluded = this.focusableElements.includes(button);
-                    
-                    // If not included yet, check if we should add it
-                    if (!isIncluded) {
-                        // Add the button to focusable elements if it looks like a real button
-                        const isRealButton = 
-                            button.tagName === 'BUTTON' || 
-                            button.tagName === 'A' || 
-                            button.getAttribute('role') === 'button' ||
-                            button.classList.contains('btn') ||
-                            button.classList.contains('button') ||
-                            button.classList.contains('rounded');
-                            
-                        if (isRealButton && !button.classList.contains('gamepad-nav-exclude')) {
-                            console.log('[Gamepad] Adding button to focusable elements:', button);
-                            this.focusableElements.push(button);
-                            return true;
-                        }
-                        return false;
-                    }
-                    
-                    // Check excluded flag
-                    const isExcluded = button.classList.contains('gamepad-nav-exclude');
-                    console.log(`[Gamepad] Button ${button.textContent?.trim() || button}: included=${isIncluded}, excluded=${isExcluded}`);
-                    return isIncluded && !isExcluded;
-                });
-                
-                console.log(`[Gamepad] Found ${actionButtons.length} final action buttons in this row`);
-                
-                if (actionButtons.length === 0) {
-                    console.log('[Gamepad] No action buttons found in this row, staying on row');
-                    return this.currentElementIndex; // No action buttons to navigate to
-                }
-                
-                // If on an action button, navigate between buttons or back to row
-                if (isActionButton) {
-                    const parentRow = this.activeElement.closest('tr[data-machine-id]');
-                    if (!parentRow) {
-                        return this.currentElementIndex; // Shouldn't happen
-                    }
-                    
-                    // For Tags button or any button with "Tags" text, always go back to row when pressing left
-                    if (direction === 'left' && 
-                        this.activeElement.textContent && 
-                        this.activeElement.textContent.includes('Tags')) {
-                        console.log('[Gamepad] Tags button detected, going back to row');
-                        return this.focusableElements.indexOf(parentRow);
-                    }
-                    
-                    // Get all action buttons in this row
-                    const actionButtons = Array.from(parentRow.querySelectorAll('button, a[href], [class*="rounded"], [class*="inline-flex"]'))
-                        .filter(button => {
-                            return this.focusableElements.includes(button) && 
-                                   !button.classList.contains('gamepad-nav-exclude');
-                        });
-                    
-                    if (actionButtons.length <= 1) {
-                        // Only one button, navigate back to the row
-                        console.log('[Gamepad] Only one action button, returning to row');
-                        const rowIndex = this.focusableElements.indexOf(parentRow);
-                        return rowIndex !== -1 ? rowIndex : this.currentElementIndex;
-                    }
-                    
-                    // Sort buttons by their position from left to right
-                    actionButtons.sort((a, b) => {
-                        const rectA = a.getBoundingClientRect();
-                        const rectB = b.getBoundingClientRect();
-                        return rectA.left - rectB.left;
-                    });
-                    
-                    // Find current button index in the buttons array
-                    const currentButtonIndex = actionButtons.indexOf(this.activeElement);
-                    console.log(`[Gamepad] Current button index: ${currentButtonIndex} of ${actionButtons.length}`);
-                    
-                    if (currentButtonIndex === -1) {
-                        console.log('[Gamepad] Button not found in sorted array, returning to row');
-                        return this.focusableElements.indexOf(parentRow);
-                    }
-                    
-                    // Navigate to next/previous button
-                    if (direction === 'right') {
-                        // If at the last button, go back to row
-                        if (currentButtonIndex === actionButtons.length - 1) {
-                            console.log('[Gamepad] At last button, returning to row');
-                            return this.focusableElements.indexOf(parentRow);
-                        }
-                        // Otherwise go to next button
-                        console.log(`[Gamepad] Moving to next button: ${currentButtonIndex + 1}`);
-                        return this.focusableElements.indexOf(actionButtons[currentButtonIndex + 1]);
-                    } else {
-                        // If at the first button, go back to row
-                        if (currentButtonIndex === 0) {
-                            console.log('[Gamepad] At first button, returning to row');
-                            return this.focusableElements.indexOf(parentRow);
-                        }
-                        // Otherwise go to previous button
-                        console.log(`[Gamepad] Moving to previous button: ${currentButtonIndex - 1}`);
-                        return this.focusableElements.indexOf(actionButtons[currentButtonIndex - 1]);
-                    }
-                }
-                // Add Machine button or other element - fall back to standard navigation
-                else {
-                    return this.findAdjacentElementStandard(direction);
-                }
-            }
-            // If on an action button, navigate between buttons or back to row
-            else if (isActionButton) {
-                const parentRow = this.activeElement.closest('tr[data-machine-id]');
-                if (!parentRow) {
-                    return this.currentElementIndex; // Shouldn't happen
-                }
-                
-                // For Tags button or any button with "Tags" text, always go back to row when pressing left
-                if (direction === 'left' && 
-                    this.activeElement.textContent && 
-                    this.activeElement.textContent.includes('Tags')) {
-                    console.log('[Gamepad] Tags button detected, going back to row');
-                    return this.focusableElements.indexOf(parentRow);
-                }
-                
-                // Get all action buttons in this row
-                const actionButtons = Array.from(parentRow.querySelectorAll('button, a[href], [class*="rounded"], [class*="inline-flex"]'))
-                    .filter(button => {
-                        return this.focusableElements.includes(button) && 
-                               !button.classList.contains('gamepad-nav-exclude');
-                    });
-                
-                if (actionButtons.length <= 1) {
-                    // Only one button, navigate back to the row
-                    console.log('[Gamepad] Only one action button, returning to row');
-                    const rowIndex = this.focusableElements.indexOf(parentRow);
-                    return rowIndex !== -1 ? rowIndex : this.currentElementIndex;
-                }
-                
-                // Sort buttons by their position from left to right
-                actionButtons.sort((a, b) => {
-                    const rectA = a.getBoundingClientRect();
-                    const rectB = b.getBoundingClientRect();
-                    return rectA.left - rectB.left;
-                });
-                
-                // Find current button index in the buttons array
-                const currentButtonIndex = actionButtons.indexOf(this.activeElement);
-                console.log(`[Gamepad] Current button index: ${currentButtonIndex} of ${actionButtons.length}`);
-                
-                if (currentButtonIndex === -1) {
-                    console.log('[Gamepad] Button not found in sorted array, returning to row');
-                    return this.focusableElements.indexOf(parentRow);
-                }
-                
-                // Navigate to next/previous button
-                if (direction === 'right') {
-                    // If at the last button, go back to row
-                    if (currentButtonIndex === actionButtons.length - 1) {
-                        console.log('[Gamepad] At last button, returning to row');
-                        return this.focusableElements.indexOf(parentRow);
-                    }
-                    // Otherwise go to next button
-                    console.log(`[Gamepad] Moving to next button: ${currentButtonIndex + 1}`);
-                    return this.focusableElements.indexOf(actionButtons[currentButtonIndex + 1]);
-                } else {
-                    // If at the first button, go back to row
-                    if (currentButtonIndex === 0) {
-                        console.log('[Gamepad] At first button, returning to row');
-                        return this.focusableElements.indexOf(parentRow);
-                    }
-                    // Otherwise go to previous button
-                    console.log(`[Gamepad] Moving to previous button: ${currentButtonIndex - 1}`);
-                    return this.focusableElements.indexOf(actionButtons[currentButtonIndex - 1]);
-                }
-            }
-            // Add Machine button or other element - fall back to standard navigation
-            else {
-                return this.findAdjacentElementStandard(direction);
-            }
-        }
-        
-        // If we get here, use standard navigation
-        return this.findAdjacentElementStandard(direction);
+        // Fallback to original logic if not on tags page or no candidate found
+        return this.findAdjacentElementStandard(direction); // Assuming original logic is renamed
     }
     
-    // Original adjacent element finding logic, extracted to a method
+    // Rename the original findAdjacentElement logic
     findAdjacentElementStandard(direction, modalElement = null) {
+        // Find the currently focused element's position
         const currentRect = this.activeElement.getBoundingClientRect();
         const currentCenterX = currentRect.left + currentRect.width / 2;
         const currentCenterY = currentRect.top + currentRect.height / 2;
@@ -2147,16 +1829,19 @@ class GamepadController {
         let bestIndex = -1;
         let bestDistance = Number.POSITIVE_INFINITY;
         
-        // Check all focusable elements
-        this.focusableElements.forEach((element, index) => {
+        // Determine the search scope (all elements or just within the modal)
+        const elementsToSearch = modalElement 
+            ? this.focusableElements.filter(el => modalElement.contains(el)) 
+            : this.focusableElements;
+
+        // Check all focusable elements within the scope
+        elementsToSearch.forEach((element, index) => {
+            // Get the actual index in the main focusableElements array if searching all
+            const originalIndex = modalElement ? this.focusableElements.indexOf(element) : index;
+            
             if (element === this.activeElement) return;
-            
-            // If we're in a modal, only navigate to elements also in that modal
-            if (modalElement && !modalElement.contains(element)) {
-                return;
-            }
-            
-            // Make sure the element is actually visible
+
+            // Make sure the element is actually visible and has dimensions
             const rect = element.getBoundingClientRect();
             if (rect.width === 0 || rect.height === 0) return;
             
@@ -2165,40 +1850,45 @@ class GamepadController {
             
             // Check if element is in the right direction
             let inRightDirection = false;
+            let verticalDistance = Math.abs(centerY - currentCenterY);
+            let horizontalDistance = Math.abs(centerX - currentCenterX);
+
             switch (direction) {
                 case 'up':
-                    inRightDirection = centerY < currentCenterY - 10; // Must be significantly above
+                    // Must be strictly above and prioritize vertical alignment
+                    inRightDirection = centerY < currentCenterY && horizontalDistance < (currentRect.width / 2 + rect.width / 2 + 50); 
                     break;
                 case 'down':
-                    inRightDirection = centerY > currentCenterY + 10; // Must be significantly below
+                    // Must be strictly below and prioritize vertical alignment
+                    inRightDirection = centerY > currentCenterY && horizontalDistance < (currentRect.width / 2 + rect.width / 2 + 50);
                     break;
                 case 'left':
-                    inRightDirection = centerX < currentCenterX - 10; // Must be significantly to the left
+                    // Must be strictly left and prioritize horizontal alignment
+                    inRightDirection = centerX < currentCenterX && verticalDistance < (currentRect.height / 2 + rect.height / 2 + 50);
                     break;
                 case 'right':
-                    inRightDirection = centerX > currentCenterX + 10; // Must be significantly to the right
+                    // Must be strictly right and prioritize horizontal alignment
+                    inRightDirection = centerX > currentCenterX && verticalDistance < (currentRect.height / 2 + rect.height / 2 + 50);
                     break;
             }
             
             if (inRightDirection) {
-                // Calculate distance based on direction priority
+                // Calculate distance: strongly prioritize primary axis, penalize secondary axis deviation
                 let distance;
-                
                 if (direction === 'up' || direction === 'down') {
-                    // For up/down prioritize vertical distance much more strongly
-                    distance = Math.abs(centerY - currentCenterY) * 0.8 + Math.abs(centerX - currentCenterX) * 5;
-                } else {
-                    // For left/right prioritize horizontal distance much more strongly
-                    distance = Math.abs(centerX - currentCenterX) * 0.8 + Math.abs(centerY - currentCenterY) * 5;
+                    distance = verticalDistance + horizontalDistance * 3; // Penalize horizontal deviation more for vertical nav
+                } else { // left or right
+                    distance = horizontalDistance + verticalDistance * 3; // Penalize vertical deviation more for horizontal nav
                 }
                 
                 if (distance < bestDistance) {
                     bestDistance = distance;
-                    bestIndex = index;
+                    bestIndex = originalIndex; // Store the index from the main array
                 }
             }
         });
         
+        // Return the best found index or the current index if none found
         return bestIndex !== -1 ? bestIndex : this.currentElementIndex;
     }
     

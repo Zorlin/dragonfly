@@ -1,0 +1,1330 @@
+{% extends "base.html" %}
+
+{% block title %}Tags - Dragonfly{% endblock %}
+
+{% block head %}
+<style>
+  /* Base styles for drag & drop */
+  .tag-card, .node-card {
+    transition: all 0.2s ease;
+    position: relative;
+  }
+
+  .node-card {
+    cursor: grab;
+    padding: 0.25rem;
+    margin: 0.125rem;
+    min-height: 2.5rem;
+    display: flex;
+    align-items: center;
+  }
+  
+  .node-card:active {
+    cursor: grabbing;
+    transform: scale(0.97);
+    z-index: 10;
+  }
+  
+  .node-card.dragging {
+    opacity: 0.4;
+    box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.5);
+  }
+
+  .tag-card {
+    border: 1px solid rgba(139, 92, 246, 0.2);
+    padding: 0.5rem;
+    height: 2.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  
+  .tag-card.drag-over {
+    border-color: rgba(139, 92, 246, 0.7);
+    background-color: rgba(139, 92, 246, 0.1);
+    transform: scale(1.03);
+  }
+
+  /* New Tag Card specific style */
+  .new-tag-card {
+    border-style: dashed;
+    cursor: pointer;
+    justify-content: center;
+  }
+  
+  .new-tag-card.drag-over {
+    border-color: rgba(52, 211, 153, 0.7);
+    background-color: rgba(52, 211, 153, 0.1);
+  }
+
+  .ghost-card {
+    border: 1px dashed rgba(139, 92, 246, 0.3);
+    background-color: rgba(139, 92, 246, 0.05);
+    border-radius: 0.25rem;
+    height: 2.5rem;
+  }
+
+  /* Compact node card styles */
+  .compact-node-tag {
+    padding: 0.1rem 0.25rem;
+    font-size: 0.6rem;
+    line-height: 0.8rem;
+    border-radius: 0.25rem;
+    margin-right: 0.25rem;
+  }
+
+  /* Status indicators */
+  .status-dot {
+    height: 0.5rem;
+    width: 0.5rem;
+    border-radius: 50%;
+    flex-shrink: 0;
+    margin-right: 0.5rem;
+  }
+  
+  /* Selected node styles */
+  .node-card.selected {
+    border: 2px solid #6366f1 !important;
+    background-color: rgba(99, 102, 241, 0.1);
+  }
+  
+  .node-card.current {
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.8);
+  }
+  
+  /* Selection rectangle for box select */
+  .selection-box {
+    position: absolute;
+    border: 1px solid rgba(99, 102, 241, 0.8);
+    background-color: rgba(99, 102, 241, 0.1);
+    z-index: 100;
+    pointer-events: none;
+  }
+  
+  /* Sort button styles */
+  .sort-button {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem;
+    border-radius: 0.25rem;
+  }
+  
+  .sort-button svg {
+    height: 0.875rem;
+    width: 0.875rem;
+    margin-left: 0.25rem;
+  }
+  
+  /* Selected node info section */
+  .selected-node-info {
+    background-color: rgba(99, 102, 241, 0.05);
+    border: 1px solid rgba(99, 102, 241, 0.2);
+    border-radius: 0.375rem;
+    padding: 0.75rem;
+    margin-bottom: 0.75rem;
+  }
+
+  /* Gamepad Focus Styles */
+  .gamepad-focus {
+    outline: 2px solid rgba(99, 102, 241, 0.8) !important;
+    outline-offset: 1px !important;
+    position: relative;
+    z-index: 40;
+    box-shadow: 0 0 5px rgba(99, 102, 241, 0.5);
+    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+  
+  .node-card.gamepad-focus,
+  .tag-card.gamepad-focus {
+    transform: scale(1.02);
+    box-shadow: 0 0 5px rgba(129, 140, 248, 0.8);
+  }
+  
+  .node-card.selected-for-gamepad {
+    outline: 1px solid rgba(99, 102, 241, 0.8) !important;
+    outline-offset: 1px !important;
+    box-shadow: 0 0 4px rgba(99, 102, 241, 0.6);
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+  }
+  
+  /* Ultra-compact grid */
+  .ultra-compact-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 0.25rem;
+  }
+  
+  @media (min-width: 1280px) {
+    .ultra-compact-grid {
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    }
+  }
+  
+  @media (min-width: 1536px) {
+    .ultra-compact-grid {
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    }
+  }
+  
+  @media (min-width: 1920px) {
+    .ultra-compact-grid {
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    }
+  }
+  
+  @media (min-width: 2560px) {
+    .ultra-compact-grid {
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    }
+  }
+  
+  /* Tag grid */
+  .tag-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 0.25rem;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="h-full flex flex-col px-2 sm:px-3 lg:px-4 py-4">
+  <header class="mb-3 flex-shrink-0">
+    <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Tags Manager</h1>
+    <p class="mt-1 text-sm text-gray-600 dark:text-gray-300">
+      Drag and drop nodes to assign tags or perform bulk actions.
+    </p>
+  </header>
+
+  <div x-data="tagManager()" x-init="window.Alpine.store('tagManager', this)" x-cloak class="flex-grow min-h-0 flex flex-col">
+    <!-- Loading Indicator -->
+    <div x-show="isLoading" class="flex justify-center items-center h-full">
+      <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-500"></div>
+    </div>
+
+    <!-- Main Interface -->
+    <div x-show="!isLoading" class="flex-grow flex flex-col">
+      
+      <!-- Tags Section -->
+      <div class="mb-4 pb-2 border-b border-gray-200 dark:border-gray-700">
+        <div class="flex flex-wrap items-center justify-between mb-2">
+          <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+            Tags
+            <span class="ml-2 text-sm font-normal text-gray-500 dark:text-gray-400" x-text="'(' + Object.keys(tagBuckets).length + ' total)'"></span>
+          </h2>
+          
+          <!-- Remove tag creation input -->
+        </div>
+        
+        <!-- Selected node info -->
+        <div class="selected-node-info mb-3" x-show="currentNodeId !== null">
+          <div class="mb-2">
+            <span class="font-semibold">Selected:</span>
+            <span x-text="selectedNodeIds.length > 1 ? 
+              `${selectedNodeIds.length} nodes selected` : 
+              getCurrentNodeName()"></span>
+          </div>
+          <div x-show="selectedNodeIds.length === 1">
+            <span class="font-semibold">Tags:</span>
+            <div class="flex flex-wrap gap-1 mt-1">
+              <template x-for="tag in getCurrentNodeTags()">
+                <span class="bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200 text-xs px-2 py-0.5 rounded" x-text="tag"></span>
+              </template>
+              <span x-show="getCurrentNodeTags().length === 0" class="text-gray-500 italic text-xs">No tags</span>
+            </div>
+          </div>
+          <div class="mt-2 text-sm text-gray-600 dark:text-gray-400" x-show="selectedNodeIds.length > 0">
+            Drag to a tag to assign, or use <kbd class="px-1 py-0.5 bg-gray-200 dark:bg-gray-700 rounded">CMD</kbd>/<kbd class="px-1 py-0.5 bg-gray-200 dark:bg-gray-700 rounded">CTRL</kbd>+click to select multiple nodes.
+          </div>
+        </div>
+        
+        <!-- Tag Grid -->
+        <div class="tag-grid" data-gamepad-column="tags" x-bind:data-refresh="refreshTrigger">
+          <!-- "New" Tag Card -->
+          <div
+            id="new-tag-card"
+            data-tag-name="__NEW__"
+            data-gamepad-focusable="true"
+            data-gamepad-droptarget="true"
+            class="tag-card new-tag-card bg-blue-500 text-white dark:bg-blue-600 rounded-md"
+            @click="isCreatingTag = true; $nextTick(() => $refs.newTagInput.focus())"
+            @dragover.prevent="dragOver($event, '__NEW__')"
+            @dragleave.prevent="dragLeave($event)"
+            @drop.prevent="drop($event, '__NEW__')"
+            :class="{'drag-over': currentDragOverTag === '__NEW__'}"
+            x-show="!isCreatingTag"
+          >
+            <span class="font-medium">new tag</span>
+          </div>
+          
+          <!-- New Tag Input (appears when new tag card is clicked) -->
+          <div 
+            x-show="isCreatingTag" 
+            class="relative"
+            @keydown.escape="isCreatingTag = false"
+            @click.outside="isCreatingTag = false"
+          >
+            <div class="tag-card bg-white dark:bg-gray-800 rounded-md shadow-sm">
+              <input 
+                type="text" 
+                x-ref="newTagInput"
+                x-model="inlineTagName" 
+                @keyup.enter="createNewTagInline()"
+                class="w-full rounded-md border-gray-300 bg-transparent shadow-sm focus:border-purple-500 focus:ring-purple-500 dark:border-gray-600 dark:text-white text-sm py-1 px-2"
+                placeholder="Type tag name..."
+              >
+            </div>
+          </div>
+          <button 
+            @click="createNewTagInline()" 
+            class="text-green-500 hover:text-green-600 focus:outline-none p-0 inline-flex items-center justify-center w-5 h-5 mt-3"
+            title="Create tag"
+            x-show="isCreatingTag"
+          >
+            <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+            </svg>
+          </button>
+          
+          <!-- Regular Tag Cards -->
+          <template x-for="(nodes, tag) in tagBuckets" :key="tag">
+            <div
+              :id="'tag-card-' + tag"
+              :data-tag-name="tag"
+              data-gamepad-focusable="true"
+              data-gamepad-droptarget="true"
+              class="tag-card bg-blue-500 text-white dark:bg-blue-600 rounded-md shadow-sm"
+              @dragover.prevent="dragOver($event, tag)"
+              @dragleave.prevent="dragLeave($event)"
+              @drop.prevent="drop($event, tag)"
+              @click="selectedNodeIds.length > 0 && assignSelectedNodesToTag(tag)"
+              :class="{
+                'drag-over': currentDragOverTag === tag,
+                'cursor-pointer': selectedNodeIds.length > 0
+              }"
+            >
+              <span class="font-medium truncate mr-auto" x-text="tag"></span>
+              <div class="flex items-center ml-2">
+                <span class="font-bold mr-1" x-text="nodes.length"></span>
+                <button @click.stop.prevent="deleteTag(tag)" type="button" data-tag-action="delete"
+                  class="text-white opacity-50 hover:opacity-100 focus:opacity-100 p-0.5 rounded">
+                  <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <!-- Nodes Section -->
+      <div class="flex-grow flex flex-col min-h-0" data-gamepad-column="nodes">
+        <div class="flex items-center justify-between mb-2 flex-shrink-0">
+          <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+            Nodes
+            <span class="ml-2 text-sm font-normal text-gray-500 dark:text-gray-400" x-text="'(' + availableNodes.length + ' total)'"></span>
+          </h2>
+          
+          <div class="flex space-x-1">
+            <!-- Search Input -->
+            <div class="relative">
+              <input type="text" x-model="nodeSearchQuery" @input.debounce.300ms="filterNodes(currentFilter)"
+                     data-gamepad-focusable="true"
+                     class="rounded-md border-gray-300 shadow-sm focus:border-purple-500 focus:ring-purple-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white sm:text-sm py-1 pr-8 pl-2"
+                     placeholder="Search nodes...">
+              <div class="absolute inset-y-0 right-0 flex items-center pr-2 pointer-events-none">
+                <svg class="h-4 w-4 text-gray-400" viewBox="0 0 20 20" fill="currentColor">
+                  <path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd" />
+                </svg>
+              </div>
+            </div>
+            
+            <!-- Sort Button -->
+            <button 
+              @click="cycleSortOption()" 
+              data-gamepad-focusable="true"
+              class="sort-button bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300"
+              data-gamepad-action="sort"
+              title="Change sort order"
+            >
+              <span x-text="getSortLabel()"></span>
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4h13M3 8h9m-9 4h6m4 0l4-4m0 0l4 4m-4-4v12" />
+              </svg>
+            </button>
+            
+            <!-- Filter Buttons -->
+            <button type="button" @click="filterNodes('all')" 
+                   :class="{'bg-purple-600 text-white': currentFilter === 'all', 'bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300': currentFilter !== 'all'}"
+                   class="px-2 py-1 rounded-md text-xs font-medium">
+              All
+            </button>
+            <button type="button" @click="filterNodes('gpu')"
+                   :class="{'bg-purple-600 text-white': currentFilter === 'gpu', 'bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300': currentFilter !== 'gpu'}"
+                   class="px-2 py-1 rounded-md text-xs font-medium">
+              GPU
+            </button>
+            <button type="button" @click="filterNodes('mismatched')"
+                   :class="{'bg-purple-600 text-white': currentFilter === 'mismatched', 'bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300': currentFilter !== 'mismatched'}"
+                   class="px-2 py-1 rounded-md text-xs font-medium">
+              Mismatched
+            </button>
+            <button type="button" @click="filterNodes('reimaging')"
+                   :class="{'bg-purple-600 text-white': currentFilter === 'reimaging', 'bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300': currentFilter !== 'reimaging'}"
+                   class="px-2 py-1 rounded-md text-xs font-medium">
+              Reimaging
+            </button>
+          </div>
+        </div>
+
+        <!-- Node Grid -->
+        <div 
+          class="flex-grow overflow-y-auto pr-1 relative" 
+          @dragover.prevent
+          @mousedown="startBoxSelect($event)"
+          @mousemove="updateBoxSelect($event)"
+          @mouseup="endBoxSelect($event)"
+          id="nodes-container"
+        >
+          <div x-show="filteredNodes.length === 0" class="text-center py-6 text-gray-500 dark:text-gray-400 italic">
+            No nodes match the current filter or search.
+          </div>
+
+          <!-- Selection box for box select -->
+          <div 
+            class="selection-box" 
+            x-ref="selectionBox" 
+            style="display: none; top: 0; left: 0; width: 0; height: 0;"
+          ></div>
+
+          <div class="ultra-compact-grid">
+            <template x-for="node in filteredNodes" :key="node.id">
+              <div
+                :id="'node-' + node.id"
+                :data-node-id="node.id"
+                data-gamepad-focusable="true"
+                class="node-card bg-white dark:bg-gray-800 rounded-md border border-gray-200 dark:border-gray-700 text-xs"
+                draggable="true"
+                @dragstart="startDrag($event, node)"
+                @dragend="endDrag()"
+                @click="handleNodeClick($event, node.id)"
+                :class="{ 
+                  'selected': isNodeSelected(node.id), 
+                  'current': currentNodeId === node.id,
+                  'selected-for-gamepad': selectedNodeId === node.id 
+                }"
+              >
+                <!-- Status Dot -->
+                <span class="status-dot"
+                     :class="{
+                         'bg-green-500': node.status === 'Ready',
+                         'bg-yellow-500': node.status === 'InstallingOS' || node.status === 'NeedsOS',
+                         'bg-red-500': typeof node.status === 'object' && node.status.Error,
+                         'bg-gray-400': node.status === 'Offline' || !node.status
+                     }"
+                     :title="formatStatus(node.status)">
+                </span>
+                
+                <!-- Node Letter -->
+                <span class="flex-shrink-0 w-5 h-5 rounded-full bg-purple-600 dark:bg-purple-700 text-white flex items-center justify-center mr-1.5 font-medium" x-text="node.hostname ? node.hostname[0].toUpperCase() : 'N'"></span>
+                
+                <!-- Info -->
+                <div class="flex-grow min-w-0">
+                  <div class="font-medium text-gray-900 dark:text-white truncate" x-text="node.hostname || node.id"></div>
+                  <div class="text-gray-500 dark:text-gray-400 truncate" x-text="node.ip_address || 'No IP'"></div>
+                </div>
+                
+                <!-- Tags -->
+                <div class="flex flex-wrap ml-1 max-w-[40%]">
+                  <template x-for="(tag, index) in node.tags?.slice(0, 2) || []" :key="index">
+                    <span class="compact-node-tag bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200" x-text="tag"></span>
+                  </template>
+                  <template x-if="(node.tags?.length || 0) > 2">
+                    <span class="compact-node-tag bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200">
+                      +<span x-text="(node.tags?.length || 0) - 2"></span>
+                    </span>
+                  </template>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Assignment Toast -->
+    <div id="assignment-toast" class="assignment-toast hidden fixed bottom-4 right-4 max-w-xs bg-green-700 rounded-lg shadow-lg z-50 p-3 text-white">
+      <div class="flex items-start">
+        <div class="flex-shrink-0 pt-0.5">
+          <svg class="h-5 w-5 text-green-200" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+          </svg>
+        </div>
+        <div class="ml-3 flex-1">
+          <p class="text-sm font-medium text-white" id="toast-message"></p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  function tagManager() {
+    return {
+      // Data
+      tagBuckets: {}, // Stores tag -> [nodeId, nodeId, ...]
+      availableNodes: [], // All nodes fetched from API
+      filteredNodes: [], // Nodes currently displayed after filtering/search
+      isLoading: true,
+      currentDragOverTag: null, // Tag name or '__NEW__'
+      draggedNodeId: null, // ID of the node being dragged
+      nodeSearchQuery: '',
+      currentFilter: 'all', // 'all', 'gpu', 'mismatched', 'reimaging'
+      selectedNodeId: null, // For gamepad selection
+      selectedNodeIds: [], // For multi-select with CMD/CTRL+click
+      currentNodeId: null, // Currently focused node for showing tags
+      newTagName: '', // For the input field
+      isCreatingTag: false, // Whether the inline tag input is visible
+      inlineTagName: '', // For the inline tag input
+      refreshTrigger: 0, // Used to force UI refresh
+      
+      // Box select variables
+      isBoxSelecting: false,
+      boxSelectStart: { x: 0, y: 0 },
+      boxSelectEnd: { x: 0, y: 0 },
+      boxSelectCtrlKey: false,
+      
+      // Sorting options
+      sortOption: 'name-asc', // Default sort by name ascending
+      sortOptions: [
+        { id: 'name-asc', label: 'Name ↑' },
+        { id: 'name-desc', label: 'Name ↓' },
+        { id: 'status', label: 'Status' },
+        { id: 'tags', label: 'Tags' },
+      ],
+      
+      // Initialize
+      init() {
+        this.loadData();
+        window.Alpine.store('tagManager', this); // Expose for gamepad
+
+        // Global listener to clear drag state if needed (e.g., drag ends outside window)
+        document.addEventListener('dragend', () => {
+            if (this.isDragging) {
+                this.endDrag();
+            }
+        });
+      },
+
+      // Load data from API
+      async loadData() {
+        this.isLoading = true;
+        try {
+          const response = await fetch('/api/machines');
+          if (!response.ok) throw new Error(`Failed to load machines: ${response.statusText}`);
+          const machines = await response.json();
+
+          // Ensure all nodes have basic properties and tags array
+          this.availableNodes = machines.map(machine => ({
+            id: machine.id,
+            hostname: machine.hostname,
+            ip_address: machine.ip_address || null, // Include IP
+            status: machine.status || 'Unknown',
+            tags: machine.tags || []
+          }));
+
+          // Initialize tag buckets from machines
+          this.rebuildTagBuckets();
+          
+          // Load tags from localStorage (includes "empty" tags with no machines)
+          this.loadLocalTags();
+
+          // Initial filter application
+          this.filterNodes(this.currentFilter);
+
+        } catch (error) {
+          console.error('Error loading data:', error);
+          this.showToast(`Error loading data: ${error.message}`, 'error');
+        } finally {
+          this.isLoading = false;
+        }
+      },
+      
+      // Load tags from localStorage
+      loadLocalTags() {
+        try {
+          const savedTags = localStorage.getItem('dragonfly_empty_tags');
+          if (savedTags) {
+            const emptyTags = JSON.parse(savedTags);
+            
+            // Add each empty tag, preserving existing tagBuckets
+            const updatedBuckets = {...this.tagBuckets};
+            emptyTags.forEach(tag => {
+              if (!updatedBuckets[tag]) {
+                updatedBuckets[tag] = [];
+              }
+            });
+            
+            // Sort the tags alphabetically
+            const sortedEntries = Object.entries(updatedBuckets).sort(([a], [b]) => a.localeCompare(b));
+            this.tagBuckets = Object.fromEntries(sortedEntries);
+            
+            // Force UI update
+            this.forceRefresh();
+          }
+        } catch (e) {
+          console.error('Error loading tags from localStorage:', e);
+        }
+      },
+      
+      // Save empty tags to localStorage
+      saveLocalTags() {
+        try {
+          // Get tags that have no machines
+          const emptyTags = Object.entries(this.tagBuckets)
+            .filter(([_, nodes]) => nodes.length === 0)
+            .map(([tag, _]) => tag);
+          
+          localStorage.setItem('dragonfly_empty_tags', JSON.stringify(emptyTags));
+        } catch (e) {
+          console.error('Error saving tags to localStorage:', e);
+        }
+      },
+
+      // Rebuild tagBuckets from availableNodes.tags
+      rebuildTagBuckets() {
+          const buckets = {};
+          this.availableNodes.forEach(node => {
+              if (node.tags && Array.isArray(node.tags)) {
+                  node.tags.forEach(tag => {
+                      if (!buckets[tag]) {
+                          buckets[tag] = [];
+                      }
+                      if (!buckets[tag].includes(node.id)) {
+                          buckets[tag].push(node.id);
+                      }
+                  });
+              }
+          });
+          // Preserve order if needed, or sort keys
+          this.tagBuckets = Object.keys(buckets).sort().reduce((acc, key) => {
+              acc[key] = buckets[key];
+              return acc;
+          }, {});
+      },
+
+      // Filter nodes by search query and filter type
+      filterNodes(filter) {
+        // If called without args (e.g., from search input), use current filter
+        filter = filter || this.currentFilter;
+        this.currentFilter = filter;
+
+        let filtered = [...this.availableNodes];
+
+        // Apply search filter (hostname, id, ip)
+        if (this.nodeSearchQuery) {
+          const query = this.nodeSearchQuery.toLowerCase().trim();
+          if (query) {
+              filtered = filtered.filter(node =>
+                (node.hostname && node.hostname.toLowerCase().includes(query)) ||
+                node.id.toLowerCase().includes(query) ||
+                (node.ip_address && node.ip_address.toLowerCase().includes(query))
+              );
+          }
+        }
+
+        // Apply status/tag filters
+        if (filter === 'gpu') {
+          filtered = filtered.filter(node => node.tags && node.tags.includes('gpu'));
+        } else if (filter === 'mismatched') {
+          // Example: Adjust status checks as needed
+          filtered = filtered.filter(node =>
+            node.status === 'ExistingOS' ||
+            (typeof node.status === 'object' && node.status.Error)
+          );
+        } else if (filter === 'reimaging') {
+           filtered = filtered.filter(node => node.status === 'InstallingOS' || node.status === 'NeedsOS');
+        }
+        // 'all' filter doesn't need explicit filtering beyond search
+
+        // Apply sorting
+        this.applySorting(filtered);
+        
+        this.filteredNodes = filtered;
+      },
+      
+      // Apply sorting to the filtered nodes
+      applySorting(nodes) {
+        const option = this.sortOption;
+        
+        if (option === 'name-asc') {
+          nodes.sort((a, b) => {
+            const nameA = (a.hostname || a.id || '').toLowerCase();
+            const nameB = (b.hostname || b.id || '').toLowerCase();
+            return nameA.localeCompare(nameB);
+          });
+        } else if (option === 'name-desc') {
+          nodes.sort((a, b) => {
+            const nameA = (a.hostname || a.id || '').toLowerCase();
+            const nameB = (b.hostname || b.id || '').toLowerCase();
+            return nameB.localeCompare(nameA);
+          });
+        } else if (option === 'status') {
+          nodes.sort((a, b) => {
+            const statusA = this.formatStatus(a.status);
+            const statusB = this.formatStatus(b.status);
+            return statusA.localeCompare(statusB);
+          });
+        } else if (option === 'tags') {
+          nodes.sort((a, b) => {
+            const tagsA = a.tags ? a.tags.length : 0;
+            const tagsB = b.tags ? b.tags.length : 0;
+            return tagsB - tagsA; // Sort by tag count (descending)
+          });
+        }
+      },
+      
+      // Get the current sort label
+      getSortLabel() {
+        const option = this.sortOptions.find(opt => opt.id === this.sortOption);
+        return option ? option.label : 'Sort';
+      },
+      
+      // Cycle through sort options
+      cycleSortOption() {
+        const currentIndex = this.sortOptions.findIndex(opt => opt.id === this.sortOption);
+        const nextIndex = (currentIndex + 1) % this.sortOptions.length;
+        this.sortOption = this.sortOptions[nextIndex].id;
+        this.filterNodes(this.currentFilter); // Re-apply filter and sort
+      },
+
+      // Box selection functions
+      startBoxSelect(event) {
+        // Only start box select if clicked on the container (not on a node)
+        if (event.target.id !== 'nodes-container' && !event.target.closest('#nodes-container > div')) return;
+        if (event.target.closest('.node-card')) return; // Don't start if clicked on a node
+        
+        this.isBoxSelecting = true;
+        
+        const container = document.getElementById('nodes-container');
+        const rect = container.getBoundingClientRect();
+        
+        // Calculate relative coordinates within the container
+        this.boxSelectStart = {
+          x: event.clientX - rect.left + container.scrollLeft,
+          y: event.clientY - rect.top + container.scrollTop
+        };
+        
+        // Store initial position for the selection box
+        this.boxSelectEnd = { ...this.boxSelectStart };
+        
+        // Set up the selection box
+        const selBox = this.$refs.selectionBox;
+        selBox.style.left = `${this.boxSelectStart.x}px`;
+        selBox.style.top = `${this.boxSelectStart.y}px`;
+        selBox.style.width = '0px';
+        selBox.style.height = '0px';
+        selBox.style.display = 'block';
+        
+        // Store CTRL key state
+        this.boxSelectCtrlKey = event.ctrlKey || event.metaKey;
+      },
+      
+      updateBoxSelect(event) {
+        if (!this.isBoxSelecting) return;
+        
+        const container = document.getElementById('nodes-container');
+        const rect = container.getBoundingClientRect();
+        
+        // Update end coordinates
+        this.boxSelectEnd = {
+          x: event.clientX - rect.left + container.scrollLeft,
+          y: event.clientY - rect.top + container.scrollTop
+        };
+        
+        // Calculate dimensions and position for the selection box
+        const left = Math.min(this.boxSelectStart.x, this.boxSelectEnd.x);
+        const top = Math.min(this.boxSelectStart.y, this.boxSelectEnd.y);
+        const width = Math.abs(this.boxSelectEnd.x - this.boxSelectStart.x);
+        const height = Math.abs(this.boxSelectEnd.y - this.boxSelectStart.y);
+        
+        // Update selection box
+        const selBox = this.$refs.selectionBox;
+        selBox.style.left = `${left}px`;
+        selBox.style.top = `${top}px`;
+        selBox.style.width = `${width}px`;
+        selBox.style.height = `${height}px`;
+      },
+      
+      endBoxSelect(event) {
+        if (!this.isBoxSelecting) return;
+        
+        // Get final selection box coordinates
+        const container = document.getElementById('nodes-container');
+        const selBox = this.$refs.selectionBox;
+        const selRect = {
+          left: parseInt(selBox.style.left, 10),
+          top: parseInt(selBox.style.top, 10),
+          right: parseInt(selBox.style.left, 10) + parseInt(selBox.style.width, 10),
+          bottom: parseInt(selBox.style.top, 10) + parseInt(selBox.style.height, 10)
+        };
+        
+        // Hide selection box
+        selBox.style.display = 'none';
+        
+        // Only process if the selection has size
+        if (Math.abs(this.boxSelectEnd.x - this.boxSelectStart.x) > 5 && 
+            Math.abs(this.boxSelectEnd.y - this.boxSelectStart.y) > 5) {
+          
+          // Find all nodes within the selection box
+          const selectedNodes = [];
+          document.querySelectorAll('.node-card').forEach(nodeEl => {
+            const nodeRect = nodeEl.getBoundingClientRect();
+            const containerRect = container.getBoundingClientRect();
+            
+            // Calculate node position relative to container
+            const nodePos = {
+              left: nodeRect.left - containerRect.left + container.scrollLeft,
+              top: nodeRect.top - containerRect.top + container.scrollTop,
+              right: nodeRect.right - containerRect.left + container.scrollLeft,
+              bottom: nodeRect.bottom - containerRect.top + container.scrollTop
+            };
+            
+            // Check if node is within selection box
+            const isIntersecting = !(
+              nodePos.right < selRect.left ||
+              nodePos.left > selRect.right ||
+              nodePos.bottom < selRect.top ||
+              nodePos.top > selRect.bottom
+            );
+            
+            if (isIntersecting) {
+              const nodeId = nodeEl.dataset.nodeId;
+              if (nodeId) selectedNodes.push(nodeId);
+            }
+          });
+          
+          // Update selection based on CTRL key
+          if (this.boxSelectCtrlKey) {
+            // Toggle selected state for nodes in the box
+            selectedNodes.forEach(nodeId => {
+              const index = this.selectedNodeIds.indexOf(nodeId);
+              if (index >= 0) {
+                // Remove if already selected
+                this.selectedNodeIds.splice(index, 1);
+              } else {
+                // Add if not selected
+                this.selectedNodeIds.push(nodeId);
+              }
+            });
+          } else {
+            // Replace current selection with nodes in the box
+            this.selectedNodeIds = selectedNodes;
+          }
+          
+          // Update current node if applicable
+          if (this.selectedNodeIds.length > 0) {
+            this.currentNodeId = this.selectedNodeIds[this.selectedNodeIds.length - 1];
+            this.selectedNodeId = this.currentNodeId; // For gamepad compatibility
+          } else {
+            this.currentNodeId = null;
+            this.selectedNodeId = null;
+          }
+          
+          // Force UI update
+          this.forceRefresh();
+        }
+        
+        this.isBoxSelecting = false;
+      },
+
+      // Create new tag from input field
+      createNewTagFromInput() {
+        if (this.newTagName && this.newTagName.trim()) {
+          // Prevent creating a tag named "new tag"
+          const trimmedName = this.newTagName.trim();
+          if (trimmedName.toLowerCase() === 'new tag') {
+            this.showToast('"new tag" is a reserved name and cannot be used', 'error');
+            return;
+          }
+          
+          this.createNewTag(trimmedName);
+          this.newTagName = '';
+        }
+      },
+      
+      // Create new tag from the inline input (when clicking new tag card)
+      createNewTagInline() {
+        if (this.inlineTagName && this.inlineTagName.trim()) {
+          // Prevent creating a tag named "new tag"
+          const trimmedName = this.inlineTagName.trim();
+          if (trimmedName.toLowerCase() === 'new tag') {
+            this.showToast('"new tag" is a reserved name and cannot be used', 'error');
+            return;
+          }
+          
+          this.createNewTag(trimmedName);
+          this.inlineTagName = '';
+          this.isCreatingTag = false;
+        }
+      },
+
+      // Prompt for and create a new tag
+      promptNewTag(nodeIdToAssign = null) {
+          if (nodeIdToAssign) {
+            // When we have a node to assign, show the prompt
+            const tagName = prompt(`Enter name for the new tag:`);
+            if (tagName && tagName.trim()) {
+                const cleanTagName = tagName.trim();
+                
+                // Check if it's an array of node IDs
+                if (Array.isArray(nodeIdToAssign)) {
+                  this.createNewTag(cleanTagName, nodeIdToAssign);
+                } else {
+                  this.createNewTag(cleanTagName, [nodeIdToAssign]);
+                }
+            }
+          } else {
+            // Without a node to assign, switch to inline editing mode
+            this.isCreatingTag = true;
+            this.$nextTick(() => this.$refs.newTagInput.focus());
+          }
+      },
+
+      // Create a new tag bucket (and potentially assign a node)
+      async createNewTag(tag, nodeIdsToAssign = null) {
+        if (!tag) return;
+
+        // Check if the tag already exists
+        if (this.tagBuckets[tag]) {
+          this.showToast(`Tag '${tag}' already exists`, 'warning');
+          // If node was dropped, still try to assign it
+          if (nodeIdsToAssign && nodeIdsToAssign.length > 0) {
+            try {
+              const promises = nodeIdsToAssign.map(nodeId => this.assignNodeToTag(nodeId, tag));
+              await Promise.all(promises);
+            } catch (error) {
+              console.error('Error assigning nodes to existing tag:', error);
+            }
+          }
+          return;
+        }
+
+        // Create the tag in a way that triggers Alpine reactivity
+        this.tagBuckets = {
+          ...this.tagBuckets,
+          [tag]: [] 
+        };
+        
+        // Re-sort tags (preserving reactivity)
+        const sortedEntries = Object.entries(this.tagBuckets).sort(([a], [b]) => a.localeCompare(b));
+        this.tagBuckets = Object.fromEntries(sortedEntries);
+        
+        // Save to localStorage immediately
+        this.saveLocalTags();
+        
+        // Force UI update
+        this.forceRefresh();
+        
+        this.showToast(`Tag '${tag}' created`);
+
+        // If nodes were dropped onto 'New Tag', assign them now
+        if (nodeIdsToAssign && nodeIdsToAssign.length > 0) {
+          try {
+            const promises = nodeIdsToAssign.map(nodeId => this.assignNodeToTag(nodeId, tag));
+            await Promise.all(promises);
+            this.showToast(`Assigned ${nodeIdsToAssign.length} node${nodeIdsToAssign.length > 1 ? 's' : ''} to tag '${tag}'`);
+          } catch (error) {
+            console.error('Error assigning nodes to new tag:', error);
+            this.showToast('Some nodes could not be assigned to the tag', 'error');
+          }
+        }
+      },
+
+      // Delete a tag and remove it from all associated nodes
+      async deleteTag(tag) {
+        if (!confirm(`Are you sure you want to delete the tag '${tag}'?\nThis will remove the tag from ${this.tagBuckets[tag]?.length || 0} machine(s).`)) {
+          return;
+        }
+
+        const nodeIds = [...(this.tagBuckets[tag] || [])]; // Copy IDs before modifying
+
+        try {
+          // Remove tag from all nodes via API
+          const removalPromises = nodeIds.map(nodeId => this.removeTagFromNodeAPI(nodeId, tag));
+          await Promise.all(removalPromises);
+
+          // Update UI optimistically: remove bucket and update nodes
+          delete this.tagBuckets[tag];
+          this.availableNodes.forEach(node => {
+             if (node.tags && node.tags.includes(tag)) {
+                 node.tags = node.tags.filter(t => t !== tag);
+             }
+          });
+           // Re-filter nodes in case the removed tag was part of the filter
+           this.filterNodes(this.currentFilter);
+           this.rebuildTagBuckets(); // Keep tags list consistent
+           // Save updated empty tags
+           this.saveLocalTags();
+
+           this.showToast(`Tag '${tag}' deleted`);
+
+        } catch (error) {
+            console.error('Error deleting tag:', error);
+            this.showToast(`Failed to delete tag '${tag}': ${error.message}`, 'error');
+            // Reload to ensure consistency
+            this.loadData();
+        }
+      },
+
+      // Get node name (hostname or ID)
+      getNodeName(nodeId) {
+        const node = this.availableNodes.find(n => n.id === nodeId);
+        return node ? (node.hostname || node.id) : nodeId;
+      },
+
+      // Format machine status for display
+      formatStatus(status) {
+        if (typeof status === 'string') {
+          if (status === 'ExistingOS') return 'Existing OS';
+          if (status === 'InstallingOS') return 'Installing OS';
+          if (status === 'NeedsOS') return 'Needs OS';
+          return status; // Ready, Offline etc.
+        } else if (status && typeof status === 'object' && status.Error) {
+          return `Error: ${status.Error}`;
+        }
+        return 'Unknown';
+      },
+
+      // --- Drag and Drop ---
+      startDrag(event, node) {
+        this.draggedNodeId = node.id;
+        
+        // Store whether we're dragging multiple nodes
+        this.isDraggingMultiple = this.selectedNodeIds.includes(node.id) && this.selectedNodeIds.length > 1;
+        
+        // Store selected nodes in the dataTransfer
+        if (this.isDraggingMultiple) {
+          // If dragging a selected node, we'll drag all selected nodes
+          event.dataTransfer.setData('text/plain', JSON.stringify(this.selectedNodeIds));
+        } else {
+          // Otherwise, just drag this node and update selection
+          event.dataTransfer.setData('text/plain', node.id);
+          // Update selection to only this node
+          this.selectedNodeIds = [node.id];
+          this.currentNodeId = node.id;
+          this.selectedNodeId = node.id; // For gamepad
+        }
+        
+        event.dataTransfer.effectAllowed = 'move';
+        event.target.classList.add('dragging');
+      },
+
+      dragOver(event, tagName) {
+        event.preventDefault();
+        if (tagName !== this.currentDragOverTag) {
+            this.currentDragOverTag = tagName;
+        }
+        event.dataTransfer.dropEffect = 'move';
+      },
+
+      dragLeave(event) {
+         if (!event.currentTarget.contains(event.relatedTarget)) {
+             if (this.currentDragOverTag === event.currentTarget.dataset.tagName) {
+                  this.currentDragOverTag = null;
+             }
+         }
+      },
+
+      endDrag() {
+        if (this.draggedNodeId) {
+            const draggedElement = document.getElementById(`node-${this.draggedNodeId}`);
+            if (draggedElement) {
+                draggedElement.classList.remove('dragging');
+            }
+        }
+        this.draggedNodeId = null;
+        this.isDraggingMultiple = false;
+        this.currentDragOverTag = null;
+        document.querySelectorAll('.ghost-card').forEach(el => el.remove());
+      },
+
+      // Handle drop on a tag card ('__NEW__' or existing tag)
+      async drop(event, targetTag) {
+        event.preventDefault();
+        const droppedData = event.dataTransfer.getData('text/plain');
+        this.currentDragOverTag = null;
+
+        if (!droppedData) {
+            console.error("Drop event missing node data.");
+            this.endDrag();
+            return;
+        }
+        
+        let nodeIds = [];
+        
+        // Check if we're dropping multiple nodes (JSON array) or a single node (string)
+        try {
+          // Try to parse as JSON (multiple nodes)
+          nodeIds = JSON.parse(droppedData);
+          if (!Array.isArray(nodeIds)) {
+            // If not an array, treat as single node ID
+            nodeIds = [droppedData];
+          }
+        } catch (e) {
+          // Not JSON, so it's a single node ID
+          nodeIds = [droppedData];
+        }
+
+        if (targetTag === '__NEW__') {
+          // Dropped on "New Tag" card: Prompt for name, then create & assign
+          this.promptNewTag(nodeIds);
+        } else {
+          // Dropped on an existing tag: Assign node(s) to this tag
+          // Use the assignSelectedNodesToTag function repurposed for this list of IDs
+          try {
+            const promises = nodeIds.map(nodeId => this.assignNodeToTag(nodeId, targetTag));
+            await Promise.all(promises);
+            this.showToast(`Assigned ${nodeIds.length} node${nodeIds.length > 1 ? 's' : ''} to tag '${targetTag}'`);
+          } catch (error) {
+            console.error('Error assigning nodes:', error);
+            this.showToast('Some nodes could not be assigned to the tag', 'error');
+          }
+        }
+
+        this.endDrag();
+      },
+
+      // Handle node click with multi-select support
+      handleNodeClick(event, nodeId) {
+        // Don't interfere with drag operations
+        if (this.isDragging) return;
+        
+        // Check if CMD (Mac) or CTRL (Windows/Linux) is pressed
+        const isMultiSelectKey = event.metaKey || event.ctrlKey;
+        
+        if (isMultiSelectKey) {
+          // Toggle this node in the selection
+          const index = this.selectedNodeIds.indexOf(nodeId);
+          if (index >= 0) {
+            // Remove from selection if already selected
+            this.selectedNodeIds.splice(index, 1);
+            // If this was the current node, clear current
+            if (this.currentNodeId === nodeId) {
+              this.currentNodeId = this.selectedNodeIds.length > 0 ? 
+                this.selectedNodeIds[this.selectedNodeIds.length - 1] : null;
+            }
+          } else {
+            // Add to selection
+            this.selectedNodeIds.push(nodeId);
+            this.currentNodeId = nodeId; // Make this the current node
+          }
+        } else {
+          // Single selection - replace existing selection
+          this.selectedNodeIds = [nodeId];
+          this.currentNodeId = nodeId;
+        }
+        
+        // For gamepad compatibility
+        this.selectedNodeId = this.currentNodeId;
+        
+        // Force UI refresh
+        this.forceRefresh();
+      },
+      
+      // Check if a node is selected
+      isNodeSelected(nodeId) {
+        return this.selectedNodeIds.includes(nodeId);
+      },
+      
+      // Get tags for the current node
+      getCurrentNodeTags() {
+        if (!this.currentNodeId) return [];
+        const node = this.availableNodes.find(n => n.id === this.currentNodeId);
+        return node ? (node.tags || []) : [];
+      },
+      
+      // Get name of the current node
+      getCurrentNodeName() {
+        if (!this.currentNodeId) return '';
+        const node = this.availableNodes.find(n => n.id === this.currentNodeId);
+        return node ? (node.hostname || node.id) : '';
+      },
+
+      // Assigns a node to a tag (API call + UI update)
+      async assignNodeToTag(nodeId, tag) {
+          const node = this.availableNodes.find(n => n.id === nodeId);
+          if (!node) return;
+
+          // Check if already tagged
+          if (node.tags && node.tags.includes(tag)) {
+              this.showToast(`${node.hostname || nodeId} already has tag '${tag}'`, 'info');
+              return;
+          }
+
+          // Optimistic UI update first
+          if (!node.tags) node.tags = [];
+          node.tags.push(tag);
+          
+          if (!this.tagBuckets[tag]) {
+              this.tagBuckets[tag] = [];
+          }
+          if (!this.tagBuckets[tag].includes(nodeId)) {
+              this.tagBuckets[tag].push(nodeId);
+          }
+          
+          const filteredIndex = this.filteredNodes.findIndex(n => n.id === nodeId);
+          if (filteredIndex !== -1) {
+               this.filteredNodes[filteredIndex] = { ...node };
+          }
+
+          this.showToast(`Assigned ${node.hostname || nodeId} to '${tag}'`);
+
+          // Call API to persist change
+          try {
+              await this.addTagToNodeAPI(nodeId, tag);
+              // Update localStorage since this tag now has nodes
+              this.saveLocalTags();
+              // Force UI update
+              this.forceRefresh();
+          } catch (error) {
+              console.error(`Failed to add tag '${tag}' to node ${nodeId}:`, error);
+              this.showToast(`API Error: Failed to add tag '${tag}'`, 'error');
+              // Revert optimistic UI update
+              node.tags = node.tags.filter(t => t !== tag);
+              this.tagBuckets[tag] = this.tagBuckets[tag].filter(id => id !== nodeId);
+               if (filteredIndex !== -1) {
+                   this.filteredNodes[filteredIndex] = { ...node };
+               }
+          }
+      },
+      
+      // Assign all selected nodes to a tag
+      async assignSelectedNodesToTag(tag) {
+        if (this.selectedNodeIds.length === 0) {
+          this.showToast('No nodes selected', 'warning');
+          return;
+        }
+        
+        // Use Promise.all to assign all nodes in parallel
+        try {
+          const promises = this.selectedNodeIds.map(nodeId => this.assignNodeToTag(nodeId, tag));
+          await Promise.all(promises);
+          this.showToast(`Assigned ${this.selectedNodeIds.length} nodes to tag '${tag}'`);
+        } catch (error) {
+          console.error('Error assigning multiple nodes:', error);
+          this.showToast('Some nodes could not be assigned to the tag', 'error');
+        }
+      },
+
+      // --- API Calls ---
+      async addTagToNodeAPI(nodeId, tag) {
+        const response = await fetch(`/api/machines/${nodeId}/tags`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', },
+          body: JSON.stringify({ tag })
+        });
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Failed to add tag (${response.status}): ${errorText}`);
+        }
+      },
+
+      async removeTagFromNodeAPI(nodeId, tag) {
+        const response = await fetch(`/api/machines/${nodeId}/tags/${encodeURIComponent(tag)}`, {
+          method: 'DELETE'
+        });
+        if (!response.ok && response.status !== 404) {
+           const errorText = await response.text();
+           throw new Error(`Failed to remove tag (${response.status}): ${errorText}`);
+        }
+      },
+
+      // --- Utilities ---
+      showToast(message, type = 'success') {
+        const toast = document.getElementById('assignment-toast');
+        const messageEl = document.getElementById('toast-message');
+        const iconSvg = toast.querySelector('svg');
+
+        // Reset classes
+        toast.classList.remove('hidden', 'closing', 'bg-red-600', 'bg-yellow-600', 'bg-blue-600', 'bg-green-600');
+        iconSvg.classList.remove('text-red-400', 'text-yellow-400', 'text-blue-400', 'text-green-400');
+
+        messageEl.textContent = message;
+
+        // Apply type styles
+        const bgMapping = {
+          'error': 'bg-red-700',
+          'warning': 'bg-yellow-600',
+          'info': 'bg-blue-700',
+          'success': 'bg-green-700'
+        };
+        const iconMapping = {
+          'error': 'text-red-200',
+          'warning': 'text-yellow-100',
+          'info': 'text-blue-200',
+          'success': 'text-green-200'
+        };
+
+        toast.className = toast.className.replace(/bg-\w+-\d+/g, '');
+        toast.classList.add(bgMapping[type] || 'bg-gray-900');
+
+        const icon = toast.querySelector('svg');
+        icon.className = icon.className.replace(/text-\w+-\d+/g, '');
+        icon.classList.add(iconMapping[type] || 'text-gray-200');
+
+        toast.classList.remove('hidden');
+        void toast.offsetWidth;
+
+        // Auto-hide logic
+        setTimeout(() => {
+          toast.classList.add('closing');
+          setTimeout(() => {
+            toast.classList.add('hidden');
+          }, 300);
+        }, 3000);
+      },
+
+      // --- Gamepad Specific Methods ---
+      toggleNodeSelection(nodeId) {
+          this.selectedNodeId = (this.selectedNodeId === nodeId) ? null : nodeId;
+          
+          // Sync with multi-select
+          if (this.selectedNodeId) {
+            this.selectedNodeIds = [this.selectedNodeId];
+            this.currentNodeId = this.selectedNodeId;
+          } else {
+            this.selectedNodeIds = [];
+            this.currentNodeId = null;
+          }
+      },
+
+      assignSelectedNodeToTag(tagName) {
+        if (!this.selectedNodeId) {
+            this.showToast('No node selected', 'info');
+            return;
+        }
+        if (tagName === '__NEW__') {
+             this.promptNewTag(this.selectedNodeId);
+             return;
+        }
+
+        this.assignNodeToTag(this.selectedNodeId, tagName).then(() => {
+             this.selectedNodeId = null;
+        });
+      },
+
+      // Gamepad handler for Y button (cycle sort)
+      cycleSort() {
+        this.cycleSortOption();
+      },
+    };
+  }
+</script>
+{% endblock %} 

@@ -198,6 +198,7 @@ pub fn ui_router() -> Router<crate::AppState> {
         .route("/machines", get(machine_list))
         .route("/machines/{id}", get(machine_details))
         .route("/compute", get(compute_page))
+        .route("/tags", get(tags_page))
         .route("/theme/toggle", get(toggle_theme))
         .route("/settings", get(settings_page))
         .route("/settings", post(update_settings))
@@ -1765,4 +1766,44 @@ pub async fn compute_page(
     render_minijinja(&app_state, "compute.html", context)
 }
 
-// ... existing code ...
+// Handler for the tags page
+pub async fn tags_page(
+    State(app_state): State<crate::AppState>,
+    headers: HeaderMap,
+    auth_session: AuthSession,
+    uri: OriginalUri,
+) -> Response {
+    // Get theme preference from cookie
+    let theme = get_theme_from_cookie(&headers);
+    let is_authenticated = auth_session.user.is_some();
+    let current_path = uri.path().to_string();
+    
+    // Check if user is authenticated if login is required
+    let require_login = app_state.settings.lock().await.require_login;
+    if require_login && !is_authenticated && app_state.is_installed {
+        if let Some(_) = mode::get_current_mode().await.unwrap_or(None) {
+            return Redirect::to("/login").into_response();
+        }
+    }
+    
+    // Fetch all machines to display in the tag editor
+    let machines = match crate::db::get_all_machines().await {
+        Ok(machines) => machines,
+        Err(e) => {
+            error!("Failed to fetch machines for tags page: {}", e);
+            vec![]
+        }
+    };
+    
+    // Create template context
+    let context = serde_json::json!({
+        "theme": theme,
+        "is_authenticated": is_authenticated,
+        "current_path": current_path,
+        "machines": machines,
+        "is_admin": auth_session.user.is_some(),
+    });
+    
+    // Render the tags page template
+    render_minijinja(&app_state, "tags.html", context)
+}

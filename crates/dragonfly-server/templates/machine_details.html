@@ -255,10 +255,7 @@
                 <div><span class="font-bold dark:text-cyan-100">Domain:</span> <span x-text="machine.hostname && machine.hostname.includes('.') ? machine.hostname.substring(machine.hostname.indexOf('.')+1) : 'lon.riff.cc'"></span></div>
                 <div><span class="font-bold dark:text-cyan-100">Memorable Name:</span> <span x-text="machine.memorable_name || ''"></span></div>
                 <div><span class="font-bold dark:text-cyan-100">IP:</span> 
-                    <span x-text="machine.ip_address === 'Unknown' ? 'Not detected (Guest Agent may not be enabled)' : (machine.ip_address || '10.1.0.5')"></span>
-                    <template x-if="machine.proxmox_vmid && machine.ip_address === 'Unknown'">
-                        <div class="text-xs italic text-gray-400">Enable QEMU Guest Agent in Proxmox for automatic IP detection</div>
-                    </template>
+                    <span x-text="machine.ip_address === 'Unknown' ? 'Not detected' : (machine.ip_address || '127.0.0.1')"></span>
                 </div>
                 <div><span class="font-bold dark:text-cyan-100">Network:</span> <span x-text="machine.network || '10.1.0.0/24'"></span></div>
                 <div><span class="font-bold dark:text-cyan-100">MAC:</span> <span x-text="machine.mac_address || 'bc:24:11:b9:54:89'"></span></div>
