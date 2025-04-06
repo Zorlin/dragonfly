@@ -214,12 +214,12 @@
         <div class="bg-blue-100/20 dark:bg-black border border-blue-500 dark:border-blue-700 rounded-xl shadow-lg p-4 space-y-2">
             <h3 class="text-center text-lg font-semibold text-black dark:text-white">🧬 Details</h3>
             <div class="text-xl mt-8 text-gray-900 dark:text-gray-400">
-                <div><span class="font-bold text-purple-900 dark:text-purple-100">Operating System:</span> Ubuntu 24.04</div>
-                <div><span class="font-bold text-purple-900 dark:text-purple-100">CPU:</span> AMD Ryzen 7 7800X3D (8 cores, 16 threads)</div>
-                <div><span class="font-bold text-purple-900 dark:text-purple-100">GPU:</span> NVIDIA RTX 4070 Ti</div>
-                <div><span class="font-bold text-purple-900 dark:text-purple-100">RAM:</span> 64 GiB</div>
-                <div><span class="font-bold text-purple-900 dark:text-purple-100">Created:</span> 2025-04-03 23:34:42 UTC</div>
-                <div><span class="font-bold text-purple-900 dark:text-purple-100">Updated:</span> 2025-04-04 00:21:25 UTC</div>
+                <div><span class="font-bold text-purple-900 dark:text-purple-100">Operating System:</span> <span x-text="machine.os_installed || 'Ubuntu 24.04'"></span></div>
+                <div><span class="font-bold text-purple-900 dark:text-purple-100">CPU:</span> <span x-text="machine.cpu_model || 'AMD Ryzen 7 7800X3D (8 cores, 16 threads)'"></span></div>
+                <div><span class="font-bold text-purple-900 dark:text-purple-100">GPU:</span> <span x-text="machine.gpu_model || 'NVIDIA RTX 4070 Ti'"></span></div>
+                <div><span class="font-bold text-purple-900 dark:text-purple-100">RAM:</span> <span x-text="machine.total_ram_bytes ? formatBytes(machine.total_ram_bytes, 2) : '64 GiB'"></span></div>
+                <div><span class="font-bold text-purple-900 dark:text-purple-100">Created:</span> <span x-text="machine.created_at ? new Date(machine.created_at).toLocaleString() : '2025-04-03 23:34:42 UTC'"></span></div>
+                <div><span class="font-bold text-purple-900 dark:text-purple-100">Updated:</span> <span x-text="machine.updated_at ? new Date(machine.updated_at).toLocaleString() : '2025-04-04 00:21:25 UTC'"></span></div>
             </div>
         </div>
         
@@ -249,13 +249,18 @@
         <div class="bg-cyan-100/20 dark:bg-black border border-cyan-500 rounded-xl shadow-lg p-4 space-y-2">
             <h3 class="text-center text-lg font-semibold text-black dark:text-cyan-300">🖧 <span class="dark:text-white">Network</span></h3>
             <div class="text-xl mt-8 text-gray-900 dark:text-gray-300 ml-4">
-            <div><span class="font-bold dark:text-cyan-100">Hostname:</span> blackberry</div>
-            <div><span class="font-bold dark:text-cyan-100">Domain:</span> lon.riff.cc</div>
-            <div><span class="font-bold dark:text-cyan-100">Memorable Name:</span> </div>
-            <div><span class="font-bold dark:text-cyan-100">IP:</span> 10.1.0.5</div>
-            <div><span class="font-bold dark:text-cyan-100">Network:</span> 10.1.0.0/24</div>
-            <div><span class="font-bold dark:text-cyan-100">MAC:</span> bc:24:11:b9:54:89</div>
-            <div><span class="font-bold dark:text-cyan-100">Mode:</span> DHCP</div>
+                <div><span class="font-bold dark:text-cyan-100">Hostname:</span> <span x-text="machine.hostname || 'blackberry'"></span></div>
+                <div><span class="font-bold dark:text-cyan-100">Domain:</span> <span x-text="machine.hostname && machine.hostname.includes('.') ? machine.hostname.substring(machine.hostname.indexOf('.')+1) : 'lon.riff.cc'"></span></div>
+                <div><span class="font-bold dark:text-cyan-100">Memorable Name:</span> <span x-text="machine.memorable_name || ''"></span></div>
+                <div><span class="font-bold dark:text-cyan-100">IP:</span> 
+                    <span x-text="machine.ip_address === 'Unknown' ? 'Not detected (Guest Agent may not be enabled)' : (machine.ip_address || '10.1.0.5')"></span>
+                    <template x-if="machine.proxmox_vmid && machine.ip_address === 'Unknown'">
+                        <div class="text-xs italic text-gray-400">Enable QEMU Guest Agent in Proxmox for automatic IP detection</div>
+                    </template>
+                </div>
+                <div><span class="font-bold dark:text-cyan-100">Network:</span> <span x-text="machine.network || '10.1.0.0/24'"></span></div>
+                <div><span class="font-bold dark:text-cyan-100">MAC:</span> <span x-text="machine.mac_address || 'bc:24:11:b9:54:89'"></span></div>
+                <div><span class="font-bold dark:text-cyan-100">Mode:</span> DHCP</div>
             </div>
         </div>
 
@@ -297,16 +302,27 @@
                 </tr>
                 </thead>
                 <tbody>
-                <tr class="border-b border-teal-800/20">
-                    <td class="px-4 py-2 font-medium">/dev/nvme0n1</td>
-                    <td class="px-4 py-2">3.64 TB</td>
-                    <td class="px-4 py-2">WD_BLACK SN850X</td>
-                </tr>
-                <tr>
-                    <td class="px-4 py-2 font-medium">/dev/nvme1n1</td>
-                    <td class="px-4 py-2">1.82 TB</td>
-                    <td class="px-4 py-2">Samsung 990 Pro</td>
-                </tr>
+                    <template x-if="machine.disks && machine.disks.length > 0">
+                        <template x-for="disk in machine.disks" :key="disk.device">
+                            <tr class="border-b border-teal-800/20">
+                                <td class="px-4 py-2 font-medium" x-text="disk.device"></td>
+                                <td class="px-4 py-2" x-text="disk.calculated_size || formatBytes(disk.size_bytes, 2)"></td>
+                                <td class="px-4 py-2" x-text="disk.model || 'Unknown'"></td>
+                            </tr>
+                        </template>
+                    </template>
+                    <template x-if="!machine.disks || machine.disks.length === 0">
+                        <tr class="border-b border-teal-800/20">
+                            <td class="px-4 py-2 font-medium">/dev/nvme0n1</td>
+                            <td class="px-4 py-2">3.64 TB</td>
+                            <td class="px-4 py-2">WD_BLACK SN850X</td>
+                        </tr>
+                        <tr>
+                            <td class="px-4 py-2 font-medium">/dev/nvme1n1</td>
+                            <td class="px-4 py-2">1.82 TB</td>
+                            <td class="px-4 py-2">Samsung 990 Pro</td>
+                        </tr>
+                    </template>
                 </tbody>
             </table>
             </div>
@@ -318,15 +334,25 @@
             <div class="text-lg text-grey-900 dark:text-gray-300 ml-4 mb-8">
                 <div>
                     <span class="font-bold text-cyan-900 dark:text-cyan-100">State:</span>
-                    <span class="font-semibold rounded rounded-md border border-green-500 px-1 py-0 text-md">Ready</span>
+                    <span class="font-semibold rounded rounded-md border px-1 py-0 text-md"
+                          :class="{
+                            'border-green-500': machine.status === 'Ready',
+                            'border-yellow-500': machine.status === 'InstallingOS' || machine.status === 'AwaitingAssignment',
+                            'border-red-500': machine.status.toString().startsWith('Error'),
+                            'border-green-500': true
+                          }"
+                          x-text="machine.status || 'Ready'"></span>
                 </div>
                 <div>
                     <span class="font-bold text-cyan-900 dark:text-cyan-100">BMC State:</span>
                     <span class="font-semibold rounded rounded-md border border-green-500 px-1 py-0 text-md">Ready</span>
                 </div>
                 <div><span class="font-bold text-cyan-900 dark:text-cyan-100">Uptime:</span> 4 days, 12 hours, 34 minutes</div>
-                <div><span class="font-bold text-cyan-900 dark:text-cyan-100">Cluster:</span> SpaceTempAgency</div>
-                <div><span class="font-bold text-cyan-900 dark:text-cyan-100">Cluster type:</span> Proxmox</div>
+                <div><span class="font-bold text-cyan-900 dark:text-cyan-100">Cluster:</span> <span x-text="machine.proxmox_cluster || 'SpaceTempAgency'"></span></div>
+                <div x-show="machine.is_proxmox_host"><span class="font-bold text-cyan-900 dark:text-cyan-100">Type:</span> Proxmox Host</div>
+                <div x-show="machine.proxmox_node"><span class="font-bold dark:text-cyan-100">Proxmox Node:</span> <span x-text="machine.proxmox_node"></span></div>
+                <div x-show="machine.proxmox_vmid"><span class="font-bold dark:text-cyan-100">Proxmox VM ID:</span> <span x-text="machine.proxmox_vmid"></span></div>
+
             </div>
         </div>
         {# Add styles for the custom border width at the top of the file #} 

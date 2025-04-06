@@ -549,10 +549,10 @@ async fn discover_and_register_proxmox_vms(
         // --- Register the Host Node --- 
         if let Some(mac) = host_mac_address {
              let host_req = RegisterRequest {
-                mac_address: mac, // Already lowercased
-                // Provide default IP if None
-                ip_address: host_ip_address.unwrap_or_else(|| "0.0.0.0".to_string()), 
-                hostname: Some(host_hostname), // Use node name (potentially with version)
+                mac_address: mac.clone(), // Already lowercased
+                // Use "Unknown" as default value instead of a fake IP
+                ip_address: host_ip_address.unwrap_or_else(|| "Unknown".to_string()), 
+                hostname: Some(host_hostname.clone()), // Use node name (potentially with version)
                 proxmox_vmid: None, 
                 proxmox_node: Some(node_name.to_string()),
                 proxmox_cluster: Some(cluster_name.to_string()),
@@ -688,6 +688,13 @@ async fn discover_and_register_proxmox_vms(
                     continue; // Skip this VM but continue with others
                 }
             };
+
+            // Check if the Guest Agent is enabled
+            let mut agent_enabled = false;
+            if let Some(agent) = config_data.get("agent").and_then(|a| a.as_str()) {
+                agent_enabled = agent.contains("enabled=1") || agent.contains("enabled=true");
+                info!("QEMU Guest Agent status for VM {}: {}", vmid, if agent_enabled { "Enabled" } else { "Disabled" });
+            }
             
             // Check for OS info in the config
             if let Some(os_type) = config_data.get("ostype").and_then(|o| o.as_str()) {
@@ -720,15 +727,59 @@ async fn discover_and_register_proxmox_vms(
             // Use the first MAC address for registration
             let mac_address = mac_addresses[0].clone().to_lowercase(); // Ensure lowercase
             
-            // Create a deterministic IP address for the VM
-            // This should eventually be replaced with real IP discovery
-            let vm_number = vmid % 100;
-            // Format: 10.X.42.Y where X is node-specific and Y is VM-specific
-            let node_number = match node_name.chars().last() {
-                Some(c) if c.is_digit(10) => c.to_digit(10).unwrap_or(0) as u8,
-                _ => 0u8,
-            };
-            let ip_address = format!("10.{}.42.{}", node_number, vm_number + 100);
+            // Try to get the IP address from the QEMU Guest Agent if enabled
+            let mut ip_address = "Unknown".to_string(); // Default to Unknown
+            
+            if agent_enabled {
+                let agent_path = format!("/api2/json/nodes/{}/qemu/{}/agent/network-get-interfaces", node_name, vmid);
+                info!("Attempting to retrieve IP info from QEMU Guest Agent for VM {}", vmid);
+                
+                if let Ok(agent_response) = client.get(&agent_path).await {
+                    if let Ok(agent_value) = serde_json::from_slice::<serde_json::Value>(&agent_response.body) {
+                        if let Some(result) = agent_value.get("data").and_then(|d| d.get("result")) {
+                            // QEMU agent returns array of network interfaces
+                            if let Some(interfaces) = result.as_array() {
+                                // Look for the first non-loopback interface with IPv4
+                                for iface in interfaces {
+                                    if let Some(name) = iface.get("name").and_then(|n| n.as_str()) {
+                                        // Skip loopback interfaces
+                                        if name.starts_with("lo") {
+                                            continue;
+                                        }
+                                        
+                                        // Look for IPv4 addresses in the ip-addresses array
+                                        if let Some(ip_addresses) = iface.get("ip-addresses").and_then(|ips| ips.as_array()) {
+                                            for ip_obj in ip_addresses {
+                                                if let Some(ip_type) = ip_obj.get("ip-address-type").and_then(|t| t.as_str()) {
+                                                    if ip_type == "ipv4" {
+                                                        if let Some(ip) = ip_obj.get("ip-address").and_then(|a| a.as_str()) {
+                                                            ip_address = ip.to_string();
+                                                            info!("Found IPv4 address {} for VM {} via QEMU Guest Agent", ip, vmid);
+                                                            break;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        
+                                        // If we found an IP, break out of the interface loop
+                                        if ip_address != "Unknown" {
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    warn!("Failed to get network interfaces from QEMU Guest Agent for VM {}", vmid);
+                }
+            } else {
+                info!("QEMU Guest Agent not enabled for VM {}. IP will be set to Unknown.", vmid);
+            }
+            
+            // If the Guest Agent didn't provide an IP, leave it as "Unknown"
+            // We no longer generate fake deterministic IPs
             
             // Add this VM to our discovered machines list
             discovered_machines.push(DiscoveredProxmox {
@@ -741,7 +792,7 @@ async fn discover_and_register_proxmox_vms(
                 parent_host: Some(node_name.to_string()),
             });
             
-            info!("Processing VM {} (ID: {}, Status: {}, OS: {})", name, vmid, status, vm_os);
+            info!("Processing VM {} (ID: {}, Status: {}, OS: {}, IP: {})", name, vmid, status, vm_os, ip_address);
             
             // Prepare RegisterRequest
             let register_request = RegisterRequest {
