@@ -405,12 +405,6 @@
                                 <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-200 uppercase tracking-wider">
                                     Actions
                                 </th>
-                                <th scope="col" class="text-left text-xs font-medium text-gray-500 dark:text-gray-200 uppercase tracking-wider text-right">
-                                    <input type="checkbox" 
-                                            x-model="selectAll" 
-                                            @change="toggleSelectAll()"
-                                            class="" />
-                                </th>
                             </tr>
                         </thead>
                         <tbody id="machine-list" class="divide-y divide-gray-200 dark:divide-gray-700/60 bg-white dark:bg-black">
@@ -553,34 +547,49 @@
                                     <div class="relative" @click.stop>
                                         <!-- Main Display: Installed OS -->
                                         <div class="flex items-center">
-                                            {% set installed_os = machine.os_installed|default('Unknown') %}
-                                            {% if installed_os != 'Unknown' %}
-                                                <span class="flex items-center" data-os-raw="{{ machine.os_installed }}">
+                                            {% set installed_os_display = machine.os_installed|default('Unknown') %}
+                                            {% if installed_os_display != 'Unknown' %}
+                                                {# Display installed OS with icon and name #}
+                                                <span class="flex items-center os-current-value" data-os-raw="{{ machine.os_installed }}">
                                                     {{ machine.os_installed | format_os_icon | safe }}
                                                     <span class="ml-1">{{ machine.os_installed | format_os }}</span>
                                                 </span>
                                             {% else %}
-                                                <span class="text-gray-400 italic flex items-center">
+                                                {# Display Unknown OS #}
+                                                <span class="text-gray-400 italic flex items-center os-current-value" data-os-raw="">
                                                     <i class="fas fa-square-question text-gray-400 mr-1"></i> Unknown
                                                 </span>
                                             {% endif %}
                                             <!-- Dropdown Arrow -->
-                                            <svg @click.stop="toggleOsDropdown('{{ machine.id }}')" xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 ml-1 text-gray-400 cursor-pointer hover:text-indigo-500 dark:hover:text-indigo-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <svg @click="toggleOsDropdown('{{ machine.id }}')" xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 ml-1 text-gray-400 cursor-pointer hover:text-indigo-500 dark:hover:text-indigo-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
                                             </svg>
                                         </div>
 
-                                        <!-- Secondary Display: Pending OS Choice (if different from installed) -->
+                                        <!-- Secondary Display: Pending OS Choice from fieldChanges -->
+                                        {# Check if os_choice exists in fieldChanges AND is different from the original value stored when editing started #}
+                                        <template x-if="fieldChanges['{{ machine.id }}']?.hasOwnProperty('os_choice') && fieldChanges['{{ machine.id }}'].os_choice !== (originalValues['{{ machine.id }}'] ? originalValues['{{ machine.id }}'].os_choice : '')">
+                                            <div class="mt-1 text-xs text-purple-600 dark:text-purple-400 italic font-thin flex items-center" title="Pending change">
+                                                 {# Display pending choice - use JS helpers once added #}
+                                                 <i class="fas fa-asterisk text-purple-400 mr-1 text-[0.6rem]"></i> {# Placeholder icon #}
+                                                 <span class="ml-1" x-text="fieldChanges['{{ machine.id }}'].os_choice"></span>
+                                                 <i class="fas fa-arrow-right-arrow-left ml-1 text-xs"></i>
+                                            </div>
+                                        </template>
+                                        <!-- Secondary Display: Applied OS Choice different from Installed (and not currently pending change) -->
                                         {% if machine.os_choice and machine.os_choice != machine.os_installed %}
-                                            <div class="mt-1 text-xs text-purple-600 dark:text-purple-400 italic font-thin flex items-center" title="OS choice {{ machine.os_choice }} pending reimage">
+                                        <template x-if="!(fieldChanges['{{ machine.id }}']?.hasOwnProperty('os_choice'))">
+                                             {# Ensure os_choice is not None/empty before applying filters - Jinja handles this now #}
+                                             <div class="mt-1 text-xs text-purple-600 dark:text-purple-400 italic font-thin flex items-center" title="OS choice {{ machine.os_choice }} applies on next reimage">
                                                  {{ machine.os_choice | format_os_icon | safe }}
                                                  <span class="ml-1">{{ machine.os_choice | format_os }}</span>
                                                  <i class="fas fa-arrow-right-arrow-left ml-1 text-xs"></i>
                                             </div>
+                                        </template>
                                         {% endif %}
-                                        
-                                        <!-- OS Selection Dropdown (absolutely positioned) -->
-                                        <div 
+
+                                        <!-- OS Selection Dropdown -->
+                                        <div
                                             x-show="osDropdowns['{{ machine.id }}'] === true"
                                             x-transition:enter="transition ease-out duration-100"
                                             x-transition:enter-start="transform opacity-0 scale-95"
@@ -593,14 +602,23 @@
                                             x-cloak
                                         >
                                             <div class="py-1">
-                                                {# Cancel Reimage Option #}
-                                                {% if machine.os_choice and machine.os_choice != machine.os_installed %}
-                                                    <a href="#" @click.prevent="cancelOsChoice('{{ machine.id }}')" class="block px-4 py-2 text-sm text-green-600 hover:bg-gray-100 hover:text-green-800 dark:text-green-400 dark:hover:bg-gray-700 dark:hover:text-green-300 flex items-center">
-                                                        <i class="fas fa-times-circle mr-2"></i>Keep existing OS
+                                                {# Cancel Pending OS Selection (from fieldChanges) #}
+                                                <template x-if="fieldChanges['{{ machine.id }}']?.hasOwnProperty('os_choice') && fieldChanges['{{ machine.id }}'].os_choice !== (originalValues['{{ machine.id }}'] ? originalValues['{{ machine.id }}'].os_choice : '')">
+                                                    <a href="#" @click.prevent="cancelOsChoice('{{ machine.id }}')" class="block px-4 py-2 text-sm text-red-600 hover:bg-gray-100 hover:text-red-800 dark:text-red-400 dark:hover:bg-gray-700 dark:hover:text-red-300 flex items-center">
+                                                        <i class="fas fa-times-circle mr-2"></i> Cancel Pending OS
                                                     </a>
-                                                    <div class="border-t border-gray-200 dark:border-gray-600 my-1"></div> {# Divider #}
+                                                    <div class="border-t border-gray-200 dark:border-gray-600 my-1"></div>
+                                                </template>
+                                                {# Cancel Applied OS Choice (from machine data, if not currently pending) #}
+                                                {% if machine.os_choice and machine.os_choice != machine.os_installed %}
+                                                 <template x-if="!(fieldChanges['{{ machine.id }}']?.hasOwnProperty('os_choice'))">
+                                                     <a href="#" @click.prevent="cancelOsChoice('{{ machine.id }}')" class="block px-4 py-2 text-sm text-green-600 hover:bg-gray-100 hover:text-green-800 dark:text-green-400 dark:hover:bg-gray-700 dark:hover:text-green-300 flex items-center">
+                                                        <i class="fas fa-times-circle mr-2"></i> Keep existing OS
+                                                    </a>
+                                                    <div class="border-t border-gray-200 dark:border-gray-600 my-1"></div>
+                                                </template>
                                                 {% endif %}
-                                                
+
                                                 <!-- OS Options -->
                                                 <a href="#" @click.prevent="selectOs('{{ machine.id }}', 'ubuntu-2204')" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white flex items-center">
                                                     <i class="fab fa-ubuntu text-orange-500 dark:text-orange-500 no-invert mr-2"></i> Ubuntu 22.04
@@ -620,8 +638,8 @@
                                                 <!-- Add more OS options as needed -->
                                             </div>
                                         </div>
-                                        <!-- Hidden spans for JS (if needed, maybe remove os-current-value) -->
-                                         <span class="hidden os-current-value">{{ machine.os_installed|default('') }}</span> 
+                                        <!-- Hidden span for JS to get installed OS -->
+                                         <span class="hidden os-current-value">{{ machine.os_installed|default('') }}</span>
                                     </div>
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
