@@ -178,6 +178,8 @@ pub struct AppState {
     pub client_ip: Arc<Mutex<Option<String>>>,
     // Store the raw Pool<Sqlite> here
     pub dbpool: sqlx::Pool<sqlx::Sqlite>,
+    // Store API tokens in memory for immediate use after creation
+    pub tokens: Arc<Mutex<std::collections::HashMap<String, String>>>,
 }
 
 // Clean up any existing processes
@@ -447,8 +449,18 @@ pub async fn run() -> anyhow::Result<()> {
         client_ip: Arc::new(Mutex::new(None)),
         // Store the db_pool directly
         dbpool: db_pool.clone(),
+        // Store API tokens in memory for immediate use after creation
+        tokens: Arc::new(Mutex::new(std::collections::HashMap::new())),
     };
-    
+
+    // Load Proxmox API tokens from database to memory for immediate use
+    if !app_state.is_installation_server {
+        info!("Loading Proxmox tokens from database to memory...");
+        if let Err(e) = handlers::proxmox::load_proxmox_tokens_to_memory(&app_state).await {
+            warn!("Failed to load Proxmox tokens from database: {}", e);
+        }
+    }
+
     // Start the Proxmox sync task (regardless of deployment mode)
     // This will check if machines removed from Proxmox should be removed from Dragonfly
     info!("Starting Proxmox synchronization task with interval of 90s");
@@ -650,3 +662,6 @@ fn is_valid_ip(ip: String) -> bool {
     let ip_regex = regex::Regex::new(r"^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$").unwrap();
     ip_regex.is_match(&ip)
 }
+
+// Add encryption module
+pub mod encryption;

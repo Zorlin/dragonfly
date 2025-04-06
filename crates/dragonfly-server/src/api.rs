@@ -50,6 +50,7 @@ use std::net::SocketAddr;
 use axum::middleware::Next; // Add this import back
 use chrono::Utc;
 use axum::extract::DefaultBodyLimit;
+use serde::Deserialize;
 
 pub fn api_router() -> Router<crate::AppState> {
     // Core API routes
@@ -63,6 +64,8 @@ pub fn api_router() -> Router<crate::AppState> {
         .route("/machines/{id}/status-and-progress", get(get_machine_status_and_progress_partial))
         .route("/machines/{id}/os-installed", put(update_os_installed))
         .route("/machines/{id}/bmc", post(update_bmc))
+        // Add route for BMC power actions
+        .route("/machines/{id}/bmc/power-action", post(crate::handlers::machines::bmc_power_action_handler))
         .route("/machines/{id}/workflow-progress", get(get_workflow_progress))
         .route("/machines/{id}/tags", get(api_get_machine_tags).put(api_update_machine_tags))
         .route("/machines/{id}/tags/{tag}", delete(api_delete_machine_tag))
@@ -73,6 +76,8 @@ pub fn api_router() -> Router<crate::AppState> {
         // --- Proxmox Routes ---
         .route("/proxmox/connect", post(crate::handlers::proxmox::connect_proxmox_handler))
         .route("/proxmox/discover", get(crate::handlers::proxmox::discover_proxmox_handler))
+        .route("/proxmox/token", post(update_proxmox_token))
+        .route("/proxmox/create-tokens", post(crate::handlers::proxmox::create_proxmox_tokens_handler))
         // Add new tag management routes
         .route("/tags", get(api_get_tags).post(api_create_tag))
         .route("/tags/{tag_name}", delete(api_delete_tag))
@@ -2866,7 +2871,7 @@ async fn get_machine_status_and_progress_partial(
 /// Get all tags in the system
 #[axum::debug_handler]
 async fn api_get_tags(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     auth_session: AuthSession,
 ) -> Response {
     // Check if user is authenticated as admin
@@ -3002,7 +3007,7 @@ async fn api_get_machines_by_tag(
 #[axum::debug_handler]
 async fn reimage_machine(
     auth_session: AuthSession,
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Response {
     // Check if user is authenticated as admin
@@ -3051,7 +3056,33 @@ async fn reimage_machine(
             match crate::tinkerbell::create_workflow(&machine, &os_choice).await {
                 Ok(_) => {
                     // Emit machine updated event
-                    let _ = state.event_manager.send(format!("machine_updated:{}", id));
+                    let _ = _state.event_manager.send(format!("machine_updated:{}", id));
+                    
+                    // If this is a Proxmox VM, reboot it into PXE boot mode
+                    if machine.proxmox_vmid.is_some() && machine.proxmox_node.is_some() {
+                        info!("Rebooting Proxmox VM {} for reimage", id);
+                        // Create a request to reboot into PXE
+                        let power_action = crate::handlers::machines::BmcPowerActionRequest {
+                            action: "reboot-pxe".to_string(),
+                        };
+                        
+                        // Call the power action handler
+                        match crate::handlers::machines::bmc_power_action_handler(
+                            State(_state.clone()),
+                            Path(id),
+                            Json(power_action),
+                        ).await {
+                            Ok(_) => {
+                                info!("Successfully initiated PXE reboot for Proxmox VM {}", id);
+                            },
+                            Err(e) => {
+                                // Log the error but continue - workflow is created, just reboot failed
+                                error!("Failed to reboot Proxmox VM {}: {:?}", id, e);
+                            }
+                        }
+                    } else {
+                        info!("Machine {} is not a Proxmox VM, skipping reboot", id);
+                    }
                     
                     // Return success response
                     let response_html = format!(r###"
@@ -3084,6 +3115,59 @@ async fn reimage_machine(
                 "error": "Database Error",
                 "message": e.to_string()
             }))).into_response();
+        }
+    }
+}
+
+// Handler for initiating a reimage
+#[axum::debug_handler]
+pub async fn reimage_machine_handler(
+    Path(_id): Path<Uuid>,
+    State(_state): State<AppState>,
+) -> impl IntoResponse {
+    // ... existing code ...
+}
+
+// Add new endpoint to configure Proxmox API tokens
+#[derive(Deserialize)]
+pub struct ProxmoxTokenRequest {
+    token_type: String,
+    token_value: String,
+}
+
+// API endpoint to update a specific Proxmox API token
+#[axum::debug_handler]
+pub async fn update_proxmox_token(
+    State(_state): State<AppState>,
+    Json(request): Json<ProxmoxTokenRequest>,
+) -> impl IntoResponse {
+    use dragonfly_common::models::ErrorResponse;
+    
+    info!("Updating Proxmox API token for type: {}", request.token_type);
+    
+    // Validate token type
+    if !["create", "power", "config"].contains(&request.token_type.as_str()) {
+        return (StatusCode::BAD_REQUEST, Json(ErrorResponse {
+            error: "INVALID_TOKEN_TYPE".to_string(),
+            message: "Token type must be one of: create, power, config".to_string(),
+        })).into_response();
+    }
+    
+    // Update the token in the database
+    match db::update_proxmox_api_tokens(&request.token_type, &request.token_value).await {
+        Ok(_) => {
+            info!("Successfully updated Proxmox API token for {} operations", request.token_type);
+            (StatusCode::OK, Json(json!({
+                "success": true,
+                "message": format!("Successfully updated {} token", request.token_type)
+            }))).into_response()
+        },
+        Err(e) => {
+            error!("Failed to update Proxmox API token: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse {
+                error: "TOKEN_UPDATE_FAILED".to_string(),
+                message: format!("Failed to update token: {}", e),
+            })).into_response()
         }
     }
 }

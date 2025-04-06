@@ -37,6 +37,7 @@
     showBulkActions: false, // Controls visibility of bulk action header
     selectAll: false, // State for the header checkbox
     selectedMachines: {}, // Object to track selected machine IDs { machineId: true/false }
+    currentMachineType: null, // Store the type of the machine for modal actions
     
     // Just Type functionality
     startEditing(machineId, fieldName, currentValue) {
@@ -343,6 +344,81 @@
         });
     },
     
+    // --- Reimage Handling ---
+    handleReimageClick(id, type) {
+        this.currentMachineId = id;
+        this.currentMachineType = type; // Store the machine type
+        this.reimageModal = true;       // Open the generic reimage modal
+        this.errorMessage = null;       // Clear any previous modal errors
+    },
+
+    confirmReimage() {
+        if (!this.currentMachineId) return;
+        if (!this.isAuthenticated) {
+            showToast('Authentication required.', 'error');
+            this.reimageModal = false;
+            return;
+        }
+
+        this.errorMessage = null; // Clear previous modal errors
+        const machineId = this.currentMachineId;
+        const machineType = this.currentMachineType;
+
+        let endpoint = '';
+        let method = 'POST';
+        let body = null;
+        let headers = { 'Content-Type': 'application/json' };
+
+        // Determine the correct API endpoint and payload based on machine type
+        if (machineType === 'proxmox-vm') {
+            // Use the generic BMC power action endpoint for Proxmox VMs
+            endpoint = `/api/machines/${machineId}/bmc/power-action`;
+            body = JSON.stringify({ action: 'reboot-pxe' });
+            console.log(`Triggering Proxmox BMC action 'reboot-pxe' for ${machineId}`);
+        } else {
+            // Default reimage action for other machine types (e.g., managed)
+            // TODO: Confirm the actual endpoint for non-Proxmox reimage if different
+            endpoint = `/api/machines/${machineId}/reimage`;
+            console.log(`Triggering default reimage for ${machineId} (type: ${machineType})`);
+            // No body needed for the default reimage endpoint? Adjust if necessary.
+        }
+
+        fetch(endpoint, { method, headers, body })
+        .then(response => {
+            if (!response.ok) {
+                // Clone the response before attempting to read it as JSON
+                const responseClone = response.clone();
+                
+                // Try to parse JSON error first
+                return response.json()
+                    .then(data => { throw new Error(data.message || data.error || `HTTP error! Status: ${response.status}`); })
+                    .catch(() => {
+                        // If JSON parsing fails, use the cloned response for text
+                        return responseClone.text().then(text => { throw new Error(text || `HTTP error! Status: ${response.status}`); });
+                    });
+            }
+            // Success might return JSON or just text/status
+            return response.text(); // Adjust if JSON is expected on success
+        })
+        .then(data => {
+            showToast(`Reimage process initiated for machine ${machineId}.`, 'success');
+            this.reimageModal = false;
+            this.currentMachineId = null;
+            this.currentMachineType = null;
+            refreshMachineList(); // Refresh to show status changes
+        })
+        .catch(error => {
+            console.error('Error initiating reimage:', error);
+            // Display the error in the modal or as a toast
+            this.errorMessage = `Failed to initiate reimage: ${error.message}`;
+            showToast(this.errorMessage, 'error');
+            // Keep the modal open? Or close it? Let's keep it open to show the error.
+            // this.reimageModal = false;
+            // this.currentMachineId = null;
+            // this.currentMachineType = null;
+        });
+    },
+    
     // --- Bulk Action Logic ---
     cycleBulkMode() {
         if (!this.showBulkActions) {
@@ -489,7 +565,7 @@
                                            x-model="selectAll"
                                            @click="cycleBulkMode() ; document.getElementById('bulk-select-checkbox').checked = false"
                                            title="Select/Deselect All Visible"
-                                           class="left-2 -mt-2 -mb-2 w-1 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 sm:left-6" />
+                                           class="left-2 -mt-2 -mb-2 w-1 rounded dark:bg-black border-gray-300 text-indigo-600 focus:ring-indigo-500 sm:left-6" />
                                     <span class="ml-6">Name</span>
                                 </th>
                                 <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-200 uppercase tracking-wider">
@@ -799,7 +875,8 @@
                                             {# Reimage Action - Only show when there are no non-OS changes to apply #}
                                             <template x-if="!fieldChanges['{{ machine.id }}'] || !Object.keys(fieldChanges['{{ machine.id }}']).some(key => key !== 'os_choice')">
                                                 {% if machine.status == "Ready" or machine.status == "AwaitingAssignment" or machine.status == "ExistingOS" or machine.status == "Offline" %}
-                                                <button @click="openReimageModal('{{ machine.id }}')" class="inline-flex items-center px-3 py-1 border border-transparent text-sm leading-5 font-medium rounded text-cyan-700 bg-cyan-100 hover:bg-cyan-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-cyan-500 dark:bg-cyan-900 dark:text-cyan-200 dark:hover:bg-cyan-800">
+                                                <button @click="handleReimageClick('{{ machine.id }}', '{{ machine.machine_type|default('unknown') }}')" {# MODIFIED: Call handler with type #}
+                                                        class="inline-flex items-center px-3 py-1 border border-transparent text-sm leading-5 font-medium rounded text-cyan-700 bg-cyan-100 hover:bg-cyan-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-cyan-500 dark:bg-cyan-900 dark:text-cyan-200 dark:hover:bg-cyan-800">
                                                     ♻️ Reimage
                                                 </button>
                                                 {% endif %}

@@ -103,6 +103,7 @@ lazy_static = "1.4.0"
 base64 = "0.22"
 oauth2 = { version = "4.4", features = ["reqwest"] }
 urlencoding = "2.1"
+aes-gcm = "0.10.3"
 
 # Proxmox & Network Scanning
 # proxmox-rs = { version = "0.1" } # Adjust version as needed - Incorrect, it's a workspace

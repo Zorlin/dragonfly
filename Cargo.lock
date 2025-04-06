@@ -1209,9 +1209,11 @@ checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 name = "dragonfly"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "anyhow",
  "assert_cmd",
  "axum",
+ "base64 0.22.1",
  "bcrypt",
  "chrono",
  "clap",
@@ -1280,6 +1282,7 @@ dependencies = [
 name = "dragonfly-server"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "anyhow",
  "argon2",
  "async-session",

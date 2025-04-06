@@ -23,84 +23,29 @@ pub async fn init_db() -> Result<SqlitePool> {
     let db_path = "sqlite.db";
     
     // Check if the database file exists and create it if not
-    if !Path::new(db_path).exists() {
+    let db_exists = std::path::Path::new(db_path).exists();
+    if !db_exists {
         info!("Database file doesn't exist, creating it");
-        match File::create(db_path) {
-            Ok(_) => info!("Created database file: {}", db_path),
-            Err(e) => return Err(anyhow!("Failed to create database file: {}", e)),
-        }
     }
     
-    // Ensure we have correct permissions
-    match OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(db_path)
-    {
-        Ok(_) => info!("Verified database file is readable and writeable"),
-        Err(e) => return Err(anyhow!("Failed to open database file with read/write permissions: {}", e)),
-    }
+    // Create SQLite connection string
+    let database_url = format!("sqlite://{}?mode=rwc", db_path);
     
-    info!("Attempting to open database at: {}", db_path);
-    let pool = SqlitePool::connect(&format!("sqlite:{}", db_path)).await?;
+    // Connect to SQLite database
+    let pool = SqlitePool::connect(&database_url)
+        .await
+        .map_err(|e| anyhow!("Failed to connect to SQLite database at {}: {}", database_url, e))?;
     
-    // Create tables if they don't exist
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS machines (
-            id TEXT PRIMARY KEY NOT NULL,
-            mac_address TEXT UNIQUE NOT NULL,
-            ip_address TEXT,
-            hostname TEXT,
-            status TEXT NOT NULL,
-            os_choice TEXT,
-            os_installed TEXT,
-            disks TEXT, -- JSON representation
-            nameservers TEXT, -- JSON representation
-            memorable_name TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            bmc_credentials TEXT, -- JSON representation
-            installation_progress INTEGER DEFAULT 0,
-            installation_step TEXT,
-            last_deployment_duration INTEGER, -- Duration in seconds
-            cpu_model TEXT,
-            cpu_cores INTEGER,
-            total_ram_bytes INTEGER, -- Store as u64 (INTEGER in SQLite)
-            proxmox_vmid INTEGER,
-            proxmox_node TEXT,
-            proxmox_cluster TEXT, -- Add cluster column
-            is_proxmox_host BOOLEAN DEFAULT FALSE NOT NULL
-        )
-        "#,
-    )
-    .execute(&pool)
-    .await?;
-    
-    // Create admin_credentials table
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS admin_credentials (
-            id INTEGER PRIMARY KEY,
-            username TEXT NOT NULL,
-            password_hash TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )
-        "#,
-    )
-    .execute(&pool)
-    .await?;
-    
-    // Run database migrations
+    // Run migrations
     migrate_db(&pool).await?;
+    migrate_add_proxmox_settings(&pool).await?;
     
-    // Store the pool globally
-    if let Err(_) = DB_POOL.set(pool.clone()) {
-        return Err(anyhow!("Failed to set global database pool"));
+    // Store the pool globally - DB_POOL is previously defined as a OnceCell
+    if let Err(e) = DB_POOL.set(pool.clone()) {
+        return Err(anyhow!("Failed to set global database pool: {:?}", e));
     }
     
-    info!("Database initialized successfully");
+    info!("Database initialized successfully at {}", db_path);
     Ok(pool)
 }
 
@@ -486,6 +431,39 @@ pub async fn update_status(id: &Uuid, status: MachineStatus) -> Result<bool> {
     
     Ok(success)
 }
+
+// --- NEW FUNCTION to update only the machine status --- 
+pub async fn update_machine_status(id: Uuid, status: MachineStatus) -> Result<bool> {
+    let pool = get_pool().await?;
+    let now = Utc::now();
+    let now_str = now.to_rfc3339();
+    
+    // Store the serialized enum value directly
+    let status_json = serde_json::to_string(&status)?;
+    
+    let result = sqlx::query(
+        r#"
+        UPDATE machines 
+        SET status = ?, updated_at = ? 
+        WHERE id = ?
+        "#,
+    )
+    .bind(status_json)
+    .bind(&now_str)
+    .bind(id.to_string())
+    .execute(pool)
+    .await?;
+    
+    let success = result.rows_affected() > 0;
+    if success {
+        info!("Machine status updated for {}: {:?}", id, status);
+    } else {
+        info!("No machine found with ID {} to update status", id);
+    }
+    
+    Ok(success)
+}
+// --- END NEW FUNCTION --- 
 
 // Update machine hostname
 pub async fn update_hostname(id: &Uuid, hostname: &str) -> Result<bool> {
@@ -2057,4 +2035,429 @@ pub async fn get_proxmox_machines() -> Result<Vec<Machine>> {
     }
     
     Ok(machines)
-} 
+}
+
+// Add this to the structs section
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ProxmoxSettings {
+    pub id: i64,
+    pub host: String,
+    pub port: i32,
+    pub username: String, // We store the username but NEVER the password
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_ticket: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csrf_token: Option<String>,
+    pub ticket_timestamp: Option<i64>,
+    pub skip_tls_verify: bool,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+    // API tokens with different permissions (encrypted and stored)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vm_create_token: Option<String>, // Token for creating VMs
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vm_power_token: Option<String>,  // Token for power operations (reboot/shutdown)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vm_config_token: Option<String>, // Token for changing VM config (boot order, etc.)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vm_sync_token: Option<String>,   // Token for synchronization operations (read access)
+    // Note: We NEVER store the root password. It's only used transiently for creating API tokens.
+}
+
+// Migration function for Proxmox settings table
+async fn migrate_add_proxmox_settings(pool: &SqlitePool) -> Result<()> {
+    info!("Creating proxmox_settings table if it doesn't exist...");
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS proxmox_settings (
+            id INTEGER PRIMARY KEY,
+            host TEXT NOT NULL,
+            port INTEGER NOT NULL DEFAULT 8006,
+            username TEXT NOT NULL,
+            auth_ticket TEXT,
+            csrf_token TEXT,
+            ticket_timestamp INTEGER,
+            skip_tls_verify BOOLEAN NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        "#
+    )
+    .execute(pool)
+    .await?;
+    
+    info!("Created proxmox_settings table");
+    Ok(())
+}
+
+// Function to save a ProxmoxSettings object to the database
+pub async fn save_proxmox_settings_object(settings: &ProxmoxSettings) -> Result<()> {
+    let pool = get_pool().await?;
+    let now = Utc::now();
+    let now_str = now.to_rfc3339();
+    
+    // Update existing settings or insert if they don't exist (upsert pattern)
+    sqlx::query(
+        r#"
+        INSERT INTO proxmox_settings (
+            id, host, port, username, auth_ticket, csrf_token, 
+            ticket_timestamp, skip_tls_verify, created_at, updated_at
+        )
+        VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (id) DO UPDATE SET
+            host = excluded.host,
+            port = excluded.port,
+            username = excluded.username,
+            auth_ticket = excluded.auth_ticket,
+            csrf_token = excluded.csrf_token,
+            ticket_timestamp = excluded.ticket_timestamp,
+            skip_tls_verify = excluded.skip_tls_verify,
+            updated_at = excluded.updated_at
+        "#,
+    )
+    .bind(&settings.host)
+    .bind(settings.port)
+    .bind(&settings.username)
+    .bind(&settings.auth_ticket)
+    .bind(&settings.csrf_token)
+    .bind(settings.ticket_timestamp)
+    .bind(settings.skip_tls_verify)
+    .bind(&now_str)
+    .bind(&now_str)
+    .execute(pool)
+    .await?;
+    
+    Ok(())
+}
+
+// Function to get Proxmox settings from the database
+pub async fn get_proxmox_settings() -> Result<Option<ProxmoxSettings>> {
+    let pool = get_pool().await?;
+    
+    // Use regular query instead of query macro to avoid SQLX prepare issues
+    let row = sqlx::query(
+        r#"
+        SELECT id, host, port, username, auth_ticket, csrf_token, 
+               ticket_timestamp, skip_tls_verify, created_at, updated_at
+        FROM proxmox_settings
+        WHERE id = 1
+        "#
+    )
+    .fetch_optional(pool)
+    .await?;
+    
+    match row {
+        Some(r) => {
+            // Extract values manually
+            let id: i64 = r.try_get("id")?;
+            let host: String = r.try_get("host")?;
+            let port: i32 = r.try_get("port")?;
+            let username: String = r.try_get("username")?;
+            let auth_ticket: Option<String> = r.try_get("auth_ticket")?;
+            let csrf_token: Option<String> = r.try_get("csrf_token")?;
+            let ticket_timestamp: Option<i64> = r.try_get("ticket_timestamp")?;
+            let skip_tls_verify: i64 = r.try_get("skip_tls_verify")?;
+            let created_at_str: String = r.try_get("created_at")?;
+            let updated_at_str: String = r.try_get("updated_at")?;
+            
+            let created_at = chrono::DateTime::parse_from_rfc3339(&created_at_str)?
+                .with_timezone(&chrono::Utc);
+            let updated_at = chrono::DateTime::parse_from_rfc3339(&updated_at_str)?
+                .with_timezone(&chrono::Utc);
+                
+            Ok(Some(ProxmoxSettings {
+                id,
+                host,
+                port,
+                username,
+                auth_ticket,
+                csrf_token,
+                ticket_timestamp,
+                skip_tls_verify: skip_tls_verify != 0,
+                created_at,
+                updated_at,
+                vm_create_token: None,
+                vm_power_token: None,
+                vm_config_token: None,
+                vm_sync_token: None,
+            }))
+        },
+        None => Ok(None),
+    }
+}
+
+// Simplified function to save basic Proxmox settings
+pub async fn save_proxmox_settings(
+    host: &str, 
+    port: i32, 
+    username: &str, 
+    skip_tls_verify: bool
+) -> Result<()> {
+    info!("Saving Proxmox settings to database");
+    
+    let now = Utc::now();
+    
+    // Create a settings object without storing any credentials
+    let settings = ProxmoxSettings {
+        id: 1,
+        host: host.to_string(),
+        port,
+        username: username.to_string(),
+        auth_ticket: None,
+        csrf_token: None,
+        ticket_timestamp: None,
+        skip_tls_verify,
+        created_at: now,
+        updated_at: now,
+        vm_create_token: None,
+        vm_power_token: None,
+        vm_config_token: None,
+        vm_sync_token: None,
+    };
+    
+    // Save settings
+    save_proxmox_settings_object(&settings).await?;
+    
+    Ok(())
+}
+
+// New function that doesn't require or store password
+pub async fn update_proxmox_connection_settings(
+    host: &str, 
+    port: i32, 
+    username: &str, 
+    skip_tls_verify: bool
+) -> Result<ProxmoxSettings> {
+    // Create a new ProxmoxSettings object with current time
+    let now = Utc::now();
+    
+    // Start with a settings object without tickets or password
+    let settings = ProxmoxSettings {
+        id: 1,
+        host: host.to_string(),
+        port,
+        username: username.to_string(),
+        auth_ticket: None,
+        csrf_token: None,
+        ticket_timestamp: None,
+        skip_tls_verify,
+        created_at: now,
+        updated_at: now,
+        vm_create_token: None,
+        vm_power_token: None,
+        vm_config_token: None,
+        vm_sync_token: None,
+    };
+    
+    // Save initial settings without tickets or password
+    save_proxmox_settings_object(&settings).await?;
+    
+    Ok(settings)
+}
+
+// Deprecated - will be removed in future, kept for backward compatibility
+pub async fn update_proxmox_auth_tickets(
+    host: &str, 
+    port: i32, 
+    username: &str, 
+    _password: &str, // Note: password is only used for authentication, NOT stored
+    skip_tls_verify: bool
+) -> Result<ProxmoxSettings> {
+    // Just call the new function that doesn't store the password
+    update_proxmox_connection_settings(host, port, username, skip_tls_verify).await
+}
+
+// Function to check if tickets are valid (not expired)
+pub async fn are_proxmox_tickets_valid(settings: &ProxmoxSettings) -> bool {
+    if settings.auth_ticket.is_none() || settings.csrf_token.is_none() {
+        return false;
+    }
+    
+    // Without timestamp, we can't validate expiration
+    // Just check if tokens exist
+    true
+}
+
+// Deprecated - will be removed in future, kept for backward compatibility
+pub async fn update_proxmox_auth_tickets_with_tokens(
+    host: &str, 
+    port: i32, 
+    username: &str, 
+    _password: &str, // Note: password is only used for authentication, NOT stored
+    skip_tls_verify: bool,
+    auth_ticket: &str,
+    csrf_token: &str,
+    timestamp: i64
+) -> Result<ProxmoxSettings> {
+    // Create a new ProxmoxSettings object with current time
+    let now = Utc::now();
+    
+    // Create settings object with the auth tickets but no password
+    let settings = ProxmoxSettings {
+        id: 1,
+        host: host.to_string(),
+        port,
+        username: username.to_string(),
+        auth_ticket: Some(auth_ticket.to_string()),
+        csrf_token: Some(csrf_token.to_string()),
+        ticket_timestamp: Some(timestamp),
+        skip_tls_verify,
+        created_at: now,
+        updated_at: now,
+        vm_create_token: None,
+        vm_power_token: None,
+        vm_config_token: None,
+        vm_sync_token: None,
+    };
+    
+    // Save settings with tickets
+    save_proxmox_settings_object(&settings).await?;
+    
+    info!("Successfully saved Proxmox authentication tickets to database");
+    
+    Ok(settings)
+}
+
+// Add a new function to update API tokens
+pub async fn update_proxmox_api_tokens(
+    token_type: &str,
+    token_value: &str
+) -> Result<bool> {
+    use sqlx::query;
+    use crate::encryption::{encrypt_string, decrypt_string};
+    use tracing::info;
+
+    // Get the existing settings
+    let settings = match get_proxmox_settings().await? {
+        Some(s) => s,
+        None => {
+            return Err(anyhow::anyhow!("Cannot update API tokens: No Proxmox settings exist").into());
+        }
+    };
+
+    // Encrypt the token
+    let encrypted_token = match encrypt_string(token_value) {
+        Ok(token) => token,
+        Err(e) => {
+            return Err(anyhow::anyhow!("Failed to encrypt API token: {}", e).into());
+        }
+    };
+
+    // Update the appropriate token field based on token type
+    let update_result = match token_type {
+        "create" => {
+            info!("Updating Proxmox VM creation API token");
+            sqlx::query(
+                "UPDATE proxmox_settings 
+                SET vm_create_token = ?, updated_at = ?
+                WHERE id = 1"
+            )
+            .bind(encrypted_token)
+            .bind(chrono::Utc::now())
+            .execute(get_pool().await?)
+            .await
+        },
+        "power" => {
+            info!("Updating Proxmox VM power operations API token");
+            sqlx::query(
+                "UPDATE proxmox_settings 
+                SET vm_power_token = ?, updated_at = ?
+                WHERE id = 1"
+            )
+            .bind(encrypted_token)
+            .bind(chrono::Utc::now())
+            .execute(get_pool().await?)
+            .await
+        },
+        "config" => {
+            info!("Updating Proxmox VM configuration API token");
+            sqlx::query(
+                "UPDATE proxmox_settings 
+                SET vm_config_token = ?, updated_at = ?
+                WHERE id = 1"
+            )
+            .bind(encrypted_token)
+            .bind(chrono::Utc::now())
+            .execute(get_pool().await?)
+            .await
+        },
+        "sync" => {
+            info!("Updating Proxmox synchronization API token");
+            sqlx::query(
+                "UPDATE proxmox_settings 
+                SET vm_sync_token = ?, updated_at = ?
+                WHERE id = 1"
+            )
+            .bind(encrypted_token)
+            .bind(chrono::Utc::now())
+            .execute(get_pool().await?)
+            .await
+        },
+        _ => {
+            return Err(anyhow::anyhow!("Invalid token type: {}", token_type).into());
+        }
+    };
+
+    match update_result {
+        Ok(_) => Ok(true),
+        Err(e) => Err(e.into()),
+    }
+}
+
+pub async fn update_proxmox_tokens(
+    vm_create_token: String,
+    vm_power_token: String,
+    vm_config_token: String,
+    vm_sync_token: String
+) -> Result<bool> {
+    info!("Updating Proxmox API tokens");
+    let pool = get_pool().await?;
+    
+    let _settings = match get_proxmox_settings().await? {
+        Some(s) => s,
+        None => {
+            // If no settings exist yet, create a default entry
+            let now = chrono::Utc::now();
+            ProxmoxSettings {
+                id: 1, // We only ever have one settings entry
+                host: "".to_string(),
+                port: 8006,
+                username: "".to_string(),
+                auth_ticket: None,
+                csrf_token: None,
+                ticket_timestamp: None,
+                skip_tls_verify: false,
+                created_at: now,
+                updated_at: now,
+                vm_create_token: None,
+                vm_power_token: None,
+                vm_config_token: None,
+                vm_sync_token: None,
+            }
+        }
+    };
+    
+    // Update the tokens in one transaction
+    let mut transaction = pool.begin().await?;
+    
+    sqlx::query(
+        "UPDATE proxmox_settings SET 
+            vm_create_token = ?,
+            vm_power_token = ?,
+            vm_config_token = ?,
+            vm_sync_token = ?,
+            updated_at = ?
+         WHERE id = 1"
+    )
+    .bind(&vm_create_token)
+    .bind(&vm_power_token)
+    .bind(&vm_config_token)
+    .bind(&vm_sync_token)
+    .bind(chrono::Utc::now().to_rfc3339())
+    .execute(&mut *transaction)
+    .await?;
+    
+    transaction.commit().await?;
+    
+    Ok(true)
+}
