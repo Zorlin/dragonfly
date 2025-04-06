@@ -57,6 +57,7 @@ pub fn api_router() -> Router<crate::AppState> {
         .route("/machines", get(get_all_machines).post(register_machine))
         .route("/machines/install-status", get(get_install_status))
         .route("/machines/{id}/os", get(get_machine_os).post(assign_os))
+        .route("/machines/{id}/reimage", post(reimage_machine)) // Add new reimage endpoint
         .route("/machines/{id}/hostname", get(get_hostname_form).put(update_hostname))
         .route("/machines/{id}/status", put(update_status))
         .route("/machines/{id}/status-and-progress", get(get_machine_status_and_progress_partial))
@@ -591,100 +592,13 @@ async fn assign_os_internal(id: Uuid, os_choice: String) -> Response {
     
     match db::assign_os(&id, &os_choice).await {
         Ok(true) => {
-            // Get the machine to create a workflow for OS installation
-            let machine_name = if let Ok(Some(machine)) = db::get_machine_by_id(&id).await {
-                // Create a workflow for OS installation
-                let workflow_result = crate::tinkerbell::create_workflow(&machine, &os_choice).await;
-                
-                if let Err(e) = workflow_result {
-                    // Improved error handling with more specific error message
-                    error!("Failed to create Tinkerbell workflow: {}", e);
-                    
-                    // Check if this is a template not found error
-                    if e.to_string().contains("Template") && e.to_string().contains("not found") {
-                        // Return an HTML error message specifically for template not found
-                        let template_name = machine.os_choice.as_ref().unwrap_or(&os_choice);
-                        let error_html = format!(r###"
-                            <div class="p-4 mb-4 text-sm text-red-700 bg-red-100 rounded-lg" role="alert">
-                                <span class="font-medium">Error!</span> Template for OS "{}" not found in Tinkerbell. 
-                                <p class="mt-2">The OS choice was saved, but you will need to create the missing Tinkerbell template 
-                                before the installation can proceed.</p>
-                            </div>
-                        "###, template_name);
-                        return (StatusCode::INTERNAL_SERVER_ERROR, [(axum::http::header::CONTENT_TYPE, "text/html")], error_html).into_response();
-                    }
-                    
-                    warn!("Failed to create Tinkerbell workflow (continuing anyway): {}", e);
-                } else {
-                    info!("Created Tinkerbell workflow for OS installation for machine {}", id);
-                }
-                
-                // Get a user-friendly name for the machine
-                if let Some(hostname) = &machine.hostname {
-                    hostname.clone()
-                } else if let Some(memorable_name) = &machine.memorable_name {
-                    memorable_name.clone()
-                } else {
-                    id.to_string()
-                }
-            } else {
-                warn!("Machine {} not found after assigning OS, couldn't create workflow", id);
-                id.to_string()
-            };
-            
-            // Return HTML with a toast notification
+            // Return a success response, but don't create a workflow anymore
             let html = format!(r###"
-                <div class="flex flex-col items-center justify-center p-8">
-                    <div class="rounded-full bg-green-100 p-3 mb-4">
-                        <svg class="h-8 w-8 text-green-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                    </div>
-                    <h3 class="text-lg font-medium text-gray-900">Success!</h3>
-                    <p class="mt-2 text-sm text-gray-500">{} has been assigned to {}</p>
-                    <p class="mt-1 text-sm text-gray-500">A Tinkerbell workflow is being created to install the OS.</p>
-                    <button 
-                        type="button" 
-                        class="mt-6 inline-flex justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500"
-                        hx-get="/machines"
-                        hx-target="body"
-                        hx-swap="outerHTML"
-                        onclick="document.getElementById('os-modal').classList.add('hidden');">
-                        Close
-                    </button>
+                <div class="p-4 mb-4 text-sm text-green-700 bg-green-100 rounded-lg" role="alert">
+                    <span class="font-medium">Success!</span> OS choice set to {} for machine {}. 
+                    <p>To apply this change, click the "Reimage" button.</p>
                 </div>
-                
-                <script>
-                    // Create toast notification
-                    const toast = document.createElement('div');
-                    toast.innerHTML = `
-                        <div class="fixed bottom-4 right-4 bg-white shadow-lg rounded-lg p-4 max-w-md transform transition-transform duration-300 ease-in-out z-50 flex items-start">
-                            <div class="flex-shrink-0 mr-3">
-                                <svg class="h-6 w-6 text-green-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                </svg>
-                            </div>
-                            <div>
-                                <h3 class="font-medium text-gray-900">Success!</h3>
-                                <p class="mt-1 text-sm text-gray-500">{} has been assigned to {}</p>
-                            </div>
-                        </div>
-                    `;
-                    document.body.appendChild(toast.firstElementChild);
-                    
-                    // Auto remove after 5 seconds
-                    setTimeout(() => {{
-                        const toastEl = document.querySelector('.fixed.bottom-4.right-4');
-                        if (toastEl) {{
-                            toastEl.classList.add('translate-y-full', 'opacity-0');
-                            setTimeout(() => toastEl.remove(), 300);
-                        }}
-                    }}, 5000);
-                    
-                    // Use HTMX to refresh the table body
-                    htmx.trigger(document.querySelector('tbody'), 'refresh');
-                </script>
-            "###, os_choice, machine_name, os_choice, machine_name);
+            "###, os_choice, id);
             
             (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/html")], html).into_response()
         },
@@ -784,16 +698,9 @@ async fn update_status(
                     if let Ok(settings) = db::get_app_settings().await {
                         if let Some(default_os) = settings.default_os {
                             info!("Applying default OS '{}' to newly registered machine {}", default_os, id);
-                            // Assign the OS and trigger installation
+                            // Assign the OS without triggering installation
                             if let Ok(true) = db::assign_os(&id, &default_os).await {
-                                // Update Tinkerbell workflow
-                                if let Ok(Some(updated_machine)) = db::get_machine_by_id(&id).await {
-                                    if let Err(e) = crate::tinkerbell::create_workflow(&updated_machine, &default_os).await {
-                                        warn!("Failed to create Tinkerbell workflow for default OS (continuing anyway): {}", e);
-                                    } else {
-                                        info!("Created Tinkerbell workflow for default OS installation");
-                                    }
-                                }
+                                info!("Default OS choice '{}' applied to machine {}", default_os, id);
                             }
                         }
                     }
@@ -3087,6 +2994,96 @@ async fn api_get_machines_by_tag(
                 message: format!("Failed to retrieve machines: {}", e),
             };
             (StatusCode::INTERNAL_SERVER_ERROR, Json(error_response)).into_response()
+        }
+    }
+}
+
+// New reimage handler
+#[axum::debug_handler]
+async fn reimage_machine(
+    auth_session: AuthSession,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Response {
+    // Check if user is authenticated as admin
+    if auth_session.user.is_none() {
+        return (StatusCode::UNAUTHORIZED, Json(json!({
+            "error": "Unauthorized",
+            "message": "Admin authentication required for this operation"
+        }))).into_response();
+    }
+
+    info!("Initiating reimage for machine {}", id);
+    
+    // Get the machine first to make sure we have a valid OS choice
+    let machine = match db::get_machine_by_id(&id).await {
+        Ok(Some(machine)) => machine,
+        Ok(None) => {
+            return (StatusCode::NOT_FOUND, Json(json!({
+                "error": "Not Found",
+                "message": format!("Machine with ID {} not found", id)
+            }))).into_response();
+        },
+        Err(e) => {
+            error!("Failed to get machine {}: {}", id, e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
+                "error": "Database Error",
+                "message": e.to_string()
+            }))).into_response();
+        }
+    };
+    
+    // Make sure there's an OS choice to reimage with
+    let os_choice = match machine.os_choice {
+        Some(ref os) if !os.is_empty() => os,
+        _ => {
+            return (StatusCode::BAD_REQUEST, Json(json!({
+                "error": "Bad Request",
+                "message": "No OS choice set for this machine. Please assign an OS first."
+            }))).into_response();
+        }
+    };
+    
+    // Set the machine status to InstallingOS
+    match db::reimage_machine(&id).await {
+        Ok(true) => {
+            // Create a workflow for OS installation
+            match crate::tinkerbell::create_workflow(&machine, &os_choice).await {
+                Ok(_) => {
+                    // Emit machine updated event
+                    let _ = state.event_manager.send(format!("machine_updated:{}", id));
+                    
+                    // Return success response
+                    let response_html = format!(r###"
+                        <div class="p-4 mb-4 text-sm text-green-700 bg-green-100 rounded-lg" role="alert">
+                            <span class="font-medium">Success!</span> Reimaging machine {} with {}. 
+                            <p>Installation has started and may take several minutes to complete.</p>
+                        </div>
+                    "###, id, os_choice);
+                    
+                    (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/html")], response_html).into_response()
+                },
+                Err(e) => {
+                    error!("Failed to create workflow for machine {}: {}", id, e);
+                    (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
+                        "error": "Workflow Error",
+                        "message": format!("Failed to create installation workflow: {}", e)
+                    }))).into_response()
+                }
+            }
+        },
+        Ok(false) => {
+            return (StatusCode::NOT_FOUND, Json(json!({
+                "error": "Not Found",
+                "message": format!("Machine with ID {} not found", id)
+            }))).into_response();
+        },
+        Err(e) => {
+            error!("Failed to set machine {} status to InstallingOS: {}", id, e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
+                "error": "Database Error",
+                "message": e.to_string()
+            }))).into_response();
         }
     }
 }

@@ -696,10 +696,6 @@
     --tw-translate-y: calc(var(--spacing) * 4);
     translate: var(--tw-translate-x) var(--tw-translate-y);
   }
-  .translate-y-full {
-    --tw-translate-y: 100%;
-    translate: var(--tw-translate-x) var(--tw-translate-y);
-  }
   .scale-95 {
     --tw-scale-x: 95%;
     --tw-scale-y: 95%;
@@ -1162,6 +1158,9 @@
   .bg-green-600 {
     background-color: var(--color-green-600);
   }
+  .bg-indigo-100 {
+    background-color: var(--color-indigo-100);
+  }
   .bg-indigo-500\/30 {
     background-color: color-mix(in oklab, var(--color-indigo-500) 30%, transparent);
   }
@@ -1579,9 +1578,6 @@
   .text-green-500 {
     color: var(--color-green-500);
   }
-  .text-green-600 {
-    color: var(--color-green-600);
-  }
   .text-green-700 {
     color: var(--color-green-700);
   }
@@ -1596,6 +1592,9 @@
   }
   .text-indigo-600 {
     color: var(--color-indigo-600);
+  }
+  .text-indigo-800 {
+    color: var(--color-indigo-800);
   }
   .text-indigo-900 {
     color: var(--color-indigo-900);
@@ -1827,11 +1826,6 @@
   }
   .transition-opacity {
     transition-property: opacity;
-    transition-timing-function: var(--tw-ease, var(--default-transition-timing-function));
-    transition-duration: var(--tw-duration, var(--default-transition-duration));
-  }
-  .transition-transform {
-    transition-property: transform, translate, scale, rotate;
     transition-timing-function: var(--tw-ease, var(--default-transition-timing-function));
     transition-duration: var(--tw-duration, var(--default-transition-duration));
   }
@@ -2698,6 +2692,11 @@
       border-color: var(--color-gray-500);
     }
   }
+  .dark\:border-gray-500\/20 {
+    &:where(.dark, .dark *) {
+      border-color: color-mix(in oklab, var(--color-gray-500) 20%, transparent);
+    }
+  }
   .dark\:border-gray-600 {
     &:where(.dark, .dark *) {
       border-color: var(--color-gray-600);
@@ -2726,6 +2725,11 @@
   .dark\:border-indigo-400 {
     &:where(.dark, .dark *) {
       border-color: var(--color-indigo-400);
+    }
+  }
+  .dark\:border-indigo-500\/20 {
+    &:where(.dark, .dark *) {
+      border-color: color-mix(in oklab, var(--color-indigo-500) 20%, transparent);
     }
   }
   .dark\:border-orange-700 {
@@ -2896,6 +2900,11 @@
   .dark\:bg-green-900 {
     &:where(.dark, .dark *) {
       background-color: var(--color-green-900);
+    }
+  }
+  .dark\:bg-indigo-400\/10 {
+    &:where(.dark, .dark *) {
+      background-color: color-mix(in oklab, var(--color-indigo-400) 10%, transparent);
     }
   }
   .dark\:bg-indigo-700 {
@@ -3095,6 +3104,11 @@
   .dark\:text-indigo-100 {
     &:where(.dark, .dark *) {
       color: var(--color-indigo-100);
+    }
+  }
+  .dark\:text-indigo-300 {
+    &:where(.dark, .dark *) {
+      color: var(--color-indigo-300);
     }
   }
   .dark\:text-orange-500 {

@@ -101,44 +101,61 @@
         return /^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/.test(ip);
     },
     
-    // Apply changes to a specific machine
+    // Apply changes to a specific machine (excluding OS choice, handled by selectOs)
     applyChanges(machineId) {
         if (!this.fieldChanges[machineId]) return;
         
         const changes = this.fieldChanges[machineId];
         const payload = {};
         
-        // Convert changes to a payload
+        // Build payload with non-OS changes
         Object.keys(changes).forEach(field => {
-            payload[field] = changes[field];
+            if (field !== 'os_choice') { // Ensure os_choice is not included
+                payload[field] = changes[field];
+            }
         });
+
+        // Only proceed if there are actual non-OS changes
+        if (Object.keys(payload).length === 0) {
+            console.warn('Apply called with no non-OS changes');
+            // Optionally clear the (empty) changes if needed
+            delete this.fieldChanges[machineId];
+            this.pendingChanges = Object.keys(this.fieldChanges).length > 0;
+            return;
+        }
         
-        // Submit changes via AJAX
+        // --- Apply Other Field Changes (Hostname, IP, MAC) --- 
         fetch(`/api/machines/${machineId}`, {
             method: 'PUT',
             headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
+                'Content-Type': 'application/json',
             },
-            body: new URLSearchParams(payload).toString()
+            body: JSON.stringify(payload)
         })
         .then(response => {
             if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
+                // Assume JSON error for this endpoint
+                 return response.json().then(data => {
+                    throw new Error(data.message || `HTTP error! Status: ${response.status}`);
+                });
             }
             return response.json();
         })
         .then(data => {
-            // Clear changes for this machine
-            delete this.fieldChanges[machineId];
+            // Clear applied changes
+            Object.keys(payload).forEach(field => {
+                delete this.fieldChanges[machineId][field];
+            });
+            if (Object.keys(this.fieldChanges[machineId]).length === 0) {
+                delete this.fieldChanges[machineId];
+            }
             this.pendingChanges = Object.keys(this.fieldChanges).length > 0;
             
-            // Show success toast
-            showToast(`Machine ${machineId} updated: ${data.message}`, 'success');
-            
-            // Refresh the machine list
+            showToast(`Machine ${machineId} updated: ${data.message || 'Changes applied'}`, 'success');
             refreshMachineList();
         })
         .catch(error => {
+            console.error('Error applying other changes:', error);
             showToast(`Failed to update machine: ${error.message}`, 'error');
         });
     },
@@ -194,43 +211,101 @@
         });
     },
     selectOs(id, os) {
-        // Initialize changes object if needed
-        if (!this.originalValues[id]) {
-            this.originalValues[id] = {};
-        }
-        if (!this.originalValues[id]['os_choice']) {
-            // Store original OS value from the DOM since we don't have it in our data model
-            const osElement = document.querySelector('tr[data-machine-id=' + id + '] .os-current-value');
-            this.originalValues[id]['os_choice'] = osElement ? osElement.textContent.trim() : '';
+        if (!this.isAuthenticated) {
+            showToast('Authentication required.', 'error');
+            return;
         }
         
-        // Update the changes object
-        if (!this.fieldChanges[id]) {
-            this.fieldChanges[id] = {};
-        }
-        
-        // Check if the value has actually changed
-        if (os !== this.originalValues[id]['os_choice']) {
-            this.fieldChanges[id]['os_choice'] = os;
-            this.pendingChanges = true;
-        } else {
-            // If value is back to original, remove it from changes
-            delete this.fieldChanges[id]['os_choice'];
-            
-            // Check if there are any changes left for this machine
-            if (Object.keys(this.fieldChanges[id]).length === 0) {
-                delete this.fieldChanges[id];
-            }
-            
-            // Check if there are any changes left at all
-            this.pendingChanges = Object.keys(this.fieldChanges).length > 0;
-        }
-        
-        // Close the dropdown
+        // Close the dropdown immediately
         this.osDropdowns[id] = false;
         
-        // For debugging
-        console.log('Select OS ' + os + ' for machine ' + id);
+        // Immediately send API request to update os_choice
+        fetch(`/api/machines/${id}/os`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ os_choice: os })
+        })
+        .then(response => {
+            if (!response.ok) {
+                // Handle potential HTML error response
+                 if (response.headers.get('content-type')?.includes('text/html')) {
+                    return response.text().then(html => { 
+                        const errorMatch = html.match(/<span class='font-medium'>Error!\s*<\/span>\s*(.*)/i);
+                        throw new Error(errorMatch ? errorMatch[1].trim() : `HTTP error! Status: ${response.status}`); 
+                    });
+                } else {
+                    return response.json().then(data => {
+                        throw new Error(data.message || `HTTP error! Status: ${response.status}`);
+                    });
+                }
+            }
+            return response.text(); // Expecting HTML success response 
+        })
+        .then(() => {
+            showToast(`OS choice for ${id} updated to ${os}.`, 'success');
+            refreshMachineList(); // Refresh to show the updated choice visually
+        })
+        .catch(error => {
+            console.error('Error selecting OS:', error);
+            showToast(`Failed to set OS choice: ${error.message}`, 'error');
+        });
+    },
+    
+    // New function to cancel a pending OS choice
+    cancelOsChoice(machineId) {
+        if (!this.isAuthenticated) {
+            showToast('Authentication required.', 'error');
+            return;
+        }
+        
+        // Send API request to clear os_choice
+        fetch(`/api/machines/${machineId}/os`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ os_choice: '' }) // Send empty string to clear
+        })
+        .then(response => {
+            if (!response.ok) {
+                // Handle potential HTML error response
+                 if (response.headers.get('content-type')?.includes('text/html')) {
+                    return response.text().then(html => { 
+                        const errorMatch = html.match(/<span class='font-medium'>Error!\s*<\/span>\s*(.*)/i);
+                        throw new Error(errorMatch ? errorMatch[1].trim() : `HTTP error! Status: ${response.status}`); 
+                    });
+                } else {
+                    return response.json().then(data => {
+                        throw new Error(data.message || `HTTP error! Status: ${response.status}`);
+                    });
+                }
+            }
+            return response.text(); // Expecting HTML success response 
+        })
+        .then(() => {
+            // Clear local state if needed (applyChanges might not have been hit yet)
+            if (this.fieldChanges[machineId] && this.fieldChanges[machineId].os_choice) {
+                delete this.fieldChanges[machineId].os_choice;
+                 if (Object.keys(this.fieldChanges[machineId]).length === 0) {
+                    delete this.fieldChanges[machineId];
+                }
+                this.pendingChanges = Object.keys(this.fieldChanges).length > 0;
+            }
+            
+            // Close dropdown
+            this.osDropdowns[machineId] = false;
+            
+            showToast(`Pending OS change for ${machineId} cancelled.`, 'success');
+            refreshMachineList(); // Refresh to reflect the cleared choice
+        })
+        .catch(error => {
+            console.error('Error cancelling OS choice:', error);
+            showToast(`Failed to cancel OS change: ${error.message}`, 'error');
+            // Optionally close dropdown on error too?
+            this.osDropdowns[machineId] = false;
+        });
     },
     
     // Function to delete a machine
@@ -444,66 +519,67 @@
                                             bg-blue-100 text-blue-800 dark:bg-blue-400/10 dark:text-blue-300 dark:border dark:border-blue-500/20
                                         {% elif machine.status == "ExistingOS" %}
                                             bg-sky-100 text-sky-800 dark:bg-sky-400/10 dark:text-sky-300 dark:border dark:border-sky-500/20
+                                        {% elif machine.status == "Offline" %}
+                                            bg-gray-100 text-gray-800 dark:bg-gray-400/10 dark:text-gray-300 dark:border dark:border-gray-500/20
+                                        {% elif machine.status == "Failed" or machine.status.startswith("Error") %}
+                                            bg-red-100 text-red-800 dark:bg-red-400/10 dark:text-red-300 dark:border dark:border-red-500/20
+                                        {% elif machine.status == "Deploying" %}
+                                            bg-indigo-100 text-indigo-800 dark:bg-indigo-400/10 dark:text-indigo-300 dark:border dark:border-indigo-500/20
                                         {% else %}
                                             bg-red-100 text-red-800 dark:bg-red-400/10 dark:text-red-300 dark:border dark:border-red-500/20
                                         {% endif %}">
                                         {% if machine.status == "Ready" %}
-                                            Provisioned
+                                            Ready
                                         {% elif machine.status == "InstallingOS" %}
                                             Installing OS
                                         {% elif machine.status == "AwaitingAssignment" %}
                                             Choose OS
                                         {% elif machine.status == "ExistingOS" %}
                                             Existing OS
+                                        {% elif machine.status == "Offline" %}
+                                            Offline
+                                        {% elif machine.status == "Failed" %}
+                                            Failed
+                                        {% elif machine.status.startswith("Error") %}
+                                            {{ machine.status }}
+                                        {% elif machine.status == "Deploying" %}
+                                            Deploying
                                         {% else %}
-                                            Error {# Explicitly handle Error or other unexpected statuses #}
+                                            {{ machine.status }} {# Display the actual status if it doesn't match predefined ones #}
                                         {% endif %}
                                     </span>
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
                                     <div class="relative" @click.stop>
-                                        <!-- Hidden span to store original OS value for selectOs function -->
-                                        <span class="hidden os-current-value">{{ machine.os_choice|default('') }}</span>
-                                        
-                                        <div class="flex items-center cursor-pointer" @click="toggleOsDropdown('{{ machine.id }}')">
-                                            <!-- When user has chosen a new OS -->
-                                            <span x-show="fieldChanges['{{ machine.id }}'] && fieldChanges['{{ machine.id }}'].os_choice !== undefined" class="flex items-center text-purple-700 dark:text-purple-400 font-medium">
-                                                {% if machine.os_choice %}
-                                                    <span class="flex items-center" data-os-raw="{{ machine.os_choice }}">
-                                                        {{ machine.os_choice | format_os_icon | safe }}
-                                                        <span class="ml-1">{{ machine.os_choice | format_os }}</span>
-                                                    </span>
-                                                {% else %}
-                                                    <i class="fas fa-square-question text-gray-400 mr-1"></i>
-                                                {% endif %}
-                                                <span class="ml-1" x-text="fieldChanges['{{ machine.id }}'].os_choice"></span>
-                                                <i class="fas fa-arrow-right-arrow-left ml-1 text-xs" title="OS will change on next reimage"></i>
-                                            </span>
-                                            
-                                            <!-- Default OS display (no changes) -->
-                                            <span x-show="!(fieldChanges['{{ machine.id }}'] && fieldChanges['{{ machine.id }}'].os_choice !== undefined)">
-                                                {% if machine.os_installed %}
-                                                    <span class="flex items-center" data-os-raw="{{ machine.os_installed }}">
-                                                        {{ machine.os_installed | format_os_icon | safe }}
-                                                        <span class="ml-1">{{ machine.os_installed | format_os }}</span>
-                                                    </span>
-                                                {% elif machine.os_choice %}
-                                                    <span class="flex items-center" data-os-raw="{{ machine.os_choice }}">
-                                                        {{ machine.os_choice | format_os_icon | safe }} 
-                                                        <span class="ml-1">{{ machine.os_choice | format_os }}</span>
-                                                    </span>
-                                                {% else %}
-                                                    <span class="text-gray-400 italic flex items-center">
-                                                        <i class="fas fa-square-question text-gray-400 mr-1"></i> No OS
-                                                    </span>
-                                                {% endif %}
-                                            </span>
-                                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 ml-1 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <!-- Main Display: Installed OS -->
+                                        <div class="flex items-center">
+                                            {% set installed_os = machine.os_installed|default('Unknown') %}
+                                            {% if installed_os != 'Unknown' %}
+                                                <span class="flex items-center" data-os-raw="{{ machine.os_installed }}">
+                                                    {{ machine.os_installed | format_os_icon | safe }}
+                                                    <span class="ml-1">{{ machine.os_installed | format_os }}</span>
+                                                </span>
+                                            {% else %}
+                                                <span class="text-gray-400 italic flex items-center">
+                                                    <i class="fas fa-square-question text-gray-400 mr-1"></i> Unknown
+                                                </span>
+                                            {% endif %}
+                                            <!-- Dropdown Arrow -->
+                                            <svg @click.stop="toggleOsDropdown('{{ machine.id }}')" xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 ml-1 text-gray-400 cursor-pointer hover:text-indigo-500 dark:hover:text-indigo-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
                                             </svg>
                                         </div>
+
+                                        <!-- Secondary Display: Pending OS Choice (if different from installed) -->
+                                        {% if machine.os_choice and machine.os_choice != machine.os_installed %}
+                                            <div class="mt-1 text-xs text-purple-600 dark:text-purple-400 italic font-thin flex items-center" title="OS choice {{ machine.os_choice }} pending reimage">
+                                                 {{ machine.os_choice | format_os_icon | safe }}
+                                                 <span class="ml-1">{{ machine.os_choice | format_os }}</span>
+                                                 <i class="fas fa-arrow-right-arrow-left ml-1 text-xs"></i>
+                                            </div>
+                                        {% endif %}
                                         
-                                        <!-- OS Dropdown -->
+                                        <!-- OS Selection Dropdown (absolutely positioned) -->
                                         <div 
                                             x-show="osDropdowns['{{ machine.id }}'] === true"
                                             x-transition:enter="transition ease-out duration-100"
@@ -517,6 +593,14 @@
                                             x-cloak
                                         >
                                             <div class="py-1">
+                                                {# Cancel Reimage Option #}
+                                                {% if machine.os_choice and machine.os_choice != machine.os_installed %}
+                                                    <a href="#" @click.prevent="cancelOsChoice('{{ machine.id }}')" class="block px-4 py-2 text-sm text-green-600 hover:bg-gray-100 hover:text-green-800 dark:text-green-400 dark:hover:bg-gray-700 dark:hover:text-green-300 flex items-center">
+                                                        <i class="fas fa-times-circle mr-2"></i>Keep existing OS
+                                                    </a>
+                                                    <div class="border-t border-gray-200 dark:border-gray-600 my-1"></div> {# Divider #}
+                                                {% endif %}
+                                                
                                                 <!-- OS Options -->
                                                 <a href="#" @click.prevent="selectOs('{{ machine.id }}', 'ubuntu-2204')" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white flex items-center">
                                                     <i class="fab fa-ubuntu text-orange-500 dark:text-orange-500 no-invert mr-2"></i> Ubuntu 22.04
@@ -536,6 +620,8 @@
                                                 <!-- Add more OS options as needed -->
                                             </div>
                                         </div>
+                                        <!-- Hidden spans for JS (if needed, maybe remove os-current-value) -->
+                                         <span class="hidden os-current-value">{{ machine.os_installed|default('') }}</span> 
                                     </div>
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
@@ -571,16 +657,16 @@
                                                 🏷️ Tags
                                             </button>
                                             
-                                            {# Apply Button - Only show when there are changes to apply #}
-                                            <template x-if="fieldChanges['{{ machine.id }}'] && Object.keys(fieldChanges['{{ machine.id }}']).length > 0">
+                                            {# Apply Button - Only show when there are *non-OS* changes to apply #}
+                                            <template x-if="fieldChanges['{{ machine.id }}'] && Object.keys(fieldChanges['{{ machine.id }}']).some(key => key !== 'os_choice')">
                                                 <button @click="fieldChanges['{{ machine.id }}'].mac_address ? confirmMacChange('{{ machine.id }}') : applyChanges('{{ machine.id }}')" 
                                                         class="inline-flex items-center px-3 py-1 border border-transparent text-sm leading-5 font-medium rounded text-blue-700 bg-blue-100 hover:bg-blue-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 dark:bg-blue-900 dark:text-blue-200 dark:hover:bg-blue-800">
                                                     ⚡ Apply
                                                 </button>
                                             </template>
                                             
-                                            {# Reimage Action - Only show when there are no changes to apply #}
-                                            <template x-if="!fieldChanges['{{ machine.id }}'] || Object.keys(fieldChanges['{{ machine.id }}']).length === 0">
+                                            {# Reimage Action - Only show when there are no non-OS changes to apply #}
+                                            <template x-if="!fieldChanges['{{ machine.id }}'] || !Object.keys(fieldChanges['{{ machine.id }}']).some(key => key !== 'os_choice')">
                                                 {% if machine.status == "Ready" or machine.status == "AwaitingAssignment" or machine.status == "ExistingOS" or machine.status == "Offline" %}
                                                 <button @click="openReimageModal('{{ machine.id }}')" class="inline-flex items-center px-3 py-1 border border-transparent text-sm leading-5 font-medium rounded text-cyan-700 bg-cyan-100 hover:bg-cyan-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-cyan-500 dark:bg-cyan-900 dark:text-cyan-200 dark:hover:bg-cyan-800">
                                                     ♻️ Reimage
@@ -857,7 +943,7 @@
                 const data = machineProgressData[machineId];
                 // Ensure data exists AND has the new realProgress field
                 if (!data || data.realProgress === undefined) return; 
-                const machineRow = document.querySelector(`tr[data-machine-id=\"${machineId}\"]`);
+                const machineRow = document.querySelector(`tr[data-machine-id='${machineId}']`);
                 if (!machineRow) return;
                 const progressBar = machineRow.querySelector('.workflow-progress-bar');
                 const progressTextElement = machineRow.querySelector('.flex.justify-between.text-xs span:first-child');
@@ -937,7 +1023,7 @@
                 const data = JSON.parse(event.data);
                 
                 // Find the machine row in the table
-                const machineRow = document.querySelector(`tr[data-machine-id="${data.id}"]`);
+                const machineRow = document.querySelector(`tr[data-machine-id='${data.id}']`);
                 if (!machineRow) return; // Not found in this table
                 
                 // Find the status badge within the row
@@ -1217,7 +1303,7 @@
         } // else: Don't overwrite realProgress if it's just an estimated update
         
         // Find the machine row and update static text (action/byte counts)
-        const machineRow = document.querySelector(`tr[data-machine-id=\"${machineId}\"]`);
+        const machineRow = document.querySelector(`tr[data-machine-id='${machineId}']`);
         if (!machineRow) return;
         const actionTextElement = machineRow.querySelector('.flex.justify-between.text-xs span:last-child');
         const progressContainer = machineRow.querySelector('.flex.flex-col.space-y-1');

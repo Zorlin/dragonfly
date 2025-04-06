@@ -396,7 +396,7 @@ pub async fn get_machine_by_ip(ip_address: &str) -> Result<Option<Machine>> {
     }
 }
 
-// Assign OS to a machine
+// Assign OS to a machine without initiating installation
 pub async fn assign_os(id: &Uuid, os_choice: &str) -> Result<bool> {
     let pool = get_pool().await?;
     let now = Utc::now();
@@ -405,11 +405,40 @@ pub async fn assign_os(id: &Uuid, os_choice: &str) -> Result<bool> {
     let result = sqlx::query(
         r#"
         UPDATE machines 
-        SET os_choice = ?, status = ?, updated_at = ? 
+        SET os_choice = ?, updated_at = ? 
         WHERE id = ?
         "#,
     )
     .bind(os_choice)
+    .bind(&now_str)
+    .bind(id.to_string())
+    .execute(pool)
+    .await?;
+    
+    let success = result.rows_affected() > 0;
+    if success {
+        info!("OS choice updated for machine {}: {}", id, os_choice);
+    } else {
+        info!("No machine found with ID {} to update OS choice", id);
+    }
+    
+    Ok(success)
+}
+
+// Initiate reimage process for a machine (set status to InstallingOS)
+pub async fn reimage_machine(id: &Uuid) -> Result<bool> {
+    let pool = get_pool().await?;
+    let now = Utc::now();
+    let now_str = now.to_rfc3339();
+    
+    // Set the machine status to InstallingOS
+    let result = sqlx::query(
+        r#"
+        UPDATE machines 
+        SET status = ?, updated_at = ? 
+        WHERE id = ?
+        "#,
+    )
     .bind(serde_json::to_string(&MachineStatus::InstallingOS)?)
     .bind(&now_str)
     .bind(id.to_string())
@@ -418,9 +447,9 @@ pub async fn assign_os(id: &Uuid, os_choice: &str) -> Result<bool> {
     
     let success = result.rows_affected() > 0;
     if success {
-        info!("OS assigned to machine {}: {}", id, os_choice);
+        info!("Reimage initiated for machine {}", id);
     } else {
-        info!("No machine found with ID {} to assign OS", id);
+        info!("No machine found with ID {} to reimage", id);
     }
     
     Ok(success)

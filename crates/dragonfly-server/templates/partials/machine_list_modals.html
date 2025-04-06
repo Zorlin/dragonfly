@@ -158,14 +158,21 @@
                     <div class="mt-3 text-center sm:ml-4 sm:mt-0 sm:text-left">
                         <h3 class="text-base font-semibold leading-6 text-gray-900 dark:text-white" id="modal-title">Reimage Machine</h3>
                         <div class="mt-2">
-                            <p class="text-sm text-gray-500 dark:text-gray-300">Select an OS to reimage machine <code x-text="currentMachineId"></code> with. (Not Implemented)</p>
-                            {# TODO: Add OS selection dropdown/buttons and trigger reimage API call #}
+                            <p class="text-sm text-gray-500 dark:text-gray-300">Are you sure you want to reimage this machine? This will erase all data on the machine and install the selected OS.</p>
+                            <div class="mt-3" id="reimage-status-message"></div>
                         </div>
                     </div>
                 </div>
                 <div class="mt-5 sm:mt-4 sm:flex sm:flex-row-reverse">
-                    <button type="button" class="disabled:opacity-50 inline-flex w-full justify-center rounded-md bg-cyan-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-cyan-500 sm:ml-3 sm:w-auto" disabled>Reimage</button>
-                    <button type="button" @click="reimageModal = false" class="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 sm:mt-0 sm:w-auto dark:bg-gray-600 dark:text-white dark:ring-gray-500 dark:hover:bg-gray-500">Cancel</button>
+                    <button type="button" 
+                            @click="reimageMachine()" 
+                            class="inline-flex w-full justify-center rounded-md bg-cyan-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-cyan-500 sm:ml-3 sm:w-auto"
+                            :disabled="isReimaging"
+                            x-text="isReimaging ? 'Reimaging...' : 'Reimage'"></button>
+                    <button type="button" 
+                            @click="reimageModal = false" 
+                            class="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 sm:mt-0 sm:w-auto dark:bg-gray-600 dark:text-white dark:ring-gray-500 dark:hover:bg-gray-500"
+                            :disabled="isReimaging">Cancel</button>
                 </div>
             </div>
         </div>

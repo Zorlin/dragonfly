@@ -214,8 +214,36 @@
         <div class="bg-blue-100/20 dark:bg-black border border-blue-500 dark:border-blue-700 rounded-xl shadow-lg p-4 space-y-2">
             <h3 class="text-center text-lg font-semibold text-black dark:text-white">🧬 Details</h3>
             <div class="text-xl mt-8 text-gray-900 dark:text-gray-400">
-                <div><span class="font-bold text-purple-900 dark:text-purple-100">Operating System:</span> <span x-text="machine.os_installed || 'Unknown'"></span></div>
+                <div>
+                    <span class="font-bold text-purple-900 dark:text-purple-100">Operating System:</span>
+                    <template x-if="isEditing">
+                        <select 
+                            x-model="editForm.os_choice" 
+                            class="ml-2 px-2 py-1 bg-transparent border border-indigo-500 rounded text-gray-900 dark:text-gray-200 dark:border-purple-700">
+                            <option value="">Select OS...</option>
+                            <option value="ubuntu-2204">Ubuntu 22.04</option>
+                            <option value="ubuntu-2404">Ubuntu 24.04</option>
+                            <option value="debian-12">Debian 12</option>
+                            <option value="proxmox">Proxmox VE</option>
+                            <option value="talos">Talos</option>
+                        </select>
+                    </template>
+                    <template x-if="!isEditing">
+                        <!-- If there's an OS choice that will be applied on next reimage -->
+                        <template x-if="machine.os_choice">
+                            <span>
+                                <span x-text="formatOsChoice(machine.os_choice)"></span>
+                                <span class="text-xs italic text-gray-500 dark:text-gray-400 ml-1">(applies on next reimage)</span>
+                            </span>
+                        </template>
+                        <!-- Otherwise show the installed OS -->
+                        <template x-if="!machine.os_choice">
+                            <span x-text="formatOsChoice(machine.os_installed) || 'Unknown'"></span>
+                        </template>
+                    </template>
+                </div>
                 <div><span class="font-bold text-purple-900 dark:text-purple-100">CPU:</span> <span x-text="machine.cpu_model || 'Unknown'"></span></div>
+                <div><span class="font-bold text-purple-900 dark:text-purple-100">Cores & Threads:</span> <span x-text="machine.cpu_cores + ' & ' + (machine.cpu_threads || machine.cpu_cores) || 'Unknown'"></span></div>
                 <template x-if="machine.gpu_model">
                     <div><span class="font-bold text-purple-900 dark:text-purple-100">GPU:</span> <span x-text="machine.gpu_model"></span></div>
                 </template>
@@ -244,7 +272,15 @@
                     <button class="w-full h-16 border border-red-700 hover:bg-red-600 text-black dark:text-white rounded-md">Evacuate</button>
                 </div>
                 <div class="flex items-center justify-center">
-                    <button class="w-full h-16 border border-yellow-700 hover:bg-yellow-600 text-black dark:text-white rounded-md">Reimage</button>
+                    <button 
+                        class="w-full h-16 border border-yellow-700 hover:bg-yellow-600 text-black dark:text-white rounded-md"
+                        @click="reimageMachine()"
+                        :disabled="isReimaging || !machine.os_choice"
+                        x-bind:class="{'opacity-50 cursor-not-allowed': isReimaging || !machine.os_choice}"
+                    >
+                        <span x-show="isReimaging">Reimaging...</span>
+                        <span x-show="!isReimaging">Reimage</span>
+                    </button>
                 </div>
             </div>
         </div>
@@ -492,6 +528,7 @@
         selectedStatus: '', // For the status update modal
         fetchDebounceTimer: null, // Timer for debouncing fetches
         error: null,
+        isReimaging: false, // Track reimage status
 
         // Inline edit properties
         isEditing: false, // Replaces editModalOpen
@@ -870,6 +907,67 @@
             } else {
                 return `${percent.toFixed(1)}%`;
             }
+        },
+
+        // Reimage machine - initiate OS installation
+        reimageMachine() {
+            if (!this.machine.os_choice) {
+                window.showToast('Please select an OS before reimaging the machine.', 'error');
+                return;
+            }
+            
+            if (!confirm(`Are you sure you want to reimage this machine with ${this.machine.os_choice}? All data will be erased.`)) {
+                return;
+            }
+            
+            this.isReimaging = true;
+            
+            fetch(`/api/machines/${this.machine.id}/reimage`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            })
+            .then(response => {
+                if (!response.ok) {
+                    if (response.headers.get('content-type')?.includes('application/json')) {
+                        return response.json().then(data => {
+                            throw new Error(data.message || `Error: ${response.status}`);
+                        });
+                    } else {
+                        return response.text().then(text => {
+                            throw new Error(text || `Error: ${response.status}`);
+                        });
+                    }
+                }
+                return response.text();
+            })
+            .then(html => {
+                // Show toast notification
+                window.showToast(`Reimaging machine ${this.machine.hostname || this.machine.id} with ${this.machine.os_choice}`, 'success');
+            })
+            .catch(error => {
+                window.showToast(`Failed to reimage machine: ${error.message}`, 'error');
+            })
+            .finally(() => {
+                this.isReimaging = false;
+            });
+        },
+
+        // Format OS choice for display
+        formatOsChoice(osChoice) {
+            if (!osChoice) return null;
+            
+            // Map OS choices to readable names
+            const osMap = {
+                'ubuntu-2204': 'Ubuntu 22.04',
+                'ubuntu-2404': 'Ubuntu 24.04',
+                'debian-12': 'Debian 12',
+                'proxmox': 'Proxmox VE',
+                'talos': 'Talos'
+            };
+            
+            return osMap[osChoice] || osChoice;
         },
 
         fetchMachineData() {

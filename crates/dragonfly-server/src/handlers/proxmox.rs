@@ -856,63 +856,62 @@ async fn discover_and_register_proxmox_vms(
                                         // QEMU agent returns array of network interfaces
                                         if let Some(interfaces) = result.as_array() {
                                             info!("Found {} network interfaces for VM {}", interfaces.len(), vmid);
-                                            // Look for the first non-loopback interface with IPv4
+                                            
+                                            // --- Modified IP Detection Logic ---
+                                            let mut preferred_ip: Option<String> = None;
+                                            let mut fallback_ip: Option<String> = None;
+
+                                            // First pass: Look for preferred interfaces (eth*, ens*, eno*)
                                             for iface in interfaces {
-                                                // Print each interface for debugging
-                                                info!("Interface for VM {}: {}", vmid, 
-                                                      serde_json::to_string_pretty(&iface).unwrap_or_else(|_| "Failed to format".to_string()));
-                                                
                                                 if let Some(name) = iface.get("name").and_then(|n| n.as_str()) {
-                                                    // Skip loopback interfaces
-                                                    if name.starts_with("lo") {
-                                                        info!("Skipping loopback interface '{}' for VM {}", name, vmid);
-                                                        continue;
-                                                    }
+                                                    if name.starts_with("lo") { continue; } // Skip loopback
                                                     
-                                                    info!("Processing interface '{}' for VM {}", name, vmid);
+                                                    // Check if it's a preferred interface
+                                                    let is_preferred = name.starts_with("eth") || name.starts_with("ens") || name.starts_with("eno");
+                                                    if !is_preferred { continue; } // Skip non-preferred in this pass
                                                     
-                                                    // Look for IPv4 addresses in the ip-addresses array
-                                                    if let Some(ip_addresses) = iface.get("ip-addresses").and_then(|ips| ips.as_array()) {
-                                                        info!("Found {} IP addresses on interface '{}' for VM {}", ip_addresses.len(), name, vmid);
-                                                        
-                                                        for ip_obj in ip_addresses {
-                                                            // Debug each IP address entry
-                                                            info!("IP address entry for VM {} on interface {}: {}", vmid, name,
-                                                                  serde_json::to_string_pretty(&ip_obj).unwrap_or_else(|_| "Failed to format".to_string()));
-                                                            
-                                                            let ip_type = ip_obj.get("ip-address-type").and_then(|t| t.as_str());
-                                                            let ip = ip_obj.get("ip-address").and_then(|a| a.as_str());
-                                                            
-                                                            info!("Found IP address type: {:?}, address: {:?}", ip_type, ip);
-                                                            
-                                                            if let (Some("ipv4"), Some(addr)) = (ip_type, ip) {
-                                                                // Skip link-local addresses (169.254.x.x)
-                                                                if addr.starts_with("169.254.") {
-                                                                    info!("Skipping link-local address {} for VM {}", addr, vmid);
-                                                                    continue;
-                                                                }
-                                                                
-                                                                // Skip loopback addresses (127.x.x.x)
-                                                                if addr.starts_with("127.") {
-                                                                    info!("Skipping loopback address {} for VM {}", addr, vmid);
-                                                                    continue;
-                                                                }
-                                                                
-                                                                ip_address = addr.to_string();
-                                                                info!("Selected IPv4 address {} for VM {} via QEMU Guest Agent", ip_address, vmid);
-                                                                break;
-                                                            }
-                                                        }
-                                                    } else {
-                                                        info!("No IP addresses found on interface '{}' for VM {}", name, vmid);
-                                                    }
+                                                    info!("Processing preferred interface '{}' for VM {}", name, vmid);
                                                     
-                                                    // If we found an IP, break out of the interface loop
-                                                    if ip_address != "Unknown" {
-                                                        break;
+                                                    if let Some(ip_addr) = find_valid_ipv4_in_interface(iface, vmid) {
+                                                        preferred_ip = Some(ip_addr);
+                                                        break; // Found IP on a preferred interface
                                                     }
                                                 }
                                             }
+
+                                            // Second pass: Look in other interfaces if no preferred IP was found
+                                            if preferred_ip.is_none() {
+                                                info!("No IP found on preferred interfaces for VM {}. Checking others.", vmid);
+                                                for iface in interfaces {
+                                                    if let Some(name) = iface.get("name").and_then(|n| n.as_str()) {
+                                                        // Skip loopback and already checked preferred interfaces
+                                                        if name.starts_with("lo") || name.starts_with("eth") || name.starts_with("ens") || name.starts_with("eno") { continue; }
+                                                        // Skip common virtual interfaces (like tailscale, docker, etc.)
+                                                        if name.starts_with("tailscale") || name.starts_with("docker") || name.starts_with("veth") || name.starts_with("virbr") || name.starts_with("br-") { continue; }
+
+                                                        info!("Processing fallback interface '{}' for VM {}", name, vmid);
+                                                        
+                                                        if let Some(ip_addr) = find_valid_ipv4_in_interface(iface, vmid) {
+                                                            fallback_ip = Some(ip_addr);
+                                                            break; // Found first valid fallback IP
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            // Assign the IP address based on priority
+                                            if let Some(preferred) = preferred_ip {
+                                                ip_address = preferred;
+                                                info!("Selected preferred IPv4 address {} for VM {} via Guest Agent", ip_address, vmid);
+                                            } else if let Some(fallback) = fallback_ip {
+                                                ip_address = fallback;
+                                                info!("Selected fallback IPv4 address {} for VM {} via Guest Agent", ip_address, vmid);
+                                            } else {
+                                                info!("No suitable IPv4 address found for VM {} via Guest Agent", vmid);
+                                                // ip_address remains "Unknown"
+                                            }
+                                            // --- End Modified IP Detection Logic ---
+                                            
                                         } else {
                                             info!("No network interfaces array found in Guest Agent response for VM {}", vmid);
                                         }
@@ -925,8 +924,6 @@ async fn discover_and_register_proxmox_vms(
                         }
                         Err(e) => warn!("Failed to get network interfaces from QEMU Guest Agent for VM {}: {}", vmid, e),
                     }
-                } else {
-                    info!("QEMU Guest Agent not enabled for VM {}. IP will be set to Unknown.", vmid);
                 }
             } else {
                 info!("QEMU Guest Agent not enabled for VM {}. IP will be set to Unknown.", vmid);
@@ -1030,6 +1027,46 @@ fn extract_mac_from_net_config(net_config: &str) -> Option<String> {
     
     None
 }
+
+// --- NEW HELPER FUNCTION ---
+// Helper to find the first valid, non-loopback, non-link-local IPv4 address in a single interface object
+fn find_valid_ipv4_in_interface(iface: &serde_json::Value, vmid: u32) -> Option<String> {
+    let interface_name = iface.get("name").and_then(|n| n.as_str()).unwrap_or("unknown");
+    if let Some(ip_addresses) = iface.get("ip-addresses").and_then(|ips| ips.as_array()) {
+        info!("Checking {} IP addresses on interface '{}' for VM {}", ip_addresses.len(), interface_name, vmid);
+        
+        for ip_obj in ip_addresses {
+            // Debug each IP address entry
+            info!("IP address entry for VM {} on interface {}: {}", vmid, interface_name,
+                  serde_json::to_string_pretty(&ip_obj).unwrap_or_else(|_| "Failed to format".to_string()));
+            
+            let ip_type = ip_obj.get("ip-address-type").and_then(|t| t.as_str());
+            let ip = ip_obj.get("ip-address").and_then(|a| a.as_str());
+            
+            info!("Found IP address type: {:?}, address: {:?}", ip_type, ip);
+            
+            if let (Some("ipv4"), Some(addr)) = (ip_type, ip) {
+                // Skip link-local addresses (169.254.x.x)
+                if addr.starts_with("169.254.") {
+                    info!("Skipping link-local address {} for VM {}", addr, vmid);
+                    continue;
+                }
+                
+                // Skip loopback addresses (127.x.x.x)
+                if addr.starts_with("127.") {
+                    info!("Skipping loopback address {} for VM {}", addr, vmid);
+                    continue;
+                }
+                
+                // Found a valid IPv4 address
+                return Some(addr.to_string()); 
+            }
+        }
+    }
+    // No valid IPv4 found in this interface
+    None
+}
+// --- END NEW HELPER FUNCTION ---
 
 // ========================
 // Discover Handler
@@ -1211,7 +1248,7 @@ pub async fn start_proxmox_sync_task(
                     match connect_to_proxmox(&state_clone).await {
                         Ok(client) => {
                             // Process each cluster and its machines
-                            if let Err(e) = prune_removed_machines(&client, &proxmox_machines).await {
+                            if let Err(e) = sync_proxmox_machines(&client, &proxmox_machines).await {
                                 error!("Error during Proxmox sync check: {}", e);
                             }
                         },
@@ -1285,108 +1322,218 @@ async fn connect_to_proxmox(state: &crate::AppState) -> Result<ProxmoxApiClient,
     }
 }
 
-// Prune machines that no longer exist in Proxmox
-async fn prune_removed_machines(
+// NEW function to handle both updates and pruning
+async fn sync_proxmox_machines(
     client: &ProxmoxApiClient,
-    proxmox_machines: &[dragonfly_common::models::Machine]
+    db_machines: &[dragonfly_common::models::Machine]
 ) -> Result<(), anyhow::Error> {
-    // Get nodes from Proxmox
+    info!("Starting Proxmox machine synchronization...");
+
+    // Get current nodes from Proxmox
     let nodes_response = client.get("/api2/json/nodes").await
-        .map_err(|e| anyhow::anyhow!("Failed to fetch nodes: {}", e))?;
-    
+        .map_err(|e| anyhow::anyhow!("Sync: Failed to fetch nodes: {}", e))?;
     let nodes_value: serde_json::Value = serde_json::from_slice(&nodes_response.body)
-        .map_err(|e| anyhow::anyhow!("Failed to parse nodes response: {}", e))?;
-    
+        .map_err(|e| anyhow::anyhow!("Sync: Failed to parse nodes response: {}", e))?;
     let nodes_data = nodes_value.get("data")
         .and_then(|d| d.as_array())
-        .ok_or_else(|| anyhow::anyhow!("Invalid nodes response format"))?;
-    
-    // Keep track of nodes that still exist
+        .ok_or_else(|| anyhow::anyhow!("Sync: Invalid nodes response format"))?;
+
+    // Build sets of existing nodes and VMs from Proxmox API
     let mut existing_node_names = std::collections::HashSet::new();
-    
-    // Track VM IDs that still exist in Proxmox
     let mut existing_vm_ids = std::collections::HashSet::new();
-    
-    // Process each node
+    let mut current_vm_details = std::collections::HashMap::new(); // Store {vmid: (node_name, status, agent_running, config_data)}
+
     for node in nodes_data {
         let node_name = node.get("node")
             .and_then(|n| n.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Node missing 'node' field"))?;
+            .ok_or_else(|| anyhow::anyhow!("Sync: Node missing 'node' field"))?;
         
-        // Add this node to the existing nodes set
         existing_node_names.insert(node_name.to_string());
-        
+
         // Get VMs for this node
         let vms_path = format!("/api2/json/nodes/{}/qemu", node_name);
-        let vms_response = match client.get(&vms_path).await {
-            Ok(response) => response,
-            Err(e) => {
-                warn!("Failed to get VMs for node {}: {}", node_name, e);
-                continue;
-            }
-        };
-        
-        // Parse the VM response
-        let vms_value: serde_json::Value = match serde_json::from_slice(&vms_response.body) {
-            Ok(value) => value,
-            Err(e) => {
-                warn!("Failed to parse VMs response for node {}: {}", node_name, e);
-                continue;
-            }
-        };
-        
-        // Extract the VMs data
-        let vms_data = match vms_value.get("data").and_then(|d| d.as_array()) {
-            Some(data) => data,
-            None => {
-                warn!("Invalid VMs response format for node {}", node_name);
-                continue;
-            }
-        };
-        
-        // Add all VM IDs to the existing set
-        for vm in vms_data {
-            if let Some(vmid) = vm.get("vmid").and_then(|id| id.as_u64()).map(|id| id as u32) {
-                existing_vm_ids.insert(vmid);
-            }
+        match client.get(&vms_path).await {
+            Ok(vms_response) => {
+                match serde_json::from_slice::<serde_json::Value>(&vms_response.body) {
+                    Ok(vms_value) => {
+                        if let Some(vms_data) = vms_value.get("data").and_then(|d| d.as_array()) {
+                            for vm in vms_data {
+                                if let Some(vmid) = vm.get("vmid").and_then(|id| id.as_u64()).map(|id| id as u32) {
+                                    existing_vm_ids.insert(vmid);
+                                    let status = vm.get("status").and_then(|s| s.as_str()).unwrap_or("unknown").to_string();
+                                    
+                                    // Get config to check agent enablement
+                                    let vm_config_path = format!("/api2/json/nodes/{}/qemu/{}/config", node_name, vmid);
+                                    let agent_enabled = match client.get(&vm_config_path).await {
+                                        Ok(cfg_resp) => {
+                                            match serde_json::from_slice::<serde_json::Value>(&cfg_resp.body) {
+                                                Ok(cfg_val) => {
+                                                    if let Some(agent_str) = cfg_val.get("data").and_then(|d| d.get("agent")).and_then(|a| a.as_str()) {
+                                                        agent_str.contains("enabled=1") || agent_str.contains("enabled=true")
+                                                    } else { false }
+                                                }, 
+                                                Err(_) => false
+                                            }
+                                        }, 
+                                        Err(_) => false
+                                    };
+
+                                    let mut agent_running = false;
+                                    if status == "running" && agent_enabled {
+                                        let agent_ping_path = format!("/api2/json/nodes/{}/qemu/{}/agent/ping", node_name, vmid);
+                                        agent_running = match client.get(&agent_ping_path).await {
+                                            Ok(ping_resp) => serde_json::from_slice::<serde_json::Value>(&ping_resp.body)
+                                                .map_or(false, |v| v.get("data").is_some() && !v.get("data").and_then(|d| d.get("error")).is_some()),
+                                            Err(_) => false
+                                        };
+                                    }
+                                    
+                                    current_vm_details.insert(vmid, (node_name.to_string(), status, agent_running));
+                                }
+                            }
+                        } else {
+                            warn!("Sync: Invalid VMs data format for node {}", node_name);
+                        }
+                    },
+                    Err(e) => warn!("Sync: Failed to parse VMs response for node {}: {}", node_name, e),
+                }
+            },
+            Err(e) => warn!("Sync: Failed to get VMs for node {}: {}", node_name, e),
         }
     }
-    
-    // Find and delete machines that no longer exist in Proxmox
+
+    info!("Sync: Found {} nodes and {} VMs in Proxmox API", existing_node_names.len(), existing_vm_ids.len());
+
+    // Iterate through machines stored in Dragonfly DB
     let mut pruned_count = 0;
-    
-    for machine in proxmox_machines {
+    let mut updated_ip_count = 0;
+    let mut updated_status_count = 0;
+
+    for machine in db_machines {
+        let machine_id_str = machine.id.to_string(); // For logging
+        
         if let Some(vmid) = machine.proxmox_vmid {
-            // Check if this VM ID still exists in Proxmox
+            // --- Handle VMs ---
             if !existing_vm_ids.contains(&vmid) {
-                info!("Proxmox VM with ID {} no longer exists, removing from Dragonfly", vmid);
-                
+                // Prune VM
+                info!(machine_id = %machine_id_str, vmid = vmid, "Sync: Proxmox VM no longer exists, removing from DB");
                 if let Err(e) = db::delete_machine(&machine.id).await {
-                    error!("Failed to delete machine {}: {}", machine.id, e);
+                    error!(machine_id = %machine_id_str, error = %e, "Sync: Failed to delete machine");
                 } else {
-                    info!("Successfully removed machine {} (Proxmox VM ID: {})", machine.id, vmid);
                     pruned_count += 1;
                 }
+                continue; // Move to the next machine in DB
             }
-        } else if machine.is_proxmox_host {
-            // Check if this node still exists in Proxmox
-            if let Some(node_name) = &machine.proxmox_node {
-                if !existing_node_names.contains(node_name) {
-                    info!("Proxmox node '{}' no longer exists, removing from Dragonfly", node_name);
-                    
-                    if let Err(e) = db::delete_machine(&machine.id).await {
-                        error!("Failed to delete machine {}: {}", machine.id, e);
+
+            // VM exists, check for updates
+            if let Some((node_name, current_status, agent_running)) = current_vm_details.get(&vmid) {
+                // 1. Update Status if changed
+                let new_db_status = match current_status.as_str() {
+                    "running" => MachineStatus::Ready,
+                    "stopped" => MachineStatus::Offline,
+                    _ => MachineStatus::ExistingOS, // Or another appropriate status?
+                };
+                if machine.status != new_db_status {
+                    info!(machine_id = %machine_id_str, vmid = vmid, old_status = ?machine.status, new_status = ?new_db_status, "Sync: Updating machine status");
+                    if let Err(e) = db::update_status(&machine.id, new_db_status).await {
+                        error!(machine_id = %machine_id_str, error = %e, "Sync: Failed to update machine status");
                     } else {
-                        info!("Successfully removed machine {} (Proxmox node: {})", machine.id, node_name);
-                        pruned_count += 1;
+                        updated_status_count += 1;
+                    }
+                }
+
+                // 2. Update IP if running and agent is available
+                if current_status == "running" && *agent_running {
+                    let agent_path = format!("/api2/json/nodes/{}/qemu/{}/agent/network-get-interfaces", node_name, vmid);
+                    match client.get(&agent_path).await {
+                        Ok(agent_response) => {
+                            match serde_json::from_slice::<serde_json::Value>(&agent_response.body) {
+                                Ok(agent_value) => {
+                                    if let Some(result) = agent_value.get("data").and_then(|d| d.get("result")) {
+                                        if let Some(interfaces) = result.as_array() {
+                                            let mut current_ip: Option<String> = None;
+                                            // Use the same two-pass logic to find the IP
+                                            let mut preferred_ip: Option<String> = None;
+                                            for iface in interfaces {
+                                                if let Some(name) = iface.get("name").and_then(|n| n.as_str()) {
+                                                    if name.starts_with("eth") || name.starts_with("ens") || name.starts_with("eno") {
+                                                        if let Some(ip) = find_valid_ipv4_in_interface(iface, vmid) {
+                                                            preferred_ip = Some(ip);
+                                                            break;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            if preferred_ip.is_some() {
+                                                current_ip = preferred_ip;
+                                            } else {
+                                                for iface in interfaces {
+                                                    if let Some(name) = iface.get("name").and_then(|n| n.as_str()) {
+                                                        if !(name.starts_with("lo") || name.starts_with("eth") || name.starts_with("ens") || name.starts_with("eno") || name.starts_with("tailscale") || name.starts_with("docker") || name.starts_with("veth") || name.starts_with("virbr") || name.starts_with("br-")) {
+                                                             if let Some(ip) = find_valid_ipv4_in_interface(iface, vmid) {
+                                                                current_ip = Some(ip);
+                                                                break;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            // Compare with DB IP and update if needed
+                                            if let Some(new_ip) = current_ip {
+                                                if machine.ip_address != new_ip {
+                                                    info!(machine_id = %machine_id_str, vmid = vmid, old_ip = %machine.ip_address, new_ip = %new_ip, "Sync: Updating machine IP address");
+                                                    if let Err(e) = db::update_ip_address(&machine.id, &new_ip).await {
+                                                        error!(machine_id = %machine_id_str, error = %e, "Sync: Failed to update IP address");
+                                                    } else {
+                                                        updated_ip_count += 1;
+                                                    }
+                                                }
+                                            } else {
+                                                // No valid IP found via agent, maybe update DB to Unknown if it wasn't already?
+                                                if machine.ip_address != "Unknown" {
+                                                    info!(machine_id = %machine_id_str, vmid = vmid, old_ip = %machine.ip_address, "Sync: No valid IP found via agent, setting IP to Unknown");
+                                                    if let Err(e) = db::update_ip_address(&machine.id, "Unknown").await {
+                                                         error!(machine_id = %machine_id_str, error = %e, "Sync: Failed to set IP address to Unknown");
+                                                    }
+                                                    // Don't increment updated_ip_count for setting to Unknown?
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
+                                Err(e) => warn!(machine_id = %machine_id_str, vmid = vmid, error = %e, "Sync: Failed to parse agent network response"),
+                            }
+                        },
+                        Err(e) => warn!(machine_id = %machine_id_str, vmid = vmid, error = %e, "Sync: Failed to get agent network interfaces"),
                     }
                 }
             }
+
+        } else if machine.is_proxmox_host {
+            // --- Handle Hosts ---
+            if let Some(node_name) = &machine.proxmox_node {
+                if !existing_node_names.contains(node_name) {
+                    // Prune Host
+                    info!(machine_id = %machine_id_str, node = %node_name, "Sync: Proxmox node no longer exists, removing from DB");
+                    if let Err(e) = db::delete_machine(&machine.id).await {
+                        error!(machine_id = %machine_id_str, error = %e, "Sync: Failed to delete machine");
+                    } else {
+                        pruned_count += 1;
+                    }
+                }
+                // TODO: Optionally update host details (IP, status?) if needed
+            } else {
+                warn!(machine_id = %machine_id_str, "Sync: Proxmox host machine is missing proxmox_node field");
+            }
         }
     }
-    
-    info!("Proxmox sync complete: removed {} machines that no longer exist in Proxmox", pruned_count);
-    
+
+    info!(
+        "Proxmox sync complete: {} machines pruned, {} IPs updated, {} statuses updated",
+        pruned_count, updated_ip_count, updated_status_count
+    );
+
     Ok(())
 }
 
