@@ -136,18 +136,19 @@ pub struct ErrorTemplate {
 // Define a struct for grouping machines by Proxmox host/cluster
 #[derive(Debug, Clone, Serialize)]
 pub struct ProxmoxCluster {
-    pub host: String,
-    pub cluster_name: Option<String>, // Added cluster name field
-    pub machines: Vec<Machine>,
+    pub display_name: String,
+    pub cluster_name: Option<String>,
+    pub hosts: Vec<Machine>,
+    pub vms: Vec<Machine>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Serialize, Debug)]
 pub struct ComputeTemplate {
-    pub theme: String,
-    pub is_authenticated: bool,
-    pub is_admin: bool,
-    pub clusters: Vec<ProxmoxCluster>,
-    pub current_path: String,
+    theme: String,
+    is_authenticated: bool,
+    is_admin: bool,
+    clusters: Vec<ProxmoxCluster>,
+    current_path: String,
 }
 
 // Updated render_minijinja function
@@ -392,6 +393,7 @@ fn create_demo_machine(
         total_ram_bytes: None,
         proxmox_vmid: None,
         proxmox_node: None,
+        proxmox_cluster: None, // Add the new field, initialize to None for demo
         is_proxmox_host: false, // Add the new field, default to false for demo data
     }
 }
@@ -1696,60 +1698,67 @@ pub async fn compute_page(
         }
     };
 
-    // Group machines by Proxmox node
+    // Group machines by Proxmox CLUSTER name
     let mut clusters_map: HashMap<String, Vec<Machine>> = HashMap::new();
-    let mut standalone_machines: Vec<Machine> = Vec::new(); // Machines not associated with a Proxmox node
+    let mut standalone_machines: Vec<Machine> = Vec::new();
 
     for machine in all_machines {
-        if let Some(node_name) = &machine.proxmox_node {
-            clusters_map.entry(node_name.clone()).or_default().push(machine);
-        } else {
-            // If a machine is NOT a VM and has no proxmox_node, consider it standalone?
-            // Or maybe it's a Proxmox host itself? The logic might need refinement based on how hosts are stored.
-            // For now, let's put non-node-associated machines aside.
-            // Let's specifically check if it's a Proxmox host (no VMID, but might have node name filled later?)
-            if machine.proxmox_vmid.is_none() {
-                 // It's likely a physical machine not yet identified as a Proxmox host or associated with one.
-                 // We could potentially group these under a "Standalone" or "Unclustered" section if needed.
-                 standalone_machines.push(machine);
+        // Group by proxmox_cluster if it exists
+        if let Some(cluster_name) = &machine.proxmox_cluster {
+            if !cluster_name.is_empty() { // Avoid grouping under empty string
+                 clusters_map.entry(cluster_name.clone()).or_default().push(machine);
             } else {
-                // This is a VM without a parent node specified, which is unusual. Log a warning.
-                warn!("VM with ID {:?} found without a proxmox_node association. Machine ID: {}", machine.proxmox_vmid, machine.id);
-                standalone_machines.push(machine); // Add to standalone for now
+                 // Treat machines with empty cluster name but node/vmid as standalone for now
+                 warn!("Machine {} has Proxmox info but an empty cluster name.", machine.id);
+                 standalone_machines.push(machine);
             }
+        } else {
+            // Machines without a proxmox_cluster field are treated as standalone
+            standalone_machines.push(machine);
         }
     }
 
     // Convert the map into the Vec<ProxmoxCluster> structure for the template
     let clusters: Vec<ProxmoxCluster> = clusters_map.into_iter()
-        .map(|(node_name, machines)| {
-            // Find the host machine within the group (the one without a vmid)
-            let host_machine = machines.iter().find(|m| m.proxmox_vmid.is_none());
-            let host_display_name = host_machine
-                .map(|h| h.hostname.as_deref().unwrap_or(&node_name)) // Use hostname if available, else node_name
-                .unwrap_or(&node_name); // Fallback to node_name if host machine not found (shouldn't happen ideally)
+        .map(|(cluster_name, machines_in_cluster)| {
+            // Separate hosts and VMs
+            let mut hosts: Vec<Machine> = Vec::new();
+            let mut vms: Vec<Machine> = Vec::new();
+            for machine in machines_in_cluster {
+                if machine.is_proxmox_host {
+                    hosts.push(machine);
+                } else {
+                    vms.push(machine);
+                }
+            }
+            
+            // Determine the display name for the cluster group
+            // Prioritize the hostname of the first host found, fallback to cluster name
+            let display_name = hosts.first()
+                .and_then(|h| h.hostname.as_deref().or(h.proxmox_node.as_deref())) // Use hostname or node name of first host
+                .unwrap_or(&cluster_name) // Fallback to the cluster name itself if no hosts found (unlikely)
+                .to_string();
 
             ProxmoxCluster {
-                // Use the host's hostname or node name as the cluster identifier for display
-                host: host_display_name.to_string(), // This field seems to be used as the main display name in the template
-                cluster_name: Some(node_name.clone()), // Store the actual node name here
-                machines, // Keep all machines (hosts and VMs) in this vec
+                display_name, // Use the determined display name
+                cluster_name: Some(cluster_name.clone()), // The actual cluster identifier
+                hosts, // List of hosts in this cluster
+                vms, // List of VMs in this cluster
             }
         })
         .collect();
 
-    // Add standalone machines as a separate "cluster" if needed, or handle them differently
-    // For now, they are ignored in the `clusters` vec sent to the template.
-    // If you want to display them, you'd need to modify the template or add another field to ComputeTemplate.
+    // Log standalone machines
     if !standalone_machines.is_empty() {
         warn!("Found {} standalone/unassociated machines not displayed on the Compute page.", standalone_machines.len());
+        // TODO: Decide how/if to display standalone machines on this page
     }
 
     let context = ComputeTemplate {
         theme,
         is_authenticated,
         is_admin,
-        clusters,
+        clusters, // Now grouped by actual cluster name
         current_path,
     };
 

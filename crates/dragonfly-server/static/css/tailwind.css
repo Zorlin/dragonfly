@@ -1058,9 +1058,6 @@
   .bg-blue-800 {
     background-color: var(--color-blue-800);
   }
-  .bg-blue-900\/20 {
-    background-color: color-mix(in oklab, var(--color-blue-900) 20%, transparent);
-  }
   .bg-cyan-100 {
     background-color: var(--color-cyan-100);
   }
@@ -1129,6 +1126,9 @@
   }
   .bg-indigo-800 {
     background-color: var(--color-indigo-800);
+  }
+  .bg-indigo-900\/50 {
+    background-color: color-mix(in oklab, var(--color-indigo-900) 50%, transparent);
   }
   .bg-orange-100\/20 {
     background-color: color-mix(in oklab, var(--color-orange-100) 20%, transparent);
@@ -1631,9 +1631,6 @@
   .opacity-75 {
     opacity: 75%;
   }
-  .opacity-80 {
-    opacity: 80%;
-  }
   .opacity-100 {
     opacity: 100%;
   }
@@ -1682,9 +1679,6 @@
   }
   .ring-black {
     --tw-ring-color: var(--color-black);
-  }
-  .ring-blue-600\/30 {
-    --tw-ring-color: color-mix(in oklab, var(--color-blue-600) 30%, transparent);
   }
   .ring-gray-300 {
     --tw-ring-color: var(--color-gray-300);

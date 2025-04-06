@@ -69,6 +69,7 @@ pub async fn init_db() -> Result<SqlitePool> {
             total_ram_bytes INTEGER, -- Store as u64 (INTEGER in SQLite)
             proxmox_vmid INTEGER,
             proxmox_node TEXT,
+            proxmox_cluster TEXT, -- Add cluster column
             is_proxmox_host BOOLEAN DEFAULT FALSE NOT NULL
         )
         "#,
@@ -153,7 +154,7 @@ pub async fn register_machine(req: &RegisterRequest) -> Result<Uuid> {
             let existing_id = Uuid::parse_str(&existing_id_str)?;
             info!("Updating existing machine: ID={}, MAC={}", existing_id, req.mac_address);
 
-            // Perform UPDATE
+            // Perform UPDATE, including proxmox_cluster
             sqlx::query(
                 r#"
                 UPDATE machines SET
@@ -171,6 +172,7 @@ pub async fn register_machine(req: &RegisterRequest) -> Result<Uuid> {
                     total_ram_bytes = ?,
                     proxmox_vmid = ?,
                     proxmox_node = ?,
+                    proxmox_cluster = ?, -- Added cluster
                     is_proxmox_host = ? 
                 WHERE id = ?
                 "#,
@@ -189,6 +191,7 @@ pub async fn register_machine(req: &RegisterRequest) -> Result<Uuid> {
             .bind(req.total_ram_bytes.map(|r| r as i64)) 
             .bind(req.proxmox_vmid.map(|v| v as i64)) 
             .bind(req.proxmox_node.as_deref())
+            .bind(req.proxmox_cluster.as_deref()) // Bind cluster
             .bind(is_proxmox_host) 
             .bind(existing_id.to_string())
             .execute(&mut *tx)
@@ -206,9 +209,9 @@ pub async fn register_machine(req: &RegisterRequest) -> Result<Uuid> {
                     id, mac_address, ip_address, hostname, status, os_choice, os_installed, 
                     disks, nameservers, memorable_name, created_at, updated_at, 
                     cpu_model, cpu_cores, total_ram_bytes, 
-                    proxmox_vmid, proxmox_node, is_proxmox_host
+                    proxmox_vmid, proxmox_node, proxmox_cluster, is_proxmox_host
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 "#,
             )
             .bind(machine_id.to_string())
@@ -228,6 +231,7 @@ pub async fn register_machine(req: &RegisterRequest) -> Result<Uuid> {
             .bind(req.total_ram_bytes.map(|r| r as i64)) 
             .bind(req.proxmox_vmid.map(|v| v as i64)) 
             .bind(req.proxmox_node.as_deref())
+            .bind(req.proxmox_cluster.as_deref()) // Bind cluster
             .bind(is_proxmox_host) 
             .execute(&mut *tx)
             .await?;
@@ -239,8 +243,8 @@ pub async fn register_machine(req: &RegisterRequest) -> Result<Uuid> {
     // Commit transaction
     tx.commit().await?;
     
-    info!("Machine upsert complete: ID={}, MAC={}, IP={}, Hostname={:?}, ProxmoxNode={:?}, IsHost={}", 
-          returned_id, req.mac_address, req.ip_address, req.hostname, req.proxmox_node, is_proxmox_host);
+    info!("Machine upsert complete: ID={}, MAC={}, IP={}, Hostname={:?}, ProxmoxNode={:?}, ProxmoxCluster={:?}, IsHost={}", 
+          returned_id, req.mac_address, req.ip_address, req.hostname, req.proxmox_node, req.proxmox_cluster, is_proxmox_host);
           
     Ok(returned_id)
 }
@@ -249,7 +253,7 @@ pub async fn register_machine(req: &RegisterRequest) -> Result<Uuid> {
 pub async fn get_all_machines() -> Result<Vec<Machine>> {
     let pool = get_pool().await?;
     
-    // Explicitly list all columns, including the new is_proxmox_host
+    // Explicitly list all columns, including proxmox_cluster
     let rows = sqlx::query(
         r#"
         SELECT 
@@ -257,9 +261,9 @@ pub async fn get_all_machines() -> Result<Vec<Machine>> {
             disks, nameservers, memorable_name, created_at, updated_at, bmc_credentials, 
             installation_progress, installation_step, last_deployment_duration, 
             cpu_model, cpu_cores, total_ram_bytes, 
-            proxmox_vmid, proxmox_node, is_proxmox_host 
+            proxmox_vmid, proxmox_node, proxmox_cluster, is_proxmox_host 
         FROM machines
-        ORDER BY hostname, memorable_name, mac_address -- Add sorting for consistent order
+        ORDER BY proxmox_cluster, is_proxmox_host DESC, hostname, memorable_name, mac_address
         "#,
     )
     .fetch_all(pool)
@@ -267,11 +271,9 @@ pub async fn get_all_machines() -> Result<Vec<Machine>> {
     
     let mut machines = Vec::new();
     for row in rows {
-        // Use the helper that includes hardware fields
         match map_row_to_machine_with_hardware(row) {
             Ok(machine) => machines.push(machine),
             Err(e) => {
-                // Log the error but continue processing other rows
                 error!("Failed to map row to machine: {}", e);
             }
         }
@@ -292,7 +294,7 @@ pub async fn get_machine_by_id(id: &Uuid) -> Result<Option<Machine>> {
                disks, nameservers, memorable_name, created_at, updated_at, bmc_credentials, 
                installation_progress, installation_step, last_deployment_duration,
                cpu_model, cpu_cores, total_ram_bytes, 
-               proxmox_vmid, proxmox_node, is_proxmox_host
+               proxmox_vmid, proxmox_node, proxmox_cluster, is_proxmox_host
         FROM machines 
         WHERE id = ?
         "#,
@@ -321,7 +323,7 @@ pub async fn get_machine_by_mac(mac_address: &str) -> Result<Option<Machine>> {
                disks, nameservers, memorable_name, created_at, updated_at, bmc_credentials, 
                installation_progress, installation_step, last_deployment_duration,
                cpu_model, cpu_cores, total_ram_bytes, 
-               proxmox_vmid, proxmox_node, is_proxmox_host
+               proxmox_vmid, proxmox_node, proxmox_cluster, is_proxmox_host
         FROM machines 
         WHERE mac_address = ?
         "#,
@@ -350,7 +352,7 @@ pub async fn get_machine_by_proxmox_vmid(vmid: u32) -> Result<Option<Machine>> {
                disks, nameservers, memorable_name, created_at, updated_at, bmc_credentials, 
                installation_progress, installation_step, last_deployment_duration,
                cpu_model, cpu_cores, total_ram_bytes, 
-               proxmox_vmid, proxmox_node, is_proxmox_host
+               proxmox_vmid, proxmox_node, proxmox_cluster, is_proxmox_host
         FROM machines 
         WHERE proxmox_vmid = ?
         "#,
@@ -958,7 +960,32 @@ async fn migrate_db(pool: &Pool<Sqlite>) -> Result<()> {
         sqlx::query("ALTER TABLE machines ADD COLUMN memorable_name TEXT").execute(pool).await?;
     }
     
-    // Check if is_proxmox_host column exists
+    // Check if proxmox_cluster column exists
+    let result = sqlx::query(
+        r#"
+        SELECT COUNT(*) AS count FROM pragma_table_info('machines') WHERE name = 'proxmox_cluster'
+        "#,
+    )
+    .fetch_one(pool)
+    .await?;
+    
+    let column_exists: i64 = result.get(0);
+    
+    // Add proxmox_cluster column if it doesn't exist
+    if column_exists == 0 {
+        info!("Adding proxmox_cluster column to machines table");
+        sqlx::query(
+            r#"
+            ALTER TABLE machines ADD COLUMN proxmox_cluster TEXT
+            "#,
+        )
+        .execute(pool)
+        .await?;
+        // Note: No automatic backfill here, as we don't know the cluster name from existing data.
+        // Cluster name will be populated during the next Proxmox import.
+    }
+    
+    // Check if is_proxmox_host column exists (ensure this runs after cluster check)
     let result = sqlx::query(
         r#"
         SELECT COUNT(*) AS count FROM pragma_table_info('machines') WHERE name = 'is_proxmox_host'
@@ -969,7 +996,6 @@ async fn migrate_db(pool: &Pool<Sqlite>) -> Result<()> {
     
     let column_exists: i64 = result.get(0);
     
-    // Add is_proxmox_host column if it doesn't exist
     if column_exists == 0 {
         info!("Adding is_proxmox_host column to machines table");
         sqlx::query(
@@ -980,7 +1006,6 @@ async fn migrate_db(pool: &Pool<Sqlite>) -> Result<()> {
         .execute(pool)
         .await?;
 
-        // Backfill: Set is_proxmox_host = TRUE for existing machines that look like hosts
         info!("Backfilling is_proxmox_host flag for existing potential Proxmox hosts...");
         let backfill_result = sqlx::query(
             r#"
@@ -991,7 +1016,7 @@ async fn migrate_db(pool: &Pool<Sqlite>) -> Result<()> {
         )
         .execute(pool)
         .await?;
-        info!("Backfill complete. Updated {} rows.", backfill_result.rows_affected());
+        info!("Backfill complete for is_proxmox_host. Updated {} rows.", backfill_result.rows_affected());
     }
     
     Ok(())
@@ -1564,6 +1589,7 @@ fn map_row_to_machine_with_hardware(row: sqlx::sqlite::SqliteRow) -> Result<Mach
     let proxmox_vmid: Option<u32> = proxmox_vmid_i64.map(|vmid| vmid as u32);
     let proxmox_node: Option<String> = row.try_get("proxmox_node").ok();
     let memorable_name: Option<String> = row.try_get("memorable_name").ok();
+    let proxmox_cluster: Option<String> = row.try_get("proxmox_cluster").ok();
     
     // Generate memorable name from MAC address if not already stored
     let memorable_name = memorable_name.unwrap_or_else(|| 
@@ -1637,6 +1663,7 @@ fn map_row_to_machine_with_hardware(row: sqlx::sqlite::SqliteRow) -> Result<Mach
         // Add Proxmox fields
         proxmox_vmid,
         proxmox_node,
+        proxmox_cluster,
         is_proxmox_host: row.try_get("is_proxmox_host")?,
     })
 }
