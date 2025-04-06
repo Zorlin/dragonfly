@@ -343,9 +343,106 @@
         });
     },
     
+    // --- Bulk Action Logic ---
+    cycleBulkMode() {
+        if (!this.showBulkActions) {
+            // State 1 (Inactive) -> State 2 (Selecting)
+            this.showBulkActions = true;
+            this.selectAll = false;
+            this.selectedMachines = {};
+            console.log('Bulk Mode: Selecting');
+            
+        } else if (this.showBulkActions && !this.selectAll) {
+            // State 2 (Selecting) -> State 3 (All Selected)
+            this.selectAll = true;
+            this.selectAllVisibleMachines();
+            console.log('Bulk Mode: All Selected');
+        } else if (this.showBulkActions && this.selectAll) {
+            // State 3 (All Selected) -> State 1 (Inactive)
+            this.showBulkActions = false;
+            this.selectAll = false;
+            this.selectedMachines = {};
+            console.log('Bulk Mode: Inactive');
+        }
+    },
+
+    handleHeaderCheckboxChange() {
+        // Only trigger select/deselect if we are in an active bulk state
+        if (!this.showBulkActions) {
+            // If we are inactive, the change likely happened as part of cycling *into* selecting mode.
+            // We want it to remain unchecked in State 2, so force selectAll back to false.
+            this.$nextTick(() => { this.selectAll = false; });
+            return; 
+        }
+
+        // This is triggered AFTER x-model updates selectAll
+        this.$nextTick(() => { // Ensure we read the updated state
+             if (this.selectAll) {
+                // If header checkbox is checked, select all visible
+                this.selectAllVisibleMachines();
+            } else {
+                // If header checkbox is unchecked, deselect all
+                this.deselectAllMachines();
+            }
+        });
+    },
+
+    selectAllVisibleMachines() {
+        console.log('Selecting all visible machines...');
+        document.querySelectorAll('#machine-list tr[data-machine-id]').forEach(row => {
+            if (row.offsetParent !== null) { // Basic visibility check
+                this.selectedMachines[row.dataset.machineId] = true;
+            }
+        });
+        // Ensure the reactive update happens
+        this.selectedMachines = { ...this.selectedMachines };
+        this.selectAll = true; // Explicitly set header state
+    },
+
+    deselectAllMachines(setModeInactive = false) { // Optional param to fully deactivate
+        console.log('Deselecting all machines...');
+        this.selectedMachines = {};
+        this.selectAll = false; // Explicitly set header state
+        if (setModeInactive) {
+            this.showBulkActions = false;
+            console.log('Bulk Mode: Inactive');
+        }
+    },
+
+    updateSelectAllHeaderState() {
+         if (!this.showBulkActions) return; // Don't do anything if checkboxes aren't shown
+
+         const visibleMachineIds = [];
+         document.querySelectorAll('#machine-list tr[data-machine-id]').forEach(row => {
+             if (row.offsetParent !== null) { // Basic visibility check
+                 visibleMachineIds.push(row.dataset.machineId);
+             }
+         });
+
+         if (visibleMachineIds.length === 0) {
+             if (this.selectAll) this.selectAll = false;
+             return;
+         }
+
+         let allVisibleSelected = true;
+         for (const id of visibleMachineIds) {
+             if (!this.selectedMachines[id]) {
+                 allVisibleSelected = false;
+                 break;
+             }
+         }
+
+         // Only update selectAll if its state needs to change
+         if (this.selectAll !== allVisibleSelected) {
+            this.selectAll = allVisibleSelected;
+         }
+    },
+    
     initMachineList() {
         this.fetchMachines();
         this.setupSSE();
+        // Watch for changes in individual selections to update the header checkbox state
+        this.$watch('selectedMachines', () => this.updateSelectAllHeaderState());
     },
     
     fetchMachines() {
@@ -387,8 +484,13 @@
               <table class="min-w-full divide-y divide-gray-300 dark:divide-purple-800/50">
                 <thead class="bg-gray-50 dark:bg-gray-950">      
                             <tr>
-                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-200 uppercase tracking-wider">
-                                    Name
+                                <th scope="col" class="px-4 py-3 ml-3 text-left text-xs font-medium text-gray-500 dark:text-gray-200 uppercase tracking-wider">
+                                    <input id="bulk-select-checkbox" type="checkbox"
+                                           x-model="selectAll"
+                                           @click="cycleBulkMode() ; document.getElementById('bulk-select-checkbox').checked = false"
+                                           title="Select/Deselect All Visible"
+                                           class="left-2 -mt-2 -mb-2 w-1 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 sm:left-6" />
+                                    <span class="ml-6">Name</span>
                                 </th>
                                 <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-200 uppercase tracking-wider">
                                     MAC Address
@@ -402,7 +504,7 @@
                                 <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-200 uppercase tracking-wider">
                                     OS
                                 </th>
-                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-200 uppercase tracking-wider">
+                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-200 uppercase tracking-wider relative">
                                     Actions
                                 </th>
                             </tr>
@@ -412,11 +514,22 @@
                             <tr class="hover:ring-purple-500 dark:hover:ring-purple-700/60 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer" 
                                 @click="window.location='/machines/{{ machine.id }}'"
                                 data-machine-id="{{ machine.id }}">
-                                <td class="px-6 py-4 whitespace-nowrap">
-                                    <div class="text-sm font-medium text-gray-900 dark:text-white">
-                                        <div x-on:click.stop="startEditing('{{ machine.id }}', 'hostname', '{{ machine.hostname|default('') }}')" 
+                                <td class="px-6 py-4 whitespace-nowrap relative">
+                                        <div x-on:click.stop="startEditing('{{ machine.id }}', 'hostname', '{{ machine.hostname|default('') }}')" class="inline-block" {# Make hostname inline #}
                                              :class="{'cursor-text': isAuthenticated}" 
                                              class="hover:text-indigo-600 dark:hover:text-indigo-400">
+                                             <template x-if="showBulkActions">
+                                                {# Checkbox shown when showBulkActions is true #}
+                                                <div class="inline-block mr-2"> {# Use inline-block and margin #}
+                                                    <input type="checkbox"
+                                                        :id="'select-' + '{{ machine.id }}'"
+                                                        :value="'{{ machine.id }}'"
+                                                        x-model="selectedMachines['{{ machine.id }}']"
+                                                        @change="updateSelectAllHeaderState()"
+                                                        @click.stop {# Prevent row click #}
+                                                        class="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
+                                                </div>
+                                            </template>
                                             <span x-show="editingField !== '{{ machine.id }}-hostname'"
                                                   :class="{'text-purple-700 dark:text-purple-400 font-medium': hasFieldChanged('{{ machine.id }}', 'hostname')}">
                                                 <span x-text="fieldChanges['{{ machine.id }}'] && fieldChanges['{{ machine.id }}'].hostname !== undefined ? 
@@ -432,7 +545,7 @@
                                                    x-effect="if(editingField === '{{ machine.id }}-hostname') setTimeout(() => $refs['hostname{{ machine.id }}'].focus(), 50)"
                                                    type="text"
                                                    value="{{ machine.hostname|default('') }}"
-                                                   class="w-full border-b border-indigo-500 bg-transparent focus:outline-none focus:border-indigo-700 dark:text-white">
+                                                   class="border-b border-indigo-500 bg-transparent focus:outline-none focus:border-indigo-700 dark:text-white">
                                         </div>
                                         {# Display memorable_name below if it exists #}
                                         {% if machine.memorable_name %}
@@ -700,24 +813,14 @@
                                             {% endif %}
                                             
                                             <!-- Single Delete Icon (default) -->
-                                            <template x-if="!selectAll">
-                                                <button @click="confirmDelete('{{ machine.id }}', '{{ machine.hostname or machine.memorable_name or machine.mac_address }}')" 
-                                                        class="ml-3 inline-flex items-center p-1 border border-transparent text-sm leading-5 font-medium rounded text-red-700 bg-red-100 hover:bg-red-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 dark:bg-red-900 dark:text-red-200 dark:hover:bg-red-800"
-                                                        title="Delete Machine">
-                                                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4 h-4">
-                                                        <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
-                                                    </svg>
-                                                </button>
-                                            </template>
-                                            
-                                            <!-- Bulk Action Checkbox -->
-                                            <template x-if="selectAll">
-                                                <input type="checkbox" 
-                                                       :id="'select-' + machine.id"
-                                                       :value="machine.id"
-                                                       x-model="selectedMachines[machine.id]"
-                                                       class="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 dark:bg-gray-700 dark:border-gray-600 dark:checked:bg-indigo-500 dark:focus:ring-indigo-600 dark:focus:ring-offset-gray-800">
-                                            </template>
+                                            <button @click.stop="confirmDelete('{{ machine.id }}', '{{ machine.hostname or machine.memorable_name or machine.mac_address }}')" {# Add @click.stop #}
+                                                    class="ml-3 inline-flex items-center p-1 border border-transparent text-sm leading-5 font-medium rounded text-red-700 bg-red-100 hover:bg-red-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 dark:bg-red-900 dark:text-red-200 dark:hover:bg-red-800"
+                                                    title="Delete Machine">
+                                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4 h-4">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                                                </svg>
+                                            </button>
+
                                         </div>
                                         {% endif %} {# End is_admin check for actions #}
                                     {% endif %}
