@@ -1155,4 +1155,240 @@ fn generate_ip_in_subnet(network_addr: Ipv4Addr, host_num: u32) -> Ipv4Addr {
     Ipv4Addr::from(network_u32 + host_num)
 }
 
+// Start a background task to periodically prune machines that have been removed from Proxmox
+pub async fn start_proxmox_sync_task(
+    state: std::sync::Arc<crate::AppState>,
+    mut shutdown_rx: tokio::sync::watch::Receiver<()>
+) {
+    use dragonfly_common::models::MachineStatus;
+    use std::time::Duration;
+    use std::collections::HashSet;
+    
+    // Clone the state for the task
+    let state_clone = state.clone();
+    
+    tokio::spawn(async move {
+        let poll_interval = Duration::from_secs(90); // Check every 90 seconds
+        info!("Starting Proxmox sync task with interval of {:?}", poll_interval);
+        
+        loop {
+            tokio::select! {
+                _ = tokio::time::sleep(poll_interval) => {
+                    info!("Running Proxmox machine sync check");
+                    
+                    // Check if Proxmox settings are configured
+                    let proxmox_configured = {
+                        let settings = state_clone.settings.lock().await;
+                        settings.proxmox_host.is_some() 
+                            && settings.proxmox_username.is_some() 
+                            && settings.proxmox_password.is_some()
+                    };
+                    
+                    if !proxmox_configured {
+                        info!("Proxmox not configured, skipping sync check");
+                        continue;
+                    }
+                    
+                    // Get all machines with Proxmox information
+                    let machines = match db::get_all_machines().await {
+                        Ok(m) => m,
+                        Err(e) => {
+                            error!("Failed to get machines for Proxmox sync: {}", e);
+                            continue;
+                        }
+                    };
+                    
+                    // Filter out machines with Proxmox info
+                    let proxmox_machines: Vec<_> = machines.into_iter()
+                        .filter(|m| m.proxmox_vmid.is_some() || m.is_proxmox_host)
+                        .collect();
+                    
+                    if proxmox_machines.is_empty() {
+                        info!("No Proxmox machines found, skipping sync check");
+                        continue;
+                    }
+                    
+                    // Connect to Proxmox and get current machine list
+                    match connect_to_proxmox(&state_clone).await {
+                        Ok(client) => {
+                            // Process each cluster and its machines
+                            if let Err(e) = prune_removed_machines(&client, &proxmox_machines).await {
+                                error!("Error during Proxmox sync check: {}", e);
+                            }
+                        },
+                        Err(e) => {
+                            error!("Failed to connect to Proxmox for sync check: {}", e);
+                        }
+                    }
+                }
+                _ = shutdown_rx.changed() => {
+                    info!("Shutdown signal received, stopping Proxmox sync task");
+                    break;
+                }
+            }
+        }
+    });
+}
+
+// Connect to Proxmox using the saved credentials
+async fn connect_to_proxmox(state: &crate::AppState) -> Result<ProxmoxApiClient, anyhow::Error> {
+    // Get Proxmox settings
+    let (host, username, password, port, skip_tls_verify) = {
+        let settings = state.settings.lock().await;
+        let host = settings.proxmox_host.clone().ok_or_else(|| anyhow::anyhow!("Proxmox host not configured"))?;
+        let username = settings.proxmox_username.clone().ok_or_else(|| anyhow::anyhow!("Proxmox username not configured"))?;
+        let password = settings.proxmox_password.clone().ok_or_else(|| anyhow::anyhow!("Proxmox password not configured"))?;
+        let port = settings.proxmox_port.unwrap_or(8006);
+        let skip_tls_verify = settings.proxmox_skip_tls_verify.unwrap_or(false);
+        (host, username, password, port, skip_tls_verify)
+    };
+    
+    // Parse username@realm format if present
+    let (username_part, realm) = if let Some(idx) = username.find('@') {
+        let (username_part, realm_part) = username.split_at(idx);
+        // Remove the @ from the beginning of realm
+        (username_part.to_string(), Some(realm_part[1..].to_string()))
+    } else {
+        (username.clone(), Some("pam".to_string()))
+    };
+    
+    // Create HTTPS connector with appropriate TLS settings
+    let https = HttpsConnector::new();
+    
+    // Use just the host URL for client initialization
+    let host_url = format!("https://{}:{}", host, port);
+    let base_uri: hyper::Uri = host_url.parse::<hyper::Uri>()
+        .map_err(|e| anyhow::anyhow!("Invalid Proxmox URL: {}", e))?;
+    
+    // Initialize the Proxmox client
+    let client = ProxmoxApiClient::new(base_uri.clone());
+    
+    // Create the login object for authentication
+    let login_user = match &realm {
+        Some(r) => format!("{}@{}", username_part, r),
+        None => username_part,
+    };
+    
+    let login_builder = proxmox_login::Login::new(&host_url, login_user, password);
+    
+    // Authenticate
+    match client.login(login_builder).await {
+        Ok(None) => {
+            info!("Successfully authenticated with Proxmox API for sync task");
+            Ok(client)
+        },
+        Ok(Some(_)) => {
+            Err(anyhow::anyhow!("Two-factor authentication is required but not supported"))
+        },
+        Err(e) => {
+            Err(anyhow::anyhow!("Failed to login to Proxmox: {}", e))
+        }
+    }
+}
+
+// Prune machines that no longer exist in Proxmox
+async fn prune_removed_machines(
+    client: &ProxmoxApiClient,
+    proxmox_machines: &[dragonfly_common::models::Machine]
+) -> Result<(), anyhow::Error> {
+    // Get nodes from Proxmox
+    let nodes_response = client.get("/api2/json/nodes").await
+        .map_err(|e| anyhow::anyhow!("Failed to fetch nodes: {}", e))?;
+    
+    let nodes_value: serde_json::Value = serde_json::from_slice(&nodes_response.body)
+        .map_err(|e| anyhow::anyhow!("Failed to parse nodes response: {}", e))?;
+    
+    let nodes_data = nodes_value.get("data")
+        .and_then(|d| d.as_array())
+        .ok_or_else(|| anyhow::anyhow!("Invalid nodes response format"))?;
+    
+    // Keep track of nodes that still exist
+    let mut existing_node_names = std::collections::HashSet::new();
+    
+    // Track VM IDs that still exist in Proxmox
+    let mut existing_vm_ids = std::collections::HashSet::new();
+    
+    // Process each node
+    for node in nodes_data {
+        let node_name = node.get("node")
+            .and_then(|n| n.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Node missing 'node' field"))?;
+        
+        // Add this node to the existing nodes set
+        existing_node_names.insert(node_name.to_string());
+        
+        // Get VMs for this node
+        let vms_path = format!("/api2/json/nodes/{}/qemu", node_name);
+        let vms_response = match client.get(&vms_path).await {
+            Ok(response) => response,
+            Err(e) => {
+                warn!("Failed to get VMs for node {}: {}", node_name, e);
+                continue;
+            }
+        };
+        
+        // Parse the VM response
+        let vms_value: serde_json::Value = match serde_json::from_slice(&vms_response.body) {
+            Ok(value) => value,
+            Err(e) => {
+                warn!("Failed to parse VMs response for node {}: {}", node_name, e);
+                continue;
+            }
+        };
+        
+        // Extract the VMs data
+        let vms_data = match vms_value.get("data").and_then(|d| d.as_array()) {
+            Some(data) => data,
+            None => {
+                warn!("Invalid VMs response format for node {}", node_name);
+                continue;
+            }
+        };
+        
+        // Add all VM IDs to the existing set
+        for vm in vms_data {
+            if let Some(vmid) = vm.get("vmid").and_then(|id| id.as_u64()).map(|id| id as u32) {
+                existing_vm_ids.insert(vmid);
+            }
+        }
+    }
+    
+    // Find and delete machines that no longer exist in Proxmox
+    let mut pruned_count = 0;
+    
+    for machine in proxmox_machines {
+        if let Some(vmid) = machine.proxmox_vmid {
+            // Check if this VM ID still exists in Proxmox
+            if !existing_vm_ids.contains(&vmid) {
+                info!("Proxmox VM with ID {} no longer exists, removing from Dragonfly", vmid);
+                
+                if let Err(e) = db::delete_machine(&machine.id).await {
+                    error!("Failed to delete machine {}: {}", machine.id, e);
+                } else {
+                    info!("Successfully removed machine {} (Proxmox VM ID: {})", machine.id, vmid);
+                    pruned_count += 1;
+                }
+            }
+        } else if machine.is_proxmox_host {
+            // Check if this node still exists in Proxmox
+            if let Some(node_name) = &machine.proxmox_node {
+                if !existing_node_names.contains(node_name) {
+                    info!("Proxmox node '{}' no longer exists, removing from Dragonfly", node_name);
+                    
+                    if let Err(e) = db::delete_machine(&machine.id).await {
+                        error!("Failed to delete machine {}: {}", machine.id, e);
+                    } else {
+                        info!("Successfully removed machine {} (Proxmox node: {})", machine.id, node_name);
+                        pruned_count += 1;
+                    }
+                }
+            }
+        }
+    }
+    
+    info!("Proxmox sync complete: removed {} machines that no longer exist in Proxmox", pruned_count);
+    
+    Ok(())
+}
+
 // ... (Keep other existing helpers like register_machine_with_id if still needed)

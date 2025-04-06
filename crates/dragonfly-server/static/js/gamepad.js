@@ -1644,8 +1644,14 @@ class GamepadController {
             if (gamepad.buttons[3]?.pressed && !this.buttonStates.y) { // Assuming Y is button 3
                 console.log('[Gamepad Tags] Button Y PRESSED.');
                 this.buttonStates.y = true;
-                console.log('[Gamepad Tags] Cycling filter');
-                this.tagManagerComponent.cycleFilter();
+                console.log('[Gamepad Tags] Cycling sort options');
+                // Call the sort function instead of filter
+                if (this.tagManagerComponent.cycleSort) {
+                    this.tagManagerComponent.cycleSort();
+                } else {
+                    console.warn('[Gamepad Tags] cycleSort method not available, falling back to cycleFilter');
+                    this.tagManagerComponent.cycleFilter();
+                }
                 // Need to update focusable elements and potentially refocus
                 setTimeout(() => this.updateFocusableElements(), 100);
             }

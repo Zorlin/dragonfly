@@ -82,6 +82,55 @@
     margin-right: 0.5rem;
   }
   
+  /* Emoji selector styles */
+  .emoji-selector {
+    cursor: pointer;
+    font-size: 1rem;
+    margin-right: 0.5rem;
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 0.25rem;
+  }
+  
+  .emoji-selector:hover {
+    background-color: rgba(99, 102, 241, 0.1);
+  }
+  
+  .emoji-dropdown {
+    position: absolute;
+    z-index: 50;
+    background-color: white;
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    border-radius: 0.375rem;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    padding: 0.5rem;
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    gap: 0.25rem;
+    max-width: 16rem;
+  }
+  
+  .dark .emoji-dropdown {
+    background-color: #1f2937;
+    border-color: rgba(255, 255, 255, 0.1);
+  }
+  
+  .emoji-option {
+    cursor: pointer;
+    padding: 0.25rem;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    border-radius: 0.25rem;
+  }
+  
+  .emoji-option:hover {
+    background-color: rgba(99, 102, 241, 0.1);
+  }
+  
   /* Selected node styles */
   .node-card.selected {
     border: 2px solid #6366f1 !important;
@@ -105,15 +154,16 @@
   .sort-button {
     display: inline-flex;
     align-items: center;
-    padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
-    border-radius: 0.25rem;
+    padding: 0.375rem 0.75rem;
+    font-size: 0.875rem;
+    border-radius: 0.375rem;
+    background-color: #4f46e5;
+    color: white;
+    font-weight: 500;
   }
   
-  .sort-button svg {
-    height: 0.875rem;
-    width: 0.875rem;
-    margin-left: 0.25rem;
+  .sort-button:hover {
+    background-color: #4338ca;
   }
   
   /* Selected node info section */
@@ -188,6 +238,32 @@
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
     gap: 0.25rem;
+  }
+
+  /* Assignment Toast - Modified to include undo button */
+  .assignment-toast {
+    position: fixed;
+    bottom: 1rem;
+    right: 1rem;
+    max-width: 20rem;
+    background-color: #4f46e5;
+    color: white;
+    border-radius: 0.5rem;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+    z-index: 50;
+    padding: 0.75rem 1rem;
+  }
+  
+  .assignment-toast button {
+    background-color: rgba(255, 255, 255, 0.2);
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    font-size: 0.75rem;
+    margin-left: 0.5rem;
+  }
+  
+  .assignment-toast button:hover {
+    background-color: rgba(255, 255, 255, 0.3);
   }
 </style>
 {% endblock %}
@@ -308,9 +384,17 @@
                 'cursor-pointer': selectedNodeIds.length > 0
               }"
             >
-              <span class="font-medium truncate mr-auto" x-text="tag"></span>
-              <div class="flex items-center ml-2">
-                <span class="font-bold mr-1" x-text="nodes.length"></span>
+              <div class="flex items-center">
+                <!-- Show emoji only if all nodes have the same emoji -->
+                <span 
+                  class="mr-1.5" 
+                  x-show="getTagEmoji(tag) !== null"
+                  x-text="getTagEmoji(tag)"
+                ></span>
+                <span class="font-medium truncate" x-text="tag"></span>
+              </div>
+              <div class="flex items-center">
+                <span class="font-bold mr-1.5" x-text="nodes.length"></span>
                 <button @click.stop.prevent="deleteTag(tag)" type="button" data-tag-action="delete"
                   class="text-white opacity-50 hover:opacity-100 focus:opacity-100 p-0.5 rounded">
                   <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -331,7 +415,18 @@
             <span class="ml-2 text-sm font-normal text-gray-500 dark:text-gray-400" x-text="'(' + availableNodes.length + ' total)'"></span>
           </h2>
           
-          <div class="flex space-x-1">
+          <div class="flex space-x-2">
+            <!-- Sort Button - Standalone and more prominent -->
+            <button 
+              @click="cycleSortOption()" 
+              data-gamepad-focusable="true"
+              class="sort-button"
+              data-gamepad-action="sort"
+              title="Change sort order"
+            >
+              <span x-text="'Sort: ' + getSortLabel()"></span>
+            </button>
+            
             <!-- Search Input -->
             <div class="relative">
               <input type="text" x-model="nodeSearchQuery" @input.debounce.300ms="filterNodes(currentFilter)"
@@ -344,20 +439,6 @@
                 </svg>
               </div>
             </div>
-            
-            <!-- Sort Button -->
-            <button 
-              @click="cycleSortOption()" 
-              data-gamepad-focusable="true"
-              class="sort-button bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300"
-              data-gamepad-action="sort"
-              title="Change sort order"
-            >
-              <span x-text="getSortLabel()"></span>
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4h13M3 8h9m-9 4h6m4 0l4-4m0 0l4 4m-4-4v12" />
-              </svg>
-            </button>
             
             <!-- Filter Buttons -->
             <button type="button" @click="filterNodes('all')" 
@@ -385,12 +466,12 @@
 
         <!-- Node Grid -->
         <div 
+          id="nodes-container"
           class="flex-grow overflow-y-auto pr-1 relative" 
           @dragover.prevent
           @mousedown="startBoxSelect($event)"
           @mousemove="updateBoxSelect($event)"
           @mouseup="endBoxSelect($event)"
-          id="nodes-container"
         >
           <div x-show="filteredNodes.length === 0" class="text-center py-6 text-gray-500 dark:text-gray-400 italic">
             No nodes match the current filter or search.
@@ -431,8 +512,28 @@
                      :title="formatStatus(node.status)">
                 </span>
                 
-                <!-- Node Letter -->
-                <span class="flex-shrink-0 w-5 h-5 rounded-full bg-purple-600 dark:bg-purple-700 text-white flex items-center justify-center mr-1.5 font-medium" x-text="node.hostname ? node.hostname[0].toUpperCase() : 'N'"></span>
+                <!-- Emoji Selector -->
+                <div 
+                  class="emoji-selector"
+                  @click.stop="toggleEmojiDropdown(node.id)"
+                >
+                  <span x-text="getNodeEmoji(node.id)"></span>
+                </div>
+                
+                <!-- Emoji Dropdown (Shows only when activated) -->
+                <div
+                  x-show="showEmojiDropdown && currentEmojiNode === node.id"
+                  class="emoji-dropdown"
+                  @click.away="showEmojiDropdown = false"
+                >
+                  <template x-for="emoji in emojis" :key="emoji">
+                    <div
+                      class="emoji-option"
+                      x-text="emoji"
+                      @click.stop="selectNodeEmoji(node.id, emoji)"
+                    ></div>
+                  </template>
+                </div>
                 
                 <!-- Info -->
                 <div class="flex-grow min-w-0">
@@ -459,16 +560,19 @@
     </div>
 
     <!-- Assignment Toast -->
-    <div id="assignment-toast" class="assignment-toast hidden fixed bottom-4 right-4 max-w-xs bg-green-700 rounded-lg shadow-lg z-50 p-3 text-white">
-      <div class="flex items-start">
-        <div class="flex-shrink-0 pt-0.5">
-          <svg class="h-5 w-5 text-green-200" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
-          </svg>
+    <div id="assignment-toast" class="assignment-toast hidden">
+      <div class="flex items-center justify-between">
+        <div class="flex items-start">
+          <div class="flex-shrink-0 pt-0.5">
+            <svg class="h-5 w-5 text-white opacity-80" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+              <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+            </svg>
+          </div>
+          <div class="ml-3 flex-1">
+            <p class="text-sm font-medium text-white" id="toast-message"></p>
+          </div>
         </div>
-        <div class="ml-3 flex-1">
-          <p class="text-sm font-medium text-white" id="toast-message"></p>
-        </div>
+        <div class="flex-shrink-0" id="toast-actions"></div>
       </div>
     </div>
   </div>
@@ -509,6 +613,23 @@
         { id: 'tags', label: 'Tags' },
       ],
       
+      // Emoji selector
+      showEmojiDropdown: false,
+      currentEmojiNode: null,
+      emojis: ['🚀', '🔥', '⚡', '💻', '🖥️', '🌐', '🔧', '⚙️', '📊', '🛠️', '🧰', '🧩', '🎮', '🎯', '🏆', '💾'],
+      nodeEmojis: {}, // Store node ID -> emoji
+      previousEmojiState: {}, // For undo functionality
+      
+      // Force Alpine to update the UI
+      forceRefresh() {
+        this.refreshTrigger++;
+      },
+      
+      // Computed property for dragging state
+      get isDragging() {
+        return !!this.draggedNodeId;
+      },
+      
       // Initialize
       init() {
         this.loadData();
@@ -544,6 +665,9 @@
           
           // Load tags from localStorage (includes "empty" tags with no machines)
           this.loadLocalTags();
+          
+          // Load emoji preferences from localStorage
+          this.loadEmojiPreferences();
 
           // Initial filter application
           this.filterNodes(this.currentFilter);
@@ -706,10 +830,11 @@
 
       // Box selection functions
       startBoxSelect(event) {
-        // Only start box select if clicked on the container (not on a node)
-        if (event.target.id !== 'nodes-container' && !event.target.closest('#nodes-container > div')) return;
-        if (event.target.closest('.node-card')) return; // Don't start if clicked on a node
+        // Only start box select if clicked directly on the container background
+        // and not on any child elements like node cards
+        if (event.target.id !== 'nodes-container') return;
         
+        console.log('Starting box select');
         this.isBoxSelecting = true;
         
         const container = document.getElementById('nodes-container');
@@ -1225,24 +1350,170 @@
 
       // --- API Calls ---
       async addTagToNodeAPI(nodeId, tag) {
-        const response = await fetch(`/api/machines/${nodeId}/tags`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', },
-          body: JSON.stringify({ tag })
-        });
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`Failed to add tag (${response.status}): ${errorText}`);
+        // First check if the machine already has this tag
+        try {
+          const response = await fetch(`/api/machines/${nodeId}`);
+          if (!response.ok) throw new Error(`Failed to get machine data: ${response.statusText}`);
+          const machine = await response.json();
+          
+          // If machine already has this tag, consider it a success
+          if (machine.tags && machine.tags.includes(tag)) {
+            return true;
+          }
+          
+          // Get current tags and add the new one
+          const currentTags = machine.tags || [];
+          if (!currentTags.includes(tag)) {
+            currentTags.push(tag);
+          }
+          
+          // Update with the new tags array
+          const updateResponse = await fetch(`/api/machines/${nodeId}/tags`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(currentTags)
+          });
+          
+          if (!updateResponse.ok) {
+            const errorText = await updateResponse.text();
+            throw new Error(`Failed to update tags (${updateResponse.status}): ${errorText}`);
+          }
+          
+          return true;
+        } catch (error) {
+          console.error(`API error when adding tag to machine ${nodeId}:`, error);
+          throw error;
         }
       },
 
       async removeTagFromNodeAPI(nodeId, tag) {
-        const response = await fetch(`/api/machines/${nodeId}/tags/${encodeURIComponent(tag)}`, {
-          method: 'DELETE'
-        });
-        if (!response.ok && response.status !== 404) {
-           const errorText = await response.text();
-           throw new Error(`Failed to remove tag (${response.status}): ${errorText}`);
+        try {
+          // First get current tags
+          const response = await fetch(`/api/machines/${nodeId}`);
+          if (!response.ok) throw new Error(`Failed to get machine data: ${response.statusText}`);
+          const machine = await response.json();
+          
+          // Filter out the tag to remove
+          const currentTags = machine.tags || [];
+          const updatedTags = currentTags.filter(t => t !== tag);
+          
+          // Update with the filtered tags
+          const updateResponse = await fetch(`/api/machines/${nodeId}/tags`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updatedTags)
+          });
+          
+          if (!updateResponse.ok) {
+            const errorText = await updateResponse.text();
+            throw new Error(`Failed to update tags (${updateResponse.status}): ${errorText}`);
+          }
+          
+          return true;
+        } catch (error) {
+          console.error(`API error when removing tag from machine ${nodeId}:`, error);
+          throw error;
+        }
+      },
+
+      // --- Emoji Selector Functions ---
+      toggleEmojiDropdown(nodeId) {
+        if (this.currentEmojiNode === nodeId && this.showEmojiDropdown) {
+          this.showEmojiDropdown = false;
+        } else {
+          // If multiple nodes are selected, use the clicked node for dropdown
+          // but we'll apply changes to all selected nodes
+          this.currentEmojiNode = nodeId;
+          this.showEmojiDropdown = true;
+        }
+      },
+      
+      selectNodeEmoji(nodeId, emoji) {
+        // Check if we have multiple nodes selected
+        if (this.selectedNodeIds.length > 1 && this.selectedNodeIds.includes(nodeId)) {
+          // Store the previous state for undo
+          this.previousEmojiState = {...this.nodeEmojis};
+          
+          // Apply emoji to all selected nodes
+          const selectedCount = this.selectedNodeIds.length;
+          this.selectedNodeIds.forEach(id => {
+            this.nodeEmojis[id] = emoji;
+          });
+          
+          // Close dropdown
+          this.showEmojiDropdown = false;
+          
+          // Save preferences
+          this.saveEmojiPreferences();
+          
+          // Force refresh to update tag emojis
+          this.forceRefresh();
+          
+          // Show toast with undo option
+          this.showToastWithUndo(
+            `Updated emoji for ${selectedCount} machines`, 
+            () => this.undoEmojiChange()
+          );
+          
+        } else {
+          // Single node update
+          this.nodeEmojis[nodeId] = emoji;
+          this.showEmojiDropdown = false;
+          this.saveEmojiPreferences();
+          
+          // Force refresh to update tag emojis
+          this.forceRefresh();
+        }
+      },
+      
+      undoEmojiChange() {
+        // Restore previous emoji state
+        if (Object.keys(this.previousEmojiState).length > 0) {
+          this.nodeEmojis = {...this.previousEmojiState};
+          this.saveEmojiPreferences();
+          this.forceRefresh(); // Force refresh to update tag emojis
+          this.showToast('Emoji changes undone');
+        }
+      },
+      
+      getNodeEmoji(nodeId) {
+        return this.nodeEmojis[nodeId] || '📦'; // Default emoji
+      },
+      
+      // Get emoji for a tag based on nodes in that tag
+      getTagEmoji(tag) {
+        const nodeIds = this.tagBuckets[tag];
+        if (!nodeIds || nodeIds.length === 0) {
+          return null;
+        }
+        
+        // Get emoji of first node in the tag
+        const firstNodeId = nodeIds[0];
+        const firstNodeEmoji = this.getNodeEmoji(firstNodeId);
+        
+        // Check if all nodes have the same emoji
+        const allSameEmoji = nodeIds.every(nodeId => this.getNodeEmoji(nodeId) === firstNodeEmoji);
+        
+        // Return the emoji if all nodes have the same one, otherwise null
+        return allSameEmoji ? firstNodeEmoji : null;
+      },
+      
+      saveEmojiPreferences() {
+        try {
+          localStorage.setItem('dragonfly_node_emojis', JSON.stringify(this.nodeEmojis));
+        } catch (e) {
+          console.error('Error saving emoji preferences:', e);
+        }
+      },
+      
+      loadEmojiPreferences() {
+        try {
+          const savedEmojis = localStorage.getItem('dragonfly_node_emojis');
+          if (savedEmojis) {
+            this.nodeEmojis = JSON.parse(savedEmojis);
+          }
+        } catch (e) {
+          console.error('Error loading emoji preferences:', e);
         }
       },
 
@@ -1250,34 +1521,26 @@
       showToast(message, type = 'success') {
         const toast = document.getElementById('assignment-toast');
         const messageEl = document.getElementById('toast-message');
+        const actionsEl = document.getElementById('toast-actions');
         const iconSvg = toast.querySelector('svg');
 
         // Reset classes
-        toast.classList.remove('hidden', 'closing', 'bg-red-600', 'bg-yellow-600', 'bg-blue-600', 'bg-green-600');
-        iconSvg.classList.remove('text-red-400', 'text-yellow-400', 'text-blue-400', 'text-green-400');
-
+        toast.classList.remove('hidden', 'closing');
         messageEl.textContent = message;
+        
+        // Clear any previous action buttons
+        actionsEl.innerHTML = '';
 
         // Apply type styles
         const bgMapping = {
           'error': 'bg-red-700',
           'warning': 'bg-yellow-600',
           'info': 'bg-blue-700',
-          'success': 'bg-green-700'
-        };
-        const iconMapping = {
-          'error': 'text-red-200',
-          'warning': 'text-yellow-100',
-          'info': 'text-blue-200',
-          'success': 'text-green-200'
+          'success': 'bg-purple-700'
         };
 
         toast.className = toast.className.replace(/bg-\w+-\d+/g, '');
-        toast.classList.add(bgMapping[type] || 'bg-gray-900');
-
-        const icon = toast.querySelector('svg');
-        icon.className = icon.className.replace(/text-\w+-\d+/g, '');
-        icon.classList.add(iconMapping[type] || 'text-gray-200');
+        toast.classList.add(bgMapping[type] || 'bg-purple-700');
 
         toast.classList.remove('hidden');
         void toast.offsetWidth;
@@ -1290,7 +1553,41 @@
           }, 300);
         }, 3000);
       },
-
+      
+      showToastWithUndo(message, undoFunction) {
+        const toast = document.getElementById('assignment-toast');
+        const messageEl = document.getElementById('toast-message');
+        const actionsEl = document.getElementById('toast-actions');
+        
+        // Reset classes
+        toast.classList.remove('hidden', 'closing');
+        messageEl.textContent = message;
+        
+        // Add undo button
+        actionsEl.innerHTML = '<button id="undo-button">Undo</button>';
+        const undoButton = document.getElementById('undo-button');
+        undoButton.addEventListener('click', () => {
+          undoFunction();
+          // Hide toast after undo
+          toast.classList.add('hidden');
+        });
+        
+        // Apply style
+        toast.className = toast.className.replace(/bg-\w+-\d+/g, '');
+        toast.classList.add('bg-purple-700');
+        
+        toast.classList.remove('hidden');
+        void toast.offsetWidth;
+        
+        // Auto-hide after longer period (5s instead of 3s)
+        setTimeout(() => {
+          toast.classList.add('closing');
+          setTimeout(() => {
+            toast.classList.add('hidden');
+          }, 300);
+        }, 5000);
+      },
+      
       // --- Gamepad Specific Methods ---
       toggleNodeSelection(nodeId) {
           this.selectedNodeId = (this.selectedNodeId === nodeId) ? null : nodeId;
