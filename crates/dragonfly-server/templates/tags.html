@@ -30,6 +30,59 @@
     box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.5);
   }
 
+  /* Dynamic node card sizing based on density */
+  .node-card .detail-info {
+    display: none; /* Hidden by default in compact mode */
+  }
+  
+  /* Expanded card styles */
+  .expanded-layout .node-card {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 0.5rem;
+    height: auto;
+    min-height: 6rem;
+  }
+  
+  .expanded-layout .node-card .basic-info {
+    display: flex;
+    align-items: center;
+    margin-bottom: 0.5rem;
+  }
+  
+  .expanded-layout .node-card .detail-info {
+    display: block;
+    margin-top: 0.25rem;
+    font-size: 0.7rem;
+  }
+  
+  .expanded-layout .node-card .tag-container {
+    margin-top: 0.5rem;
+    max-width: 100%;
+  }
+  
+  /* Medium layout - between compact and fully expanded */
+  .medium-layout .node-card {
+    padding: 0.4rem;
+    min-height: 3.5rem;
+  }
+  
+  .medium-layout .node-card .compact-node-tag {
+    font-size: 0.65rem;
+    padding: 0.15rem 0.3rem;
+  }
+  
+  .medium-layout .node-card .status-line {
+    display: block;
+    font-size: 0.65rem;
+    margin-top: 0.2rem;
+  }
+  
+  /* Smooth transitions for dynamic sizing */
+  .node-card, .node-card > *, .node-card .compact-node-tag {
+    transition: all 0.3s ease-in-out;
+  }
+
   .tag-card {
     border: 1px solid rgba(139, 92, 246, 0.2);
     padding: 0.5rem;
@@ -71,6 +124,7 @@
     line-height: 0.8rem;
     border-radius: 0.25rem;
     margin-right: 0.25rem;
+    white-space: nowrap;
   }
 
   /* Status indicators */
@@ -141,13 +195,36 @@
     box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.8);
   }
   
-  /* Selection rectangle for box select */
+  /* Enhanced Selection box for box select */
   .selection-box {
     position: absolute;
-    border: 1px solid rgba(99, 102, 241, 0.8);
-    background-color: rgba(99, 102, 241, 0.1);
+    border: 2px solid rgba(99, 102, 241, 0.8);
+    background-color: rgba(99, 102, 241, 0.15);
     z-index: 100;
     pointer-events: none;
+    border-radius: 4px;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.3);
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+  
+  .dark .selection-box {
+    border-color: rgba(139, 92, 246, 0.8);
+    background-color: rgba(139, 92, 246, 0.15);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+  }
+  
+  /* Add style for nodes container to indicate selection mode */
+  #nodes-container.selecting {
+    cursor: crosshair;
+  }
+  
+  /* Add style for when CMD/CTRL is pressed */
+  #nodes-container.multi-select {
+    background-color: rgba(99, 102, 241, 0.03);
+  }
+  
+  .dark #nodes-container.multi-select {
+    background-color: rgba(139, 92, 246, 0.05);
   }
   
   /* Sort button styles */
@@ -209,9 +286,29 @@
     gap: 0.25rem;
   }
   
+  /* Medium grid - fewer columns, larger items */
+  .medium-grid {
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)) !important;
+    gap: 0.4rem !important;
+  }
+  
+  /* Expanded grid - even fewer columns, much larger items */
+  .expanded-grid {
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)) !important;
+    gap: 0.5rem !important;
+  }
+  
   @media (min-width: 1280px) {
     .ultra-compact-grid {
       grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    }
+    
+    .medium-grid {
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)) !important;
+    }
+    
+    .expanded-grid {
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)) !important;
     }
   }
   
@@ -219,17 +316,41 @@
     .ultra-compact-grid {
       grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
     }
+    
+    .medium-grid {
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)) !important;
+    }
+    
+    .expanded-grid {
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)) !important;
+    }
   }
   
   @media (min-width: 1920px) {
     .ultra-compact-grid {
       grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
     }
+    
+    .medium-grid {
+      grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)) !important;
+    }
+    
+    .expanded-grid {
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)) !important;
+    }
   }
   
   @media (min-width: 2560px) {
     .ultra-compact-grid {
       grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    }
+    
+    .medium-grid {
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)) !important;
+    }
+    
+    .expanded-grid {
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)) !important;
     }
   }
   
@@ -304,15 +425,6 @@
             <span x-text="selectedNodeIds.length > 1 ? 
               `${selectedNodeIds.length} nodes selected` : 
               getCurrentNodeName()"></span>
-          </div>
-          <div x-show="selectedNodeIds.length === 1">
-            <span class="font-semibold">Tags:</span>
-            <div class="flex flex-wrap gap-1 mt-1">
-              <template x-for="tag in getCurrentNodeTags()">
-                <span class="bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200 text-xs px-2 py-0.5 rounded" x-text="tag"></span>
-              </template>
-              <span x-show="getCurrentNodeTags().length === 0" class="text-gray-500 italic text-xs">No tags</span>
-            </div>
           </div>
           <div class="mt-2 text-sm text-gray-600 dark:text-gray-400" x-show="selectedNodeIds.length > 0">
             Drag to a tag to assign, or use <kbd class="px-1 py-0.5 bg-gray-200 dark:bg-gray-700 rounded">CMD</kbd>/<kbd class="px-1 py-0.5 bg-gray-200 dark:bg-gray-700 rounded">CTRL</kbd>+click to select multiple nodes.
@@ -469,9 +581,8 @@
           id="nodes-container"
           class="flex-grow overflow-y-auto pr-1 relative" 
           @dragover.prevent
-          @mousedown="startBoxSelect($event)"
-          @mousemove="updateBoxSelect($event)"
-          @mouseup="endBoxSelect($event)"
+          @resize.window="updateNodeLayout()"
+          @click="handleContainerClick($event)"
         >
           <div x-show="filteredNodes.length === 0" class="text-center py-6 text-gray-500 dark:text-gray-400 italic">
             No nodes match the current filter or search.
@@ -484,7 +595,7 @@
             style="display: none; top: 0; left: 0; width: 0; height: 0;"
           ></div>
 
-          <div class="ultra-compact-grid">
+          <div class="ultra-compact-grid" id="nodes-grid" x-ref="nodesGrid">
             <template x-for="node in filteredNodes" :key="node.id">
               <div
                 :id="'node-' + node.id"
@@ -501,48 +612,70 @@
                   'selected-for-gamepad': selectedNodeId === node.id 
                 }"
               >
-                <!-- Status Dot -->
-                <span class="status-dot"
-                     :class="{
-                         'bg-green-500': node.status === 'Ready',
-                         'bg-yellow-500': node.status === 'InstallingOS' || node.status === 'NeedsOS',
-                         'bg-red-500': typeof node.status === 'object' && node.status.Error,
-                         'bg-gray-400': node.status === 'Offline' || !node.status
-                     }"
-                     :title="formatStatus(node.status)">
-                </span>
-                
-                <!-- Emoji Selector -->
-                <div 
-                  class="emoji-selector"
-                  @click.stop="toggleEmojiDropdown(node.id)"
-                >
-                  <span x-text="getNodeEmoji(node.id)"></span>
+                <!-- Basic info (always visible) -->
+                <div class="basic-info flex items-center flex-grow min-w-0">
+                  <!-- Status Dot -->
+                  <span class="status-dot"
+                      :class="{
+                          'bg-green-500': node.status === 'Ready',
+                          'bg-yellow-500': node.status === 'InstallingOS' || node.status === 'NeedsOS',
+                          'bg-red-500': typeof node.status === 'object' && node.status.Error,
+                          'bg-gray-400': node.status === 'Offline' || !node.status
+                      }"
+                      :title="formatStatus(node.status)">
+                  </span>
+                  
+                  <!-- Emoji Selector -->
+                  <div 
+                    class="emoji-selector"
+                    @click.stop="toggleEmojiDropdown(node.id)"
+                  >
+                    <span x-text="getNodeEmoji(node.id)"></span>
+                  </div>
+                  
+                  <!-- Emoji Dropdown (Shows only when activated) -->
+                  <div
+                    x-show="showEmojiDropdown && currentEmojiNode === node.id"
+                    class="emoji-dropdown"
+                    @click.away="showEmojiDropdown = false"
+                  >
+                    <template x-for="emoji in emojis" :key="emoji">
+                      <div
+                        class="emoji-option"
+                        x-text="emoji"
+                        @click.stop="selectNodeEmoji(node.id, emoji)"
+                      ></div>
+                    </template>
+                  </div>
+                  
+                  <!-- Basic Info -->
+                  <div class="flex-grow min-w-0">
+                    <div class="font-medium text-gray-900 dark:text-white truncate" x-text="node.hostname || node.id"></div>
+                    <div class="text-gray-500 dark:text-gray-400 truncate" x-text="node.ip_address || 'No IP'"></div>
+                    <div class="status-line text-gray-500 dark:text-gray-400 hidden" x-text="formatStatus(node.status)"></div>
+                  </div>
                 </div>
                 
-                <!-- Emoji Dropdown (Shows only when activated) -->
-                <div
-                  x-show="showEmojiDropdown && currentEmojiNode === node.id"
-                  class="emoji-dropdown"
-                  @click.away="showEmojiDropdown = false"
-                >
-                  <template x-for="emoji in emojis" :key="emoji">
-                    <div
-                      class="emoji-option"
-                      x-text="emoji"
-                      @click.stop="selectNodeEmoji(node.id, emoji)"
-                    ></div>
-                  </template>
-                </div>
-                
-                <!-- Info -->
-                <div class="flex-grow min-w-0">
-                  <div class="font-medium text-gray-900 dark:text-white truncate" x-text="node.hostname || node.id"></div>
-                  <div class="text-gray-500 dark:text-gray-400 truncate" x-text="node.ip_address || 'No IP'"></div>
+                <!-- Detailed info (visible in expanded mode) -->
+                <div class="detail-info text-gray-600 dark:text-gray-400">
+                  <div class="grid grid-cols-2 gap-1">
+                    <div>
+                      <span class="font-semibold">Status:</span>
+                      <span x-text="formatStatus(node.status)"></span>
+                    </div>
+                    <div>
+                      <span class="font-semibold">Tags:</span>
+                      <span x-text="(node.tags?.length || 0) + ' tag(s)'"></span>
+                    </div>
+                    <div class="col-span-2">
+                      <span class="font-semibold">IP:</span>
+                      <span x-text="node.ip_address || 'Unknown'"></span>
+                    </div>
+                  </div>
                 </div>
                 
                 <!-- Tags -->
-                <div class="flex flex-wrap ml-1 max-w-[40%]">
+                <div class="tag-container flex flex-wrap ml-1 max-w-[40%]">
                   <template x-for="(tag, index) in node.tags?.slice(0, 2) || []" :key="index">
                     <span class="compact-node-tag bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200" x-text="tag"></span>
                   </template>
@@ -598,11 +731,20 @@
       inlineTagName: '', // For the inline tag input
       refreshTrigger: 0, // Used to force UI refresh
       
+      // Layout variables
+      currentLayout: 'compact', // 'compact', 'medium', or 'expanded'
+      nodeLayoutThresholds: {
+        compact: { maxRows: Infinity }, // Always valid
+        medium: { maxRows: 5 },
+        expanded: { maxRows: 3 }
+      },
+      
       // Box select variables
       isBoxSelecting: false,
       boxSelectStart: { x: 0, y: 0 },
       boxSelectEnd: { x: 0, y: 0 },
       boxSelectCtrlKey: false,
+      justFinishedBoxSelect: false, // Add flag to track just-completed selections
       
       // Sorting options
       sortOption: 'name-asc', // Default sort by name ascending
@@ -620,6 +762,9 @@
       nodeEmojis: {}, // Store node ID -> emoji
       previousEmojiState: {}, // For undo functionality
       
+      // Add property to track CMD/CTRL key state globally
+      isMultiSelectMode: false,
+      
       // Force Alpine to update the UI
       forceRefresh() {
         this.refreshTrigger++;
@@ -635,12 +780,109 @@
         this.loadData();
         window.Alpine.store('tagManager', this); // Expose for gamepad
 
+        // Bind event handlers to this context
+        this.handleGlobalMouseMove = this.handleGlobalMouseMove.bind(this);
+        this.handleGlobalMouseUp = this.handleGlobalMouseUp.bind(this);
+        this.handleKeyDown = this.handleKeyDown.bind(this);
+        this.handleKeyUp = this.handleKeyUp.bind(this);
+        this.updateNodeLayout = this.updateNodeLayout.bind(this);
+
         // Global listener to clear drag state if needed (e.g., drag ends outside window)
         document.addEventListener('dragend', () => {
             if (this.isDragging) {
                 this.endDrag();
             }
         });
+        
+        // Add global mousedown listener for box selection
+        document.addEventListener('mousedown', (event) => this.startBoxSelect(event));
+        
+        // Add keyboard event listeners for CMD/CTRL detection
+        document.addEventListener('keydown', this.handleKeyDown);
+        document.addEventListener('keyup', this.handleKeyUp);
+        
+        // Add resize observer to update layout
+        this.resizeObserver = new ResizeObserver(() => {
+          this.updateNodeLayout();
+        });
+        
+        // Initialize the layout after data is loaded
+        window.addEventListener('load', () => {
+          setTimeout(() => this.updateNodeLayout(), 100);
+        });
+      },
+      
+      // Update node layout based on container width and node count
+      updateNodeLayout() {
+        if (this.isLoading || !this.$refs.nodesGrid) return;
+        
+        const container = document.getElementById('nodes-container');
+        const grid = this.$refs.nodesGrid;
+        const nodeCount = this.filteredNodes.length;
+        
+        if (nodeCount === 0) return;
+        
+        // Get the computed style to determine columns
+        const gridStyle = window.getComputedStyle(grid);
+        const containerWidth = container.clientWidth;
+        
+        // Calculate the column count based on the grid's computed template
+        const gridTemplateColumns = gridStyle.gridTemplateColumns;
+        const columnCount = gridTemplateColumns.split(' ').length;
+        
+        // Calculate approximate row count
+        const rowCount = Math.ceil(nodeCount / columnCount);
+        
+        console.log(`Container width: ${containerWidth}px, Nodes: ${nodeCount}, Columns: ${columnCount}, Rows: ${rowCount}`);
+        
+        // Determine layout based on row count
+        let newLayout = 'compact';
+        
+        if (rowCount <= this.nodeLayoutThresholds.expanded.maxRows) {
+          newLayout = 'expanded';
+        } else if (rowCount <= this.nodeLayoutThresholds.medium.maxRows) {
+          newLayout = 'medium';
+        }
+        
+        // Apply the new layout if it's different
+        if (newLayout !== this.currentLayout) {
+          console.log(`Changing layout from ${this.currentLayout} to ${newLayout}`);
+          
+          // Remove old layout classes
+          grid.classList.remove('medium-grid', 'expanded-grid');
+          container.classList.remove('medium-layout', 'expanded-layout');
+          
+          // Add new layout classes
+          if (newLayout === 'medium') {
+            grid.classList.add('medium-grid');
+            container.classList.add('medium-layout');
+          } else if (newLayout === 'expanded') {
+            grid.classList.add('expanded-grid');
+            container.classList.add('expanded-layout');
+          }
+          
+          this.currentLayout = newLayout;
+        }
+      },
+
+      // Handle key down event to detect CMD/CTRL
+      handleKeyDown(event) {
+        if (event.key === 'Control' || event.key === 'Meta') {
+          this.isMultiSelectMode = true;
+          // Add class to nodes container for visual feedback
+          const container = document.getElementById('nodes-container');
+          if (container) container.classList.add('multi-select');
+        }
+      },
+      
+      // Handle key up event to detect CMD/CTRL release
+      handleKeyUp(event) {
+        if (event.key === 'Control' || event.key === 'Meta') {
+          this.isMultiSelectMode = false;
+          // Remove class from nodes container
+          const container = document.getElementById('nodes-container');
+          if (container) container.classList.remove('multi-select');
+        }
       },
 
       // Load data from API
@@ -671,6 +913,14 @@
 
           // Initial filter application
           this.filterNodes(this.currentFilter);
+          
+          // Start observing the grid for size changes
+          if (this.$refs.nodesGrid) {
+            this.resizeObserver.observe(this.$refs.nodesGrid);
+          }
+          
+          // Initial layout update
+          this.$nextTick(() => this.updateNodeLayout());
 
         } catch (error) {
           console.error('Error loading data:', error);
@@ -781,6 +1031,9 @@
         this.applySorting(filtered);
         
         this.filteredNodes = filtered;
+        
+        // Update layout to reflect new node count
+        this.$nextTick(() => this.updateNodeLayout());
       },
       
       // Apply sorting to the filtered nodes
@@ -830,20 +1083,64 @@
 
       // Box selection functions
       startBoxSelect(event) {
-        // Only start box select if clicked directly on the container background
-        // and not on any child elements like node cards
-        if (event.target.id !== 'nodes-container') return;
+        // Don't start box select during a drag operation
+        if (this.isDragging) return;
         
-        console.log('Starting box select');
+        // Allow selection to start from anywhere except interactive elements
+        if (event.target.closest('.tag-card, .node-card, button, input, a, .emoji-selector, .emoji-dropdown, select, textarea, .sort-button, .selected-node-info')) {
+          return;
+        }
+        
+        // Only activate on left mouse button
+        if (event.button !== 0) return;
+        
+        // Store initial CTRL/CMD key state for this selection operation
+        this.boxSelectCtrlKey = event.ctrlKey || event.metaKey || this.isMultiSelectMode;
+        
+        // If not using CTRL/CMD key and starting a new selection,
+        // clear any existing selection
+        if (!this.boxSelectCtrlKey) {
+          this.selectedNodeIds = [];
+          this.currentNodeId = null;
+          this.selectedNodeId = null;
+        }
+        
+        console.log('Starting box select, CTRL key:', this.boxSelectCtrlKey);
         this.isBoxSelecting = true;
         
+        // Get container for positioning
         const container = document.getElementById('nodes-container');
-        const rect = container.getBoundingClientRect();
+        const containerRect = container.getBoundingClientRect();
+        
+        // Calculate mouse position relative to the viewport
+        const mouseX = event.clientX;
+        const mouseY = event.clientY;
+        
+        // Check if mouse is inside the container
+        const isInContainer = (
+          mouseX >= containerRect.left && 
+          mouseX <= containerRect.right && 
+          mouseY >= containerRect.top && 
+          mouseY <= containerRect.bottom
+        );
+        
+        // If outside container, don't start selection
+        if (!isInContainer) {
+          this.isBoxSelecting = false;
+          return;
+        }
+        
+        // Add selecting class to container
+        container.classList.add('selecting');
+        // Add multi-select class if using CTRL/CMD
+        if (this.boxSelectCtrlKey) {
+          container.classList.add('multi-select');
+        }
         
         // Calculate relative coordinates within the container
         this.boxSelectStart = {
-          x: event.clientX - rect.left + container.scrollLeft,
-          y: event.clientY - rect.top + container.scrollTop
+          x: mouseX - containerRect.left + container.scrollLeft,
+          y: mouseY - containerRect.top + container.scrollTop
         };
         
         // Store initial position for the selection box
@@ -857,20 +1154,55 @@
         selBox.style.height = '0px';
         selBox.style.display = 'block';
         
-        // Store CTRL key state
-        this.boxSelectCtrlKey = event.ctrlKey || event.metaKey;
+        // Add global event listeners for mouse movement and release while dragging
+        document.addEventListener('mousemove', this.handleGlobalMouseMove);
+        document.addEventListener('mouseup', this.handleGlobalMouseUp);
+        
+        // Prevent default to avoid text selection
+        event.preventDefault();
+      },
+      
+      // Global mouse move handler (ensures drag continues outside the container)
+      handleGlobalMouseMove(event) {
+        if (!this.isBoxSelecting) return;
+        
+        // Note: we don't update boxSelectCtrlKey during the drag
+        // This keeps the selection mode consistent throughout the drag
+        
+        this.updateBoxSelect(event);
+      },
+      
+      // Global mouse up handler
+      handleGlobalMouseUp(event) {
+        if (!this.isBoxSelecting) return;
+        
+        this.endBoxSelect(event);
+        
+        // Remove global event listeners
+        document.removeEventListener('mousemove', this.handleGlobalMouseMove);
+        document.removeEventListener('mouseup', this.handleGlobalMouseUp);
+        
+        // Remove multi-select class if it was applied for this drag
+        const container = document.getElementById('nodes-container');
+        if (this.boxSelectCtrlKey && !this.isMultiSelectMode) {
+          container.classList.remove('multi-select');
+        }
       },
       
       updateBoxSelect(event) {
         if (!this.isBoxSelecting) return;
         
         const container = document.getElementById('nodes-container');
-        const rect = container.getBoundingClientRect();
+        const containerRect = container.getBoundingClientRect();
         
-        // Update end coordinates
+        // Calculate mouse position relative to container
+        const relativeX = event.clientX - containerRect.left + container.scrollLeft;
+        const relativeY = event.clientY - containerRect.top + container.scrollTop;
+        
+        // Update end coordinates, constrained to container boundaries
         this.boxSelectEnd = {
-          x: event.clientX - rect.left + container.scrollLeft,
-          y: event.clientY - rect.top + container.scrollTop
+          x: Math.max(0, Math.min(relativeX, container.scrollWidth)),
+          y: Math.max(0, Math.min(relativeY, container.scrollHeight))
         };
         
         // Calculate dimensions and position for the selection box
@@ -885,12 +1217,22 @@
         selBox.style.top = `${top}px`;
         selBox.style.width = `${width}px`;
         selBox.style.height = `${height}px`;
+        
+        // Perform real-time selection updates while dragging
+        // but only if the selection box has a reasonable size
+        if (width > 5 && height > 5) {
+          this.updateSelectionFromBox();
+        }
+        
+        // Prevent default to avoid text selection
+        event.preventDefault();
       },
       
-      endBoxSelect(event) {
+      // Extract the node selection logic to a separate function
+      // that can be called from both updateBoxSelect and endBoxSelect
+      updateSelectionFromBox() {
         if (!this.isBoxSelecting) return;
         
-        // Get final selection box coordinates
         const container = document.getElementById('nodes-container');
         const selBox = this.$refs.selectionBox;
         const selRect = {
@@ -900,73 +1242,104 @@
           bottom: parseInt(selBox.style.top, 10) + parseInt(selBox.style.height, 10)
         };
         
-        // Hide selection box
-        selBox.style.display = 'none';
-        
-        // Only process if the selection has size
-        if (Math.abs(this.boxSelectEnd.x - this.boxSelectStart.x) > 5 && 
-            Math.abs(this.boxSelectEnd.y - this.boxSelectStart.y) > 5) {
-          
-          // Find all nodes within the selection box
-          const selectedNodes = [];
-          document.querySelectorAll('.node-card').forEach(nodeEl => {
-            const nodeRect = nodeEl.getBoundingClientRect();
-            const containerRect = container.getBoundingClientRect();
-            
-            // Calculate node position relative to container
-            const nodePos = {
-              left: nodeRect.left - containerRect.left + container.scrollLeft,
-              top: nodeRect.top - containerRect.top + container.scrollTop,
-              right: nodeRect.right - containerRect.left + container.scrollLeft,
-              bottom: nodeRect.bottom - containerRect.top + container.scrollTop
-            };
-            
-            // Check if node is within selection box
-            const isIntersecting = !(
-              nodePos.right < selRect.left ||
-              nodePos.left > selRect.right ||
-              nodePos.bottom < selRect.top ||
-              nodePos.top > selRect.bottom
-            );
-            
-            if (isIntersecting) {
-              const nodeId = nodeEl.dataset.nodeId;
-              if (nodeId) selectedNodes.push(nodeId);
-            }
-          });
-          
-          // Update selection based on CTRL key
-          if (this.boxSelectCtrlKey) {
-            // Toggle selected state for nodes in the box
-            selectedNodes.forEach(nodeId => {
-              const index = this.selectedNodeIds.indexOf(nodeId);
-              if (index >= 0) {
-                // Remove if already selected
-                this.selectedNodeIds.splice(index, 1);
-              } else {
-                // Add if not selected
-                this.selectedNodeIds.push(nodeId);
-              }
-            });
-          } else {
-            // Replace current selection with nodes in the box
-            this.selectedNodeIds = selectedNodes;
-          }
-          
-          // Update current node if applicable
-          if (this.selectedNodeIds.length > 0) {
-            this.currentNodeId = this.selectedNodeIds[this.selectedNodeIds.length - 1];
-            this.selectedNodeId = this.currentNodeId; // For gamepad compatibility
-          } else {
-            this.currentNodeId = null;
-            this.selectedNodeId = null;
-          }
-          
-          // Force UI update
-          this.forceRefresh();
+        // Skip tiny selections to prevent accidental selections
+        if ((selRect.right - selRect.left) < 5 || (selRect.bottom - selRect.top) < 5) {
+          return;
         }
         
+        // Find all nodes within the selection box
+        const selectedNodes = [];
+        document.querySelectorAll('.node-card').forEach(nodeEl => {
+          const nodeRect = nodeEl.getBoundingClientRect();
+          const containerRect = container.getBoundingClientRect();
+          
+          // Calculate node position relative to container
+          const nodePos = {
+            left: nodeRect.left - containerRect.left + container.scrollLeft,
+            top: nodeRect.top - containerRect.top + container.scrollTop,
+            right: nodeRect.right - containerRect.left + container.scrollLeft,
+            bottom: nodeRect.bottom - containerRect.top + container.scrollTop
+          };
+          
+          // Check if node is within selection box using centerpoint algorithm
+          const nodeCenterX = (nodePos.left + nodePos.right) / 2;
+          const nodeCenterY = (nodePos.top + nodePos.bottom) / 2;
+          
+          const isIntersecting = 
+            nodeCenterX >= selRect.left && 
+            nodeCenterX <= selRect.right && 
+            nodeCenterY >= selRect.top && 
+            nodeCenterY <= selRect.bottom;
+          
+          if (isIntersecting) {
+            const nodeId = nodeEl.dataset.nodeId;
+            if (nodeId) selectedNodes.push(nodeId);
+          }
+        });
+        
+        // Update selection based on CTRL/CMD key
+        if (this.boxSelectCtrlKey) {
+          // In CTRL/CMD mode:
+          // 1. Create a new Set from current selection for efficient operations
+          const updatedSelection = new Set(this.selectedNodeIds);
+          
+          // 2. Add all newly found nodes to the selection
+          selectedNodes.forEach(nodeId => {
+            updatedSelection.add(nodeId);
+          });
+          
+          // 3. Convert back to array and update
+          this.selectedNodeIds = Array.from(updatedSelection);
+          console.log('Multi-select mode, total selected:', this.selectedNodeIds.length);
+        } else {
+          // Regular mode: Replace current selection
+          this.selectedNodeIds = selectedNodes;
+          console.log('Normal select mode, selected:', selectedNodes.length);
+        }
+        
+        // Update current node if needed
+        if (this.selectedNodeIds.length > 0) {
+          // If current node not in selection, update it
+          if (!this.selectedNodeIds.includes(this.currentNodeId)) {
+            this.currentNodeId = this.selectedNodeIds[0];
+          }
+        } else {
+          this.currentNodeId = null;
+        }
+        
+        // Update selectedNodeId for gamepad compatibility
+        this.selectedNodeId = this.currentNodeId;
+        
+        // Force UI refresh
+        this.forceRefresh();
+      },
+      
+      endBoxSelect(event) {
+        if (!this.isBoxSelecting) return;
+        
+        // Update selection one final time
+        this.updateBoxSelect(event);
+        
+        // Hide selection box
+        const selBox = this.$refs.selectionBox;
+        selBox.style.display = 'none';
+        
+        // Remove selecting class from container
+        const container = document.getElementById('nodes-container');
+        container.classList.remove('selecting');
+        
+        // Set justFinishedBoxSelect flag to prevent immediate deselection
+        this.justFinishedBoxSelect = true;
+        
+        // Reset the flag after a short delay to allow event propagation to complete
+        setTimeout(() => {
+          this.justFinishedBoxSelect = false;
+        }, 100);
+        
         this.isBoxSelecting = false;
+        
+        // Prevent click from propagating to container
+        event.stopPropagation();
       },
 
       // Create new tag from input field
@@ -979,7 +1352,9 @@
             return;
           }
           
-          this.createNewTag(trimmedName);
+          // Pass selected nodes if any are selected
+          const nodesToAssign = this.selectedNodeIds.length > 0 ? [...this.selectedNodeIds] : null;
+          this.createNewTag(trimmedName, nodesToAssign);
           this.newTagName = '';
         }
       },
@@ -994,7 +1369,9 @@
             return;
           }
           
-          this.createNewTag(trimmedName);
+          // Pass selected nodes if any are selected
+          const nodesToAssign = this.selectedNodeIds.length > 0 ? [...this.selectedNodeIds] : null;
+          this.createNewTag(trimmedName, nodesToAssign);
           this.inlineTagName = '';
           this.isCreatingTag = false;
         }
@@ -1234,13 +1611,16 @@
         // Check if CMD (Mac) or CTRL (Windows/Linux) is pressed
         const isMultiSelectKey = event.metaKey || event.ctrlKey;
         
+        // Check if the node is already selected
+        const isAlreadySelected = this.selectedNodeIds.includes(nodeId);
+        
         if (isMultiSelectKey) {
           // Toggle this node in the selection
-          const index = this.selectedNodeIds.indexOf(nodeId);
-          if (index >= 0) {
+          if (isAlreadySelected) {
             // Remove from selection if already selected
-            this.selectedNodeIds.splice(index, 1);
-            // If this was the current node, clear current
+            this.selectedNodeIds = this.selectedNodeIds.filter(id => id !== nodeId);
+            
+            // If this was the current node, clear or update current
             if (this.currentNodeId === nodeId) {
               this.currentNodeId = this.selectedNodeIds.length > 0 ? 
                 this.selectedNodeIds[this.selectedNodeIds.length - 1] : null;
@@ -1251,13 +1631,27 @@
             this.currentNodeId = nodeId; // Make this the current node
           }
         } else {
-          // Single selection - replace existing selection
-          this.selectedNodeIds = [nodeId];
-          this.currentNodeId = nodeId;
+          // Single click behavior:
+          if (isAlreadySelected && this.selectedNodeIds.length === 1) {
+            // If it's the only selected node, clicking again unselects it
+            this.selectedNodeIds = [];
+            this.currentNodeId = null;
+          } else if (isAlreadySelected) {
+            // If multiple nodes are selected, clicking one makes it the only selection
+            this.selectedNodeIds = [nodeId];
+            this.currentNodeId = nodeId;
+          } else {
+            // Normal case: Single selection - replace existing selection
+            this.selectedNodeIds = [nodeId];
+            this.currentNodeId = nodeId;
+          }
         }
         
         // For gamepad compatibility
         this.selectedNodeId = this.currentNodeId;
+        
+        // Prevent event from bubbling to container (which would clear selection)
+        event.stopPropagation();
         
         // Force UI refresh
         this.forceRefresh();
@@ -1287,12 +1681,44 @@
           const node = this.availableNodes.find(n => n.id === nodeId);
           if (!node) return;
 
-          // Check if already tagged
+          // Check if already tagged - if so, REMOVE the tag (toggle behavior)
           if (node.tags && node.tags.includes(tag)) {
-              this.showToast(`${node.hostname || nodeId} already has tag '${tag}'`, 'info');
-              return;
+              // Remove the tag instead of showing "already has tag" message
+              try {
+                  // Optimistic UI update first
+                  node.tags = node.tags.filter(t => t !== tag);
+                  this.tagBuckets[tag] = this.tagBuckets[tag].filter(id => id !== nodeId);
+                  
+                  const filteredIndex = this.filteredNodes.findIndex(n => n.id === nodeId);
+                  if (filteredIndex !== -1) {
+                      this.filteredNodes[filteredIndex] = { ...node };
+                  }
+                  
+                  this.showToast(`Removed tag '${tag}' from ${node.hostname || nodeId}`);
+                  
+                  // Call API to persist change
+                  await this.removeTagFromNodeAPI(nodeId, tag);
+                  // Update localStorage since this tag might now be empty
+                  this.saveLocalTags();
+                  // Force UI update
+                  this.forceRefresh();
+                  
+                  return; // Exit after removing
+              } catch (error) {
+                  console.error(`Failed to remove tag '${tag}' from node ${nodeId}:`, error);
+                  this.showToast(`API Error: Failed to remove tag '${tag}'`, 'error');
+                  // Revert optimistic UI update
+                  if (!node.tags) node.tags = [];
+                  if (!node.tags.includes(tag)) node.tags.push(tag);
+                  if (!this.tagBuckets[tag].includes(nodeId)) this.tagBuckets[tag].push(nodeId);
+                  if (filteredIndex !== -1) {
+                      this.filteredNodes[filteredIndex] = { ...node };
+                  }
+                  return;
+              }
           }
 
+          // If not already tagged, add the tag as before
           // Optimistic UI update first
           if (!node.tags) node.tags = [];
           node.tags.push(tag);
@@ -1316,7 +1742,7 @@
               await this.addTagToNodeAPI(nodeId, tag);
               // Update localStorage since this tag now has nodes
               this.saveLocalTags();
-              // Force UI update
+              // Force UI refresh
               this.forceRefresh();
           } catch (error) {
               console.error(`Failed to add tag '${tag}' to node ${nodeId}:`, error);
@@ -1341,10 +1767,12 @@
         try {
           const promises = this.selectedNodeIds.map(nodeId => this.assignNodeToTag(nodeId, tag));
           await Promise.all(promises);
-          this.showToast(`Assigned ${this.selectedNodeIds.length} nodes to tag '${tag}'`);
+          
+          // Don't show a generic success message, as individual success/removal messages are shown
+          // by the assignNodeToTag function
         } catch (error) {
-          console.error('Error assigning multiple nodes:', error);
-          this.showToast('Some nodes could not be assigned to the tag', 'error');
+          console.error('Error managing tags for multiple nodes:', error);
+          this.showToast('Some nodes could not be processed', 'error');
         }
       },
 
@@ -1620,6 +2048,23 @@
       // Gamepad handler for Y button (cycle sort)
       cycleSort() {
         this.cycleSortOption();
+      },
+
+      // Handle clicks on the container background to unselect all nodes
+      handleContainerClick(event) {
+        // Don't clear selection if we're dragging, in a box select,
+        // or just finished a box select operation
+        if (this.isDragging || this.isBoxSelecting || this.justFinishedBoxSelect) return;
+        
+        // Only clear if clicking directly on the container or grid background
+        // (not on a node card or other UI element)
+        if (event.target === event.currentTarget || 
+            (event.target.id === 'nodes-grid' || event.target.id === 'nodes-container')) {
+          this.selectedNodeIds = [];
+          this.currentNodeId = null;
+          this.selectedNodeId = null;
+          this.forceRefresh();
+        }
       },
     };
   }
