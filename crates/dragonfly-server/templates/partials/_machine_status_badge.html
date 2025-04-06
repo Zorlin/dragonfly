@@ -1,0 +1,22 @@
+{% if machine.status == "InstallingOS" %}
+<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-yellow-400/10 text-yellow-300 border border-yellow-500/20">
+    Installing OS
+</span>
+{% elif machine.status == "Ready" or machine.status == "Provisioned" %}
+<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-400/10 text-green-300 border border-green-500/20">
+    {{ machine.status }}
+</span>
+{% elif machine.status == "AwaitingAssignment" %}
+<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-400/10 text-blue-300 border border-blue-500/20">
+    Choose OS
+</span>
+{% elif machine.status == "ExistingOS" %}
+<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-cyan-400/10 text-cyan-300 border border-cyan-500/20">
+    Existing OS
+</span>
+{% else %}
+<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-400/10 text-red-300 border border-red-500/20">
+    {{ machine.status | default('Error') }}
+</span>
+{% endif %}
+
