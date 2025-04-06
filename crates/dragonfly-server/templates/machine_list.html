@@ -462,17 +462,42 @@
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
                                     <div class="relative" @click.stop>
+                                        <!-- Hidden span to store original OS value for selectOs function -->
+                                        <span class="hidden os-current-value">{{ machine.os_choice|default('') }}</span>
+                                        
                                         <div class="flex items-center cursor-pointer" @click="toggleOsDropdown('{{ machine.id }}')">
-                                            {% if machine.os_choice %}
-                                                <span class="flex items-center">
-                                                    {{ machine.os_choice | format_os_icon | safe }} 
-                                                    <span class="ml-1">{{ machine.os_choice | format_os }}</span>
-                                                </span>
-                                            {% else %}
-                                                <span class="text-gray-400 italic flex items-center">
-                                                    <i class="fas fa-square-question text-gray-400 mr-1"></i> No OS
-                                                </span>
-                                            {% endif %}
+                                            <!-- When user has chosen a new OS -->
+                                            <span x-show="fieldChanges['{{ machine.id }}'] && fieldChanges['{{ machine.id }}'].os_choice !== undefined" class="flex items-center text-purple-700 dark:text-purple-400 font-medium">
+                                                {% if machine.os_choice %}
+                                                    <span class="flex items-center" data-os-raw="{{ machine.os_choice }}">
+                                                        {{ machine.os_choice | format_os_icon | safe }}
+                                                        <span class="ml-1">{{ machine.os_choice | format_os }}</span>
+                                                    </span>
+                                                {% else %}
+                                                    <i class="fas fa-square-question text-gray-400 mr-1"></i>
+                                                {% endif %}
+                                                <span class="ml-1" x-text="fieldChanges['{{ machine.id }}'].os_choice"></span>
+                                                <i class="fas fa-arrow-right-arrow-left ml-1 text-xs" title="OS will change on next reimage"></i>
+                                            </span>
+                                            
+                                            <!-- Default OS display (no changes) -->
+                                            <span x-show="!(fieldChanges['{{ machine.id }}'] && fieldChanges['{{ machine.id }}'].os_choice !== undefined)">
+                                                {% if machine.os_installed %}
+                                                    <span class="flex items-center" data-os-raw="{{ machine.os_installed }}">
+                                                        {{ machine.os_installed | format_os_icon | safe }}
+                                                        <span class="ml-1">{{ machine.os_installed | format_os }}</span>
+                                                    </span>
+                                                {% elif machine.os_choice %}
+                                                    <span class="flex items-center" data-os-raw="{{ machine.os_choice }}">
+                                                        {{ machine.os_choice | format_os_icon | safe }} 
+                                                        <span class="ml-1">{{ machine.os_choice | format_os }}</span>
+                                                    </span>
+                                                {% else %}
+                                                    <span class="text-gray-400 italic flex items-center">
+                                                        <i class="fas fa-square-question text-gray-400 mr-1"></i> No OS
+                                                    </span>
+                                                {% endif %}
+                                            </span>
                                             <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 ml-1 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
                                             </svg>

@@ -214,12 +214,14 @@
         <div class="bg-blue-100/20 dark:bg-black border border-blue-500 dark:border-blue-700 rounded-xl shadow-lg p-4 space-y-2">
             <h3 class="text-center text-lg font-semibold text-black dark:text-white">🧬 Details</h3>
             <div class="text-xl mt-8 text-gray-900 dark:text-gray-400">
-                <div><span class="font-bold text-purple-900 dark:text-purple-100">Operating System:</span> <span x-text="machine.os_installed || 'Ubuntu 24.04'"></span></div>
-                <div><span class="font-bold text-purple-900 dark:text-purple-100">CPU:</span> <span x-text="machine.cpu_model || 'AMD Ryzen 7 7800X3D (8 cores, 16 threads)'"></span></div>
-                <div><span class="font-bold text-purple-900 dark:text-purple-100">GPU:</span> <span x-text="machine.gpu_model || 'NVIDIA RTX 4070 Ti'"></span></div>
-                <div><span class="font-bold text-purple-900 dark:text-purple-100">RAM:</span> <span x-text="machine.total_ram_bytes ? formatBytes(machine.total_ram_bytes, 2) : '64 GiB'"></span></div>
-                <div><span class="font-bold text-purple-900 dark:text-purple-100">Created:</span> <span x-text="machine.created_at ? new Date(machine.created_at).toLocaleString() : '2025-04-03 23:34:42 UTC'"></span></div>
-                <div><span class="font-bold text-purple-900 dark:text-purple-100">Updated:</span> <span x-text="machine.updated_at ? new Date(machine.updated_at).toLocaleString() : '2025-04-04 00:21:25 UTC'"></span></div>
+                <div><span class="font-bold text-purple-900 dark:text-purple-100">Operating System:</span> <span x-text="machine.os_installed || 'Unknown'"></span></div>
+                <div><span class="font-bold text-purple-900 dark:text-purple-100">CPU:</span> <span x-text="machine.cpu_model || 'Unknown'"></span></div>
+                <template x-if="machine.gpu_model">
+                    <div><span class="font-bold text-purple-900 dark:text-purple-100">GPU:</span> <span x-text="machine.gpu_model"></span></div>
+                </template>
+                <div><span class="font-bold text-purple-900 dark:text-purple-100">RAM:</span> <span x-text="machine.total_ram_bytes ? formatBytes(machine.total_ram_bytes, 2) : 'Unknown'"></span></div>
+                <div><span class="font-bold text-purple-900 dark:text-purple-100">Created:</span> <span x-text="machine.created_at ? new Date(machine.created_at).toLocaleString() : 'Unknown'"></span></div>
+                <div><span class="font-bold text-purple-900 dark:text-purple-100">Updated:</span> <span x-text="machine.updated_at ? new Date(machine.updated_at).toLocaleString() : 'Unknown'"></span></div>
             </div>
         </div>
         

@@ -239,6 +239,7 @@ impl IntoResponse for ProxmoxHandlerError {
             "suggest_disable_tls_verify": suggest_disable_tls_verify
         });
         
+        // Ensure we're returning proper JSON
         (status, Json(response_json)).into_response()
     }
 }
@@ -329,6 +330,10 @@ pub async fn connect_proxmox_handler(
                         Ok(value) => value,
                         Err(e) => {
                             error!("Failed to parse cluster status JSON: {}", e);
+                            // Log the actual response body for debugging
+                            if let Ok(body_str) = std::str::from_utf8(&body_bytes) {
+                                error!("Response body: {}", body_str);
+                            }
                             return Err(ProxmoxHandlerError::ApiError(
                                 ProxmoxClientError::Api(
                                     hyper::StatusCode::INTERNAL_SERVER_ERROR, // Use hyper's StatusCode
@@ -380,7 +385,7 @@ pub async fn connect_proxmox_handler(
                     handle_proxmox_error(e, skip_tls_verify)
                 }
             }
-        }
+        },
         Ok(Some(_tfa_challenge)) => {
             // TFA is required, which is not handled yet
             error!("Proxmox login requires Two-Factor Authentication, which is not supported yet.");
@@ -390,7 +395,7 @@ pub async fn connect_proxmox_handler(
                     "Proxmox authentication failed: TFA Required".to_string(),
                 ))
             ))
-        }
+        },
         Err(e) => {
             // Log the detailed error from proxmox-client
             error!("Proxmox login failed. Detailed error: {:?}", e);
@@ -558,16 +563,16 @@ async fn discover_and_register_proxmox_vms(
                 proxmox_cluster: Some(cluster_name.to_string()),
                 cpu_cores: None, 
                 total_ram_bytes: None, 
-                disks: Vec::new(),
-                nameservers: Vec::new(),
-                cpu_model: None,
-            };
+                                    disks: Vec::new(),
+                                    nameservers: Vec::new(),
+                                    cpu_model: None,
+                                };
             info!(?host_req, "Attempting to register Proxmox host node with DB");
             match db::register_machine(&host_req).await { 
-                Ok(machine_id) => {
+                                    Ok(machine_id) => {
                     info!("Successfully registered/updated Proxmox host node '{}' as machine ID {}", node_name, machine_id);
                 }
-                Err(e) => {
+                                    Err(e) => {
                     error!("Failed to register Proxmox host node '{}': {}", node_name, e);
                     // Log error but continue to VMs for this node
                 }
@@ -628,15 +633,17 @@ async fn discover_and_register_proxmox_vms(
                 .unwrap_or("unknown");
             
             // Determine OS based on VM name or additional queries
-            let mut vm_os = "Unknown OS";
+            // Print OS name
+            info!("OS name: {}", name);
+            let mut vm_os = "Unknown OS".to_string();
             if name.to_lowercase().contains("ubuntu") {
-                vm_os = "Ubuntu 22.04";
+                vm_os = "Ubuntu 22.04".to_string();
             } else if name.to_lowercase().contains("debian") {
-                vm_os = "Debian 12";
+                vm_os = "Debian 12".to_string();
             } else if name.to_lowercase().contains("centos") {
-                vm_os = "CentOS 7";
+                vm_os = "CentOS 7".to_string();
             } else if name.to_lowercase().contains("windows") {
-                vm_os = "Windows Server";
+                vm_os = "Windows Server".to_string();
             }
             
             // Get VM details from Proxmox API
@@ -699,12 +706,13 @@ async fn discover_and_register_proxmox_vms(
             // Check for OS info in the config
             if let Some(os_type) = config_data.get("ostype").and_then(|o| o.as_str()) {
                 match os_type {
-                    "l26" => vm_os = "Ubuntu 22.04", // Assuming default Linux is Ubuntu
-                    "win10" | "win11" => vm_os = "Windows 10/11",
-                    "win8" | "win7" => vm_os = "Windows 7/8",
+                    "l26" => vm_os = "Unknown".to_string(), // Generic Linux should be Unknown
+                    "win10" | "win11" => vm_os = "windows-10".to_string(),
+                    "win8" | "win7" => vm_os = "windows-7".to_string(),
                     "other" => {} // Keep current OS guess
-                    _ => vm_os = "Unknown OS",
+                    _ => vm_os = "unknown".to_string(),
                 }
+                info!("VM {} has OS type {} (from Proxmox config)", vmid, vm_os);
             }
             
             // Proxmox configures network interfaces like net0, net1, etc.
@@ -731,48 +739,193 @@ async fn discover_and_register_proxmox_vms(
             let mut ip_address = "Unknown".to_string(); // Default to Unknown
             
             if agent_enabled {
-                let agent_path = format!("/api2/json/nodes/{}/qemu/{}/agent/network-get-interfaces", node_name, vmid);
-                info!("Attempting to retrieve IP info from QEMU Guest Agent for VM {}", vmid);
+                // First check if agent is actually running
+                let agent_ping_path = format!("/api2/json/nodes/{}/qemu/{}/agent/ping", node_name, vmid);
+                let agent_running = match client.get(&agent_ping_path).await {
+                    Ok(ping_response) => {
+                        if let Ok(ping_value) = serde_json::from_slice::<serde_json::Value>(&ping_response.body) {
+                            // Check for successful response (should contain data with no error)
+                            ping_value.get("data").is_some() && !ping_value.get("data").and_then(|d| d.get("error")).is_some()
+                        } else {
+                            false
+                        }
+                    },
+                    Err(_) => false
+                };
                 
-                if let Ok(agent_response) = client.get(&agent_path).await {
-                    if let Ok(agent_value) = serde_json::from_slice::<serde_json::Value>(&agent_response.body) {
-                        if let Some(result) = agent_value.get("data").and_then(|d| d.get("result")) {
-                            // QEMU agent returns array of network interfaces
-                            if let Some(interfaces) = result.as_array() {
-                                // Look for the first non-loopback interface with IPv4
-                                for iface in interfaces {
-                                    if let Some(name) = iface.get("name").and_then(|n| n.as_str()) {
-                                        // Skip loopback interfaces
-                                        if name.starts_with("lo") {
-                                            continue;
-                                        }
+                if agent_running {
+                    info!("QEMU Guest Agent is running for VM {}, attempting to retrieve network interfaces", vmid);
+                    
+                    // First, try to get OS information
+                    let agent_os_path = format!("/api2/json/nodes/{}/qemu/{}/agent/get-osinfo", node_name, vmid);
+                    let os_detected = match client.get(&agent_os_path).await {
+                        Ok(os_response) => {
+                            match serde_json::from_slice::<serde_json::Value>(&os_response.body) {
+                                Ok(os_value) => {
+                                    // Pretty print for debugging
+                                    info!("OS info response for VM {}: {}", vmid, 
+                                          serde_json::to_string_pretty(&os_value).unwrap_or_else(|_| "Failed to format".to_string()));
+                                    
+                                    // Extract useful OS information
+                                    if let Some(result) = os_value.get("data").and_then(|d| d.get("result")) {
+                                        // Log the raw result for debugging
+                                        info!("Raw OS info for VM {}: {}", vmid, serde_json::to_string(result).unwrap_or_default());
                                         
-                                        // Look for IPv4 addresses in the ip-addresses array
-                                        if let Some(ip_addresses) = iface.get("ip-addresses").and_then(|ips| ips.as_array()) {
-                                            for ip_obj in ip_addresses {
-                                                if let Some(ip_type) = ip_obj.get("ip-address-type").and_then(|t| t.as_str()) {
-                                                    if ip_type == "ipv4" {
-                                                        if let Some(ip) = ip_obj.get("ip-address").and_then(|a| a.as_str()) {
-                                                            ip_address = ip.to_string();
-                                                            info!("Found IPv4 address {} for VM {} via QEMU Guest Agent", ip, vmid);
-                                                            break;
-                                                        }
-                                                    }
+                                        let os_name = result.get("id").and_then(|id| id.as_str()).unwrap_or("Unknown");
+                                        let os_version = result.get("version").and_then(|v| v.as_str()).unwrap_or("");
+                                        let os_pretty_name = result.get("pretty-name").and_then(|pn| pn.as_str());
+                                        
+                                        // First determine the detected OS for logging
+                                        let detected_os = if let Some(pretty) = os_pretty_name {
+                                            pretty.to_string()
+                                        } else if !os_version.is_empty() {
+                                            format!("{} {}", os_name, os_version)
+                                        } else {
+                                            os_name.to_string()
+                                        };
+                                        
+                                        // Now standardize the OS name to match our UI format
+                                        let os_name_lower = os_name.to_lowercase();
+                                        
+                                        vm_os = if os_name_lower.contains("ubuntu") || detected_os.to_lowercase().contains("ubuntu") {
+                                            // Extract major version, e.g., "22.04" -> "2204"
+                                            if os_version.contains(".") {
+                                                let version_parts: Vec<&str> = os_version.split('.').collect();
+                                                if version_parts.len() >= 2 {
+                                                    format!("ubuntu-{}{}", version_parts[0], version_parts[1])
+                                                } else {
+                                                    format!("ubuntu-{}", os_version.replace(".", ""))
                                                 }
+                                            } else if detected_os.contains("22.04") {
+                                                "ubuntu-2204".to_string()
+                                            } else if detected_os.contains("24.04") {
+                                                "ubuntu-2404".to_string()
+                                            } else {
+                                                "ubuntu".to_string()
                                             }
-                                        }
+                                        } else if os_name_lower.contains("debian") || detected_os.to_lowercase().contains("debian") {
+                                            // Try to extract version from pretty name or version string
+                                            if detected_os.contains("12") || detected_os.contains("bookworm") {
+                                                "debian-12".to_string()
+                                            } else if let Some(version) = os_version.split(' ').next().and_then(|v| v.parse::<u32>().ok()) {
+                                                format!("debian-{}", version)
+                                            } else {
+                                                "debian".to_string()
+                                            }
+                                        } else {
+                                            // For other OSes, keep the detected format but log it
+                                            detected_os.clone()
+                                        };
                                         
-                                        // If we found an IP, break out of the interface loop
-                                        if ip_address != "Unknown" {
-                                            break;
-                                        }
+                                        info!("Guest Agent detected OS for VM {}: {} (standardized as: {})", vmid, detected_os, vm_os);
+                                        true
+                                    } else {
+                                        info!("No OS information in Guest Agent response for VM {}", vmid);
+                                        false
                                     }
+                                }
+                                Err(e) => {
+                                    warn!("Failed to parse Guest Agent OS info response for VM {}: {}", vmid, e);
+                                    false
                                 }
                             }
                         }
+                        Err(e) => {
+                            warn!("Failed to get OS info from Guest Agent for VM {}: {}", vmid, e);
+                            false
+                        }
+                    };
+                    
+                    if !os_detected {
+                        info!("Using fallback OS detection for VM {}: {}", vmid, vm_os);
+                    }
+                    
+                    // Then, get network interfaces (existing code)
+                    let agent_path = format!("/api2/json/nodes/{}/qemu/{}/agent/network-get-interfaces", node_name, vmid);
+                    
+                    match client.get(&agent_path).await {
+                        Ok(agent_response) => {
+                            match serde_json::from_slice::<serde_json::Value>(&agent_response.body) {
+                                Ok(agent_value) => {
+                                    // Pretty print the full response for debugging
+                                    info!("Full Guest Agent response for VM {}: {}", vmid, 
+                                          serde_json::to_string_pretty(&agent_value).unwrap_or_else(|_| "Failed to format".to_string()));
+                                    
+                                    if let Some(result) = agent_value.get("data").and_then(|d| d.get("result")) {
+                                        // QEMU agent returns array of network interfaces
+                                        if let Some(interfaces) = result.as_array() {
+                                            info!("Found {} network interfaces for VM {}", interfaces.len(), vmid);
+                                            // Look for the first non-loopback interface with IPv4
+                                            for iface in interfaces {
+                                                // Print each interface for debugging
+                                                info!("Interface for VM {}: {}", vmid, 
+                                                      serde_json::to_string_pretty(&iface).unwrap_or_else(|_| "Failed to format".to_string()));
+                                                
+                                                if let Some(name) = iface.get("name").and_then(|n| n.as_str()) {
+                                                    // Skip loopback interfaces
+                                                    if name.starts_with("lo") {
+                                                        info!("Skipping loopback interface '{}' for VM {}", name, vmid);
+                                                        continue;
+                                                    }
+                                                    
+                                                    info!("Processing interface '{}' for VM {}", name, vmid);
+                                                    
+                                                    // Look for IPv4 addresses in the ip-addresses array
+                                                    if let Some(ip_addresses) = iface.get("ip-addresses").and_then(|ips| ips.as_array()) {
+                                                        info!("Found {} IP addresses on interface '{}' for VM {}", ip_addresses.len(), name, vmid);
+                                                        
+                                                        for ip_obj in ip_addresses {
+                                                            // Debug each IP address entry
+                                                            info!("IP address entry for VM {} on interface {}: {}", vmid, name,
+                                                                  serde_json::to_string_pretty(&ip_obj).unwrap_or_else(|_| "Failed to format".to_string()));
+                                                            
+                                                            let ip_type = ip_obj.get("ip-address-type").and_then(|t| t.as_str());
+                                                            let ip = ip_obj.get("ip-address").and_then(|a| a.as_str());
+                                                            
+                                                            info!("Found IP address type: {:?}, address: {:?}", ip_type, ip);
+                                                            
+                                                            if let (Some("ipv4"), Some(addr)) = (ip_type, ip) {
+                                                                // Skip link-local addresses (169.254.x.x)
+                                                                if addr.starts_with("169.254.") {
+                                                                    info!("Skipping link-local address {} for VM {}", addr, vmid);
+                                                                    continue;
+                                                                }
+                                                                
+                                                                // Skip loopback addresses (127.x.x.x)
+                                                                if addr.starts_with("127.") {
+                                                                    info!("Skipping loopback address {} for VM {}", addr, vmid);
+                                                                    continue;
+                                                                }
+                                                                
+                                                                ip_address = addr.to_string();
+                                                                info!("Selected IPv4 address {} for VM {} via QEMU Guest Agent", ip_address, vmid);
+                                                                break;
+                                                            }
+                                                        }
+                                                    } else {
+                                                        info!("No IP addresses found on interface '{}' for VM {}", name, vmid);
+                                                    }
+                                                    
+                                                    // If we found an IP, break out of the interface loop
+                                                    if ip_address != "Unknown" {
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            info!("No network interfaces array found in Guest Agent response for VM {}", vmid);
+                                        }
+                                    } else {
+                                        info!("No 'result' field in Guest Agent response for VM {}", vmid);
+                                    }
+                                }
+                                Err(e) => warn!("Failed to parse Guest Agent response for VM {}: {}", vmid, e),
+                            }
+                        }
+                        Err(e) => warn!("Failed to get network interfaces from QEMU Guest Agent for VM {}: {}", vmid, e),
                     }
                 } else {
-                    warn!("Failed to get network interfaces from QEMU Guest Agent for VM {}", vmid);
+                    info!("QEMU Guest Agent is enabled but not running for VM {}. Is it installed inside the VM?", vmid);
                 }
             } else {
                 info!("QEMU Guest Agent not enabled for VM {}. IP will be set to Unknown.", vmid);
@@ -833,7 +986,7 @@ async fn discover_and_register_proxmox_vms(
                         };
                         
                         let _ = db::update_status(&machine_id, machine_status).await;
-                        let _ = db::update_os_installed(&machine_id, vm_os).await;
+                        let _ = db::update_os_installed(&machine_id, &vm_os).await;
                     }
                     
                     registered_machines += 1;

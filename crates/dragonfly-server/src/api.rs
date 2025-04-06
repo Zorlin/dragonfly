@@ -2607,22 +2607,52 @@ pub struct OsInfo {
 
 // Get OS icon for a specific OS
 pub fn get_os_icon(os: &str) -> String {
-    match os {
-        "ubuntu-2204" | "ubuntu-2404" => "<i class=\"fab fa-ubuntu text-orange-500 dark:text-orange-500 no-invert\"></i>",
-        "debian-12" => "<i class=\"fab fa-debian text-red-500\"></i>",
+    let os_lower = os.to_lowercase();
+    match os_lower.as_str() {
+        os if os.contains("ubuntu") => "<i class=\"fab fa-ubuntu text-orange-500 dark:text-orange-500 no-invert\"></i>",
+        os if os.contains("debian") => "<i class=\"fab fa-debian text-red-500\"></i>",
         "proxmox" => "<i class=\"fas fa-server text-blue-500\"></i>",
         "talos" => "<i class=\"fas fa-robot text-purple-500\"></i>",
-        "windows" => "<i class=\"fab fa-windows text-blue-400\"></i>",
-        "rocky" | "rocky-9" => "<i class=\"fas fa-mountain text-green-500\"></i>",
-        "fedora" => "<i class=\"fab fa-fedora text-blue-600\"></i>",
-        "alma" | "almalinux" => "<i class=\"fas fa-hat-cowboy text-amber-600\"></i>",
+        os if os.contains("windows") => "<i class=\"fab fa-windows text-blue-400\"></i>",
+        os if os.contains("rocky") => "<i class=\"fas fa-mountain text-green-500\"></i>",
+        os if os.contains("fedora") => "<i class=\"fab fa-fedora text-blue-600\"></i>",
+        os if os.contains("alma") => "<i class=\"fas fa-hat-cowboy text-amber-600\"></i>",
         _ => "<i class=\"fas fa-square-question text-gray-500\"></i>", // Unknown OS
     }.to_string()
 }
 
 // Make format_os_name public
 pub fn format_os_name(os: &str) -> String {
-    match os {
+    let os_lower = os.to_lowercase();
+    
+    // Handle Ubuntu formats
+    if os_lower.contains("ubuntu") {
+        if os_lower.contains("22.04") || os_lower.contains("2204") {
+            return "Ubuntu 22.04".to_string();
+        } else if os_lower.contains("24.04") || os_lower.contains("2404") {
+            return "Ubuntu 24.04".to_string();
+        } else if let Some(version) = os_lower.split(&['(', ')', ' ', '-', '_'][..])
+                                              .find(|s| s.contains(".") && s.len() <= 6) {
+            return format!("Ubuntu {}", version);
+        } else {
+            return "Ubuntu".to_string();
+        }
+    }
+    
+    // Handle Debian formats
+    if os_lower.contains("debian") {
+        if os_lower.contains("12") || os_lower.contains("bookworm") {
+            return "Debian 12".to_string();
+        } else if let Some(version) = os_lower.split(&[' ', '(', ')', '-', '_'][..])
+                                              .find(|s| s.parse::<u32>().is_ok()) {
+            return format!("Debian {}", version);
+        } else {
+            return "Debian".to_string();
+        }
+    }
+    
+    // Handle specific formats
+    match os_lower.as_str() {
         "ubuntu-2204" => "Ubuntu 22.04",
         "ubuntu-2404" => "Ubuntu 24.04",
         "debian-12" => "Debian 12",
