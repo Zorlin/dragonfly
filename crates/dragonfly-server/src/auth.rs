@@ -1,13 +1,11 @@
-use async_session;
 use axum::{
     extract::{State, Query},
-    http::{Request as AxumRequest, StatusCode},
+    http::StatusCode,
     response::{IntoResponse, Redirect, Html},
     routing::{get, post},
     Router,
     Form,
 };
-use axum_extra::extract::SignedCookieJar;
 // use openidconnect::core::{CoreAuthenticationFlow, CoreClient, CoreProviderMetadata, CoreResponseType};
 // use openidconnect::{AuthenticationFlow, AuthorizationCode, CsrfToken, Nonce, PkceCodeChallenge, PkceCodeVerifier, Scope, TokenResponse, reqwest::async_http_client};
 // use openidconnect::url::Url;
@@ -24,7 +22,6 @@ use thiserror::Error;
 use minijinja::{Error as MiniJinjaError, ErrorKind as MiniJinjaErrorKind};
 use crate::ui::AlertMessage;
 use axum::response::Response;
-use cookie;
 // use oauth2::basic::BasicClient; // Assuming BasicClient is also related to openidconnect for now
 // use oauth2;
 use urlencoding;

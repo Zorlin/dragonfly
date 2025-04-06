@@ -6,8 +6,7 @@ use axum::{
         ConnectInfo,
     },
     http::{StatusCode, header::HeaderValue, HeaderMap},
-    response::{IntoResponse, Html, Response, sse::{Event, Sse, KeepAlive}, Redirect},
-    Extension,
+    response::{IntoResponse, Html, Response, sse::{Event, Sse, KeepAlive}},
 };
 use std::convert::Infallible;
 use serde_json::json;
@@ -20,7 +19,6 @@ use std::collections::HashMap;
 use tracing::{info, error, warn, debug};
 use std::env;
 use std::time::Duration;
-use serde::Deserialize;
 use tokio_stream::Stream;
 use futures::stream;
 use crate::{
@@ -48,7 +46,6 @@ use dragonfly_common::Error;
 use tokio::io::{AsyncSeekExt, AsyncReadExt, AsyncWriteExt};
 use futures::StreamExt; // For .next() on stream
 use crate::ui; // Import the ui module
-use axum::http::Request;
 use std::net::SocketAddr;
 use axum::middleware::Next; // Add this import back
 use chrono::Utc;

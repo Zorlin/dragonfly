@@ -15,7 +15,7 @@ use anyhow::{Context, anyhow};
 use listenfd::ListenFd;
 use axum::extract::MatchedPath;
 
-use crate::auth::{AdminBackend, auth_router, load_credentials, generate_default_credentials, load_settings, Settings, Credentials};
+use crate::auth::{AdminBackend, auth_router, Settings};
 use crate::db::init_db;
 use crate::event_manager::EventManager;
 

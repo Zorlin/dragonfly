@@ -14,7 +14,6 @@ use serde::{Serialize, Deserialize};
 use tracing::{error, info, warn};
 use std::net::Ipv4Addr;
 use hyper::body::to_bytes;
-use hyper::body::HttpBody as HyperHttpBody;
 
 use crate::AppState;
 use crate::db::ErrorResponse;

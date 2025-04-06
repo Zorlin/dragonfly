@@ -15,30 +15,7 @@ use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::Row;
 use serde_yaml;
 use std::path::Path as StdPath;
-use crate::{
-    db,
-    auth::{Settings, AuthSession},
-    AppState,
-    InstallationState
-};
-use dragonfly_common::models::{Machine, MachineStatus, DiskInfo};
-use std::env;
-use tokio::time::{sleep, Duration};
-use uuid::Uuid;
-use async_trait::async_trait;
-use axum::{
-    extract::{FromRef, FromRequestParts, State},
-    http::{request::Parts, HeaderMap, StatusCode},
-    response::{IntoResponse, Response, Html as AxumHtml},
-    routing::get,
-    Router,
-};
-use thiserror::Error;
-use tower_http::trace::TraceLayer;
-use minijinja::AutoEscape::Html as MinijinjaHtml;
-use crate::event_manager::EventManager;
 use crate::status::{check_kubernetes_connectivity, get_webui_address};
-use crate::TemplateEnv;
 
 // The different deployment modes
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
