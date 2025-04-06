@@ -65,6 +65,7 @@
     --color-sky-400: oklch(0.746 0.16 232.661);
     --color-sky-500: oklch(0.685 0.169 237.323);
     --color-sky-800: oklch(0.443 0.11 240.79);
+    --color-blue-50: oklch(0.97 0.014 254.604);
     --color-blue-100: oklch(0.932 0.032 255.585);
     --color-blue-200: oklch(0.882 0.059 254.128);
     --color-blue-300: oklch(0.809 0.105 251.813);
@@ -379,6 +380,9 @@
   }
   .z-\[9999\] {
     z-index: 9999;
+  }
+  .col-span-2 {
+    grid-column: span 2 / span 2;
   }
   .container {
     width: 100%;
@@ -735,6 +739,9 @@
   .grid-cols-1 {
     grid-template-columns: repeat(1, minmax(0, 1fr));
   }
+  .grid-cols-2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
   .grid-cols-3 {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
@@ -924,6 +931,10 @@
   .border-3 {
     border-style: var(--tw-border-style);
     border-width: 3px;
+  }
+  .border-6 {
+    border-style: var(--tw-border-style);
+    border-width: 6px;
   }
   .border-t {
     border-top-style: var(--tw-border-style);
@@ -1954,6 +1965,13 @@
       }
     }
   }
+  .hover\:bg-blue-50 {
+    &:hover {
+      @media (hover: hover) {
+        background-color: var(--color-blue-50);
+      }
+    }
+  }
   .hover\:bg-blue-200 {
     &:hover {
       @media (hover: hover) {
@@ -2645,6 +2663,11 @@
       border-color: color-mix(in oklab, #D96400 30%, transparent);
     }
   }
+  .dark\:border-blue-100 {
+    &:where(.dark, .dark *) {
+      border-color: var(--color-blue-100);
+    }
+  }
   .dark\:border-blue-500\/20 {
     &:where(.dark, .dark *) {
       border-color: color-mix(in oklab, var(--color-blue-500) 20%, transparent);
@@ -2999,6 +3022,11 @@
       --tw-gradient-stops: var(--tw-gradient-via-stops, var(--tw-gradient-position), var(--tw-gradient-from) var(--tw-gradient-from-position), var(--tw-gradient-to) var(--tw-gradient-to-position));
     }
   }
+  .dark\:text-blue-100 {
+    &:where(.dark, .dark *) {
+      color: var(--color-blue-100);
+    }
+  }
   .dark\:text-blue-200 {
     &:where(.dark, .dark *) {
       color: var(--color-blue-200);
@@ -3240,6 +3268,15 @@
       &:hover {
         @media (hover: hover) {
           background-color: var(--color-blue-800);
+        }
+      }
+    }
+  }
+  .dark\:hover\:bg-blue-900\/20 {
+    &:where(.dark, .dark *) {
+      &:hover {
+        @media (hover: hover) {
+          background-color: color-mix(in oklab, var(--color-blue-900) 20%, transparent);
         }
       }
     }

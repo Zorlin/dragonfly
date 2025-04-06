@@ -1670,21 +1670,242 @@ fn map_row_to_machine_with_hardware(row: sqlx::sqlite::SqliteRow) -> Result<Mach
 
 // ---- START TAGS FUNCTIONS ----
 
-// STUB: Get machine tags
-pub async fn get_machine_tags(id: &Uuid) -> Result<Vec<String>> {
-    info!("STUB: Called get_machine_tags for machine {}", id);
-    // TODO: Implement database logic to fetch tags for the given machine ID.
-    // This will likely require schema changes (e.g., a separate machine_tags table or a tags column in machines).
-    Ok(vec!["stub_tag".to_string()]) // Return dummy data for now
+// Get all existing tags in the system
+pub async fn get_all_tags() -> Result<Vec<String>> {
+    let pool = DB_POOL.get().ok_or_else(|| anyhow!("Database not initialized"))?;
+    
+    // First, we need to create the tags table if it doesn't exist
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS tags (
+            name TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL
+        )"
+    )
+    .execute(pool)
+    .await?;
+    
+    // Then, we need to create the machine_tags table if it doesn't exist
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS machine_tags (
+            machine_id TEXT NOT NULL,
+            tag_name TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (machine_id, tag_name)
+        )"
+    )
+    .execute(pool)
+    .await?;
+    
+    // Query all distinct tags from both standalone tags and machine tags
+    let rows = sqlx::query(
+        "SELECT DISTINCT name FROM tags 
+         UNION 
+         SELECT DISTINCT tag_name FROM machine_tags
+         ORDER BY name ASC"
+    )
+    .fetch_all(pool)
+    .await?;
+    
+    // Convert rows to strings
+    let tags = rows.iter()
+        .map(|row| row.get::<String, _>("name"))
+        .collect();
+    
+    Ok(tags)
 }
 
-// STUB: Update machine tags
+// Create a new standalone tag
+pub async fn create_tag(tag_name: &str) -> Result<bool> {
+    let pool = DB_POOL.get().ok_or_else(|| anyhow!("Database not initialized"))?;
+    
+    // First check if the tag already exists
+    let existing_tag = sqlx::query("SELECT name FROM tags WHERE name = ?")
+        .bind(tag_name)
+        .fetch_optional(pool)
+        .await?;
+    
+    if existing_tag.is_some() {
+        // Tag already exists
+        return Ok(false);
+    }
+    
+    // Insert the new tag
+    let now = Utc::now().to_rfc3339();
+    sqlx::query("INSERT INTO tags (name, created_at) VALUES (?, ?)")
+        .bind(tag_name)
+        .bind(now)
+        .execute(pool)
+        .await?;
+    
+    Ok(true)
+}
+
+// Delete a standalone tag
+pub async fn delete_tag(tag_name: &str) -> Result<bool> {
+    let pool = DB_POOL.get().ok_or_else(|| anyhow!("Database not initialized"))?;
+    
+    // First check if the tag exists
+    let existing_tag = sqlx::query("SELECT name FROM tags WHERE name = ?")
+        .bind(tag_name)
+        .fetch_optional(pool)
+        .await?;
+    
+    if existing_tag.is_none() {
+        // Tag doesn't exist as a standalone tag
+        // Check if it exists in machine_tags
+        let machine_tag_count = sqlx::query("SELECT COUNT(*) as count FROM machine_tags WHERE tag_name = ?")
+            .bind(tag_name)
+            .fetch_one(pool)
+            .await?;
+        
+        let count: i64 = machine_tag_count.get("count");
+        
+        if count == 0 {
+            // Tag doesn't exist anywhere
+            return Ok(false);
+        }
+    }
+    
+    // Delete the tag from the standalone tags table
+    sqlx::query("DELETE FROM tags WHERE name = ?")
+        .bind(tag_name)
+        .execute(pool)
+        .await?;
+    
+    // Delete the tag from all machines
+    sqlx::query("DELETE FROM machine_tags WHERE tag_name = ?")
+        .bind(tag_name)
+        .execute(pool)
+        .await?;
+    
+    Ok(true)
+}
+
+// Get tags for a specific machine
+pub async fn get_machine_tags(id: &Uuid) -> Result<Vec<String>> {
+    let pool = DB_POOL.get().ok_or_else(|| anyhow!("Database not initialized"))?;
+    
+    // Ensure the machine_tags table exists
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS machine_tags (
+            machine_id TEXT NOT NULL,
+            tag_name TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (machine_id, tag_name)
+        )"
+    )
+    .execute(pool)
+    .await?;
+    
+    // Query all tags for this machine
+    let rows = sqlx::query("SELECT tag_name FROM machine_tags WHERE machine_id = ? ORDER BY tag_name ASC")
+        .bind(id.to_string())
+        .fetch_all(pool)
+        .await?;
+    
+    // Convert rows to strings
+    let tags = rows.iter()
+        .map(|row| row.get::<String, _>("tag_name"))
+        .collect();
+    
+    Ok(tags)
+}
+
+// Update tags for a specific machine
 pub async fn update_machine_tags(id: &Uuid, tags: &[String]) -> Result<bool> {
-    info!("STUB: Called update_machine_tags for machine {} with tags: {:?}", id, tags);
-    // TODO: Implement database logic to update tags for the given machine ID.
-    // This will likely involve deleting existing tags and inserting the new ones.
-    // Requires schema changes.
-    Ok(true) // Assume success for now
+    let pool = DB_POOL.get().ok_or_else(|| anyhow!("Database not initialized"))?;
+    
+    // First check if the machine exists
+    let machine = sqlx::query("SELECT id FROM machines WHERE id = ?")
+        .bind(id.to_string())
+        .fetch_optional(pool)
+        .await?;
+    
+    if machine.is_none() {
+        return Ok(false);
+    }
+    
+    // Start a transaction
+    let mut tx = pool.begin().await?;
+    
+    // Delete all existing tags for this machine
+    sqlx::query("DELETE FROM machine_tags WHERE machine_id = ?")
+        .bind(id.to_string())
+        .execute(&mut *tx)
+        .await?;
+    
+    // Insert new tags
+    let now = Utc::now().to_rfc3339();
+    for tag in tags {
+        // If tag doesn't exist in the tags table, add it
+        let tag_exists = sqlx::query("SELECT name FROM tags WHERE name = ?")
+            .bind(tag)
+            .fetch_optional(&mut *tx)
+            .await?;
+        
+        if tag_exists.is_none() {
+            // Create new tag in the tags table
+            sqlx::query("INSERT INTO tags (name, created_at) VALUES (?, ?)")
+                .bind(tag)
+                .bind(&now)
+                .execute(&mut *tx)
+                .await?;
+        }
+        
+        // Add the tag to the machine
+        sqlx::query("INSERT INTO machine_tags (machine_id, tag_name, created_at) VALUES (?, ?, ?)")
+            .bind(id.to_string())
+            .bind(tag)
+            .bind(&now)
+            .execute(&mut *tx)
+            .await?;
+    }
+    
+    // Commit the transaction
+    tx.commit().await?;
+    
+    Ok(true)
+}
+
+// Get all machines with a specific tag
+pub async fn get_machines_by_tag(tag_name: &str) -> Result<Vec<Machine>> {
+    let pool = DB_POOL.get().ok_or_else(|| anyhow!("Database not initialized"))?;
+    
+    // Ensure the machine_tags table exists
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS machine_tags (
+            machine_id TEXT NOT NULL,
+            tag_name TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (machine_id, tag_name)
+        )"
+    )
+    .execute(pool)
+    .await?;
+    
+    // Get all machine IDs with this tag
+    let rows = sqlx::query(
+        "SELECT m.* FROM machines m 
+         INNER JOIN machine_tags mt ON m.id = mt.machine_id 
+         WHERE mt.tag_name = ?
+         ORDER BY m.hostname, m.memorable_name, m.mac_address"
+    )
+    .bind(tag_name)
+    .fetch_all(pool)
+    .await?;
+    
+    // Map rows to Machine objects
+    let mut machines = Vec::with_capacity(rows.len());
+    for row in rows {
+        match map_row_to_machine_with_hardware(row) {
+            Ok(machine) => machines.push(machine),
+            Err(e) => {
+                error!("Failed to map row to machine: {}", e);
+            }
+        }
+    }
+    
+    Ok(machines)
 }
 
 // ---- END TAGS FUNCTIONS ----

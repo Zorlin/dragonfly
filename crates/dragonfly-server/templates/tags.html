@@ -83,13 +83,31 @@
     transition: all 0.3s ease-in-out;
   }
 
+  /* Tag card styling */
   .tag-card {
     border: 1px solid rgba(139, 92, 246, 0.2);
-    padding: 0.5rem;
+    padding: 0.5rem 0.75rem;
     height: 2.5rem;
     display: flex;
     align-items: center;
     justify-content: space-between;
+    min-width: 7rem;
+    max-width: fit-content;
+    transition: all 0.2s ease;
+    gap: 0.5rem;
+  }
+  
+  .tag-card .tag-content {
+    display: flex;
+    align-items: center;
+    overflow: hidden;
+    margin-right: 0.5rem;
+  }
+  
+  .tag-card .tag-actions {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
   }
   
   .tag-card.drag-over {
@@ -100,14 +118,17 @@
 
   /* New Tag Card specific style */
   .new-tag-card {
+    border: 2px solid #4c00ff;
     border-style: dashed;
     cursor: pointer;
     justify-content: center;
   }
   
   .new-tag-card.drag-over {
-    border-color: rgba(52, 211, 153, 0.7);
-    background-color: rgba(52, 211, 153, 0.1);
+    border-color: rgba(20, 184, 166, 0.7);
+    background-color: hsl(199, 100%, 50%);
+    transform: scale(1.03);
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
   }
 
   .ghost-card {
@@ -356,9 +377,11 @@
   
   /* Tag grid */
   .tag-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-    gap: 0.25rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    padding: 0.25rem;
+    margin-bottom: 0.5rem;
   }
 
   /* Assignment Toast - Modified to include undo button */
@@ -385,6 +408,23 @@
   
   .assignment-toast button:hover {
     background-color: rgba(255, 255, 255, 0.3);
+  }
+
+  /* Selected tag styles - when nodes with this tag are selected */
+  .tag-card.has-selected-nodes {
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.5);
+    border-color: rgba(0, 4, 255, 0.8);
+    background-color: rgba(0, 4, 255, 0.8);
+  }
+  
+  .tag-card.has-selected-nodes .bg-blue-600 {
+    background-color: rgba(30, 64, 255, 1);
+  }
+  
+  .dark .tag-card.has-selected-nodes {
+    box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.5);
+    border-color: hsl(200, 100%, 50%);
+    background-color: hsl(200, 100%, 50%);
   }
 </style>
 {% endblock %}
@@ -433,13 +473,52 @@
         
         <!-- Tag Grid -->
         <div class="tag-grid" data-gamepad-column="tags" x-bind:data-refresh="refreshTrigger">
+          <!-- Regular Tag Cards -->
+          <template x-for="(nodes, tag) in tagBuckets" :key="tag">
+            <div
+              :id="'tag-card-' + tag"
+              :data-tag-name="tag"
+              data-gamepad-focusable="true"
+              data-gamepad-droptarget="true"
+              class="tag-card bg-blue-500 text-white dark:bg-blue-600 rounded-md shadow-sm"
+              @dragover.prevent="dragOver($event, tag)"
+              @dragleave.prevent="dragLeave($event)"
+              @drop.prevent="drop($event, tag)"
+              @click="selectAllNodesWithTag($event, tag)"
+              :class="{
+                'drag-over': currentDragOverTag === tag,
+                'cursor-pointer': true,
+                'has-selected-nodes': hasSelectedNodes(tag)
+              }"
+            >
+              <div class="flex items-center">
+                <!-- Show emoji only if all nodes have the same emoji -->
+                <span 
+                  class="mr-1.5" 
+                  x-show="getTagEmoji(tag) !== null"
+                  x-text="getTagEmoji(tag)"
+                ></span>
+                <span class="font-medium truncate" x-text="tag"></span>
+              </div>
+              <div class="flex items-center">
+                <span class="font-bold mr-1.5" x-text="nodes.length"></span>
+                <button @click.stop.prevent="deleteTag(tag)" type="button" data-tag-action="delete"
+                  class="text-white opacity-50 hover:opacity-100 focus:opacity-100 p-0.5 rounded">
+                  <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </template>
+          
           <!-- "New" Tag Card -->
           <div
             id="new-tag-card"
             data-tag-name="__NEW__"
             data-gamepad-focusable="true"
-            data-gamepad-droptarget="true"
-            class="tag-card new-tag-card bg-blue-500 text-white dark:bg-blue-600 rounded-md"
+            data-gamepad-droptarget="true" 
+            class="tag-card new-tag-card bg-transparent border-6 border-blue-500 dark:border-blue-100 text-blue-700 dark:text-blue-100 rounded-md shadow-md hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors"
             @click="isCreatingTag = true; $nextTick(() => $refs.newTagInput.focus())"
             @dragover.prevent="dragOver($event, '__NEW__')"
             @dragleave.prevent="dragLeave($event)"
@@ -447,7 +526,12 @@
             :class="{'drag-over': currentDragOverTag === '__NEW__'}"
             x-show="!isCreatingTag"
           >
-            <span class="font-medium">new tag</span>
+            <div class="flex items-center">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h-3v3a1 1 0 11-2 0v-3H6a1 1 0 110-2h3V6a1 1 0 011-1z" clip-rule="evenodd" />
+              </svg>
+              <span class="font-semibold">new tag</span>
+            </div>
           </div>
           
           <!-- New Tag Input (appears when new tag card is clicked) -->
@@ -478,44 +562,6 @@
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
             </svg>
           </button>
-          
-          <!-- Regular Tag Cards -->
-          <template x-for="(nodes, tag) in tagBuckets" :key="tag">
-            <div
-              :id="'tag-card-' + tag"
-              :data-tag-name="tag"
-              data-gamepad-focusable="true"
-              data-gamepad-droptarget="true"
-              class="tag-card bg-blue-500 text-white dark:bg-blue-600 rounded-md shadow-sm"
-              @dragover.prevent="dragOver($event, tag)"
-              @dragleave.prevent="dragLeave($event)"
-              @drop.prevent="drop($event, tag)"
-              @click="selectedNodeIds.length > 0 && assignSelectedNodesToTag(tag)"
-              :class="{
-                'drag-over': currentDragOverTag === tag,
-                'cursor-pointer': selectedNodeIds.length > 0
-              }"
-            >
-              <div class="flex items-center">
-                <!-- Show emoji only if all nodes have the same emoji -->
-                <span 
-                  class="mr-1.5" 
-                  x-show="getTagEmoji(tag) !== null"
-                  x-text="getTagEmoji(tag)"
-                ></span>
-                <span class="font-medium truncate" x-text="tag"></span>
-              </div>
-              <div class="flex items-center">
-                <span class="font-bold mr-1.5" x-text="nodes.length"></span>
-                <button @click.stop.prevent="deleteTag(tag)" type="button" data-tag-action="delete"
-                  class="text-white opacity-50 hover:opacity-100 focus:opacity-100 p-0.5 rounded">
-                  <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-          </template>
         </div>
       </div>
 
@@ -536,7 +582,7 @@
               data-gamepad-action="sort"
               title="Change sort order"
             >
-              <span x-text="'Sort: ' + getSortLabel()"></span>
+              <span x-text="getSortLabel()"></span>
             </button>
             
             <!-- Search Input -->
@@ -628,7 +674,7 @@
                   <!-- Emoji Selector -->
                   <div 
                     class="emoji-selector"
-                    @click.stop="toggleEmojiDropdown(node.id)"
+                    @click.stop="toggleEmojiDropdown($event, node.id)"
                   >
                     <span x-text="getNodeEmoji(node.id)"></span>
                   </div>
@@ -726,6 +772,7 @@
       selectedNodeId: null, // For gamepad selection
       selectedNodeIds: [], // For multi-select with CMD/CTRL+click
       currentNodeId: null, // Currently focused node for showing tags
+      lastClickedNodeId: null, // Store last clicked node ID for shift+click range selection
       newTagName: '', // For the input field
       isCreatingTag: false, // Whether the inline tag input is visible
       inlineTagName: '', // For the inline tag input
@@ -889,9 +936,10 @@
       async loadData() {
         this.isLoading = true;
         try {
-          const response = await fetch('/api/machines');
-          if (!response.ok) throw new Error(`Failed to load machines: ${response.statusText}`);
-          const machines = await response.json();
+          // First, load all machines to have them available for display
+          const machinesResponse = await fetch('/api/machines');
+          if (!machinesResponse.ok) throw new Error(`Failed to load machines: ${machinesResponse.statusText}`);
+          const machines = await machinesResponse.json();
 
           // Ensure all nodes have basic properties and tags array
           this.availableNodes = machines.map(machine => ({
@@ -901,12 +949,12 @@
             status: machine.status || 'Unknown',
             tags: machine.tags || []
           }));
-
-          // Initialize tag buckets from machines
-          this.rebuildTagBuckets();
           
-          // Load tags from localStorage (includes "empty" tags with no machines)
-          this.loadLocalTags();
+          // Next, load all available tags
+          await this.loadTagsFromAPI();
+          
+          // For each tag, fetch the machines with that tag directly from the backend
+          await this.loadMachinesForTags();
           
           // Load emoji preferences from localStorage
           this.loadEmojiPreferences();
@@ -930,45 +978,116 @@
         }
       },
       
+      // Load all tags from the API
+      async loadTagsFromAPI() {
+        try {
+          const response = await fetch('/api/tags');
+          if (!response.ok) {
+            throw new Error(`Failed to load tags: ${response.statusText}`);
+          }
+          const tags = await response.json();
+          
+          // Initialize tagBuckets with empty arrays
+          const updatedBuckets = {};
+          tags.forEach(tag => {
+            updatedBuckets[tag] = [];
+          });
+          
+          // Set the tagBuckets with empty arrays initially
+          this.tagBuckets = updatedBuckets;
+          
+          // Force UI update
+          this.forceRefresh();
+          return tags;
+        } catch (error) {
+          console.error('Error loading tags from API:', error);
+          
+          // Fallback to localStorage if API fails
+          this.loadLocalTags();
+          return [];
+        }
+      },
+      
+      // Load machines for each tag directly from the backend
+      async loadMachinesForTags() {
+        try {
+          const tagNames = Object.keys(this.tagBuckets);
+          
+          // For each tag, fetch the machines with that tag
+          const tagPromises = tagNames.map(async (tag) => {
+            try {
+              const response = await fetch(`/api/tags/${encodeURIComponent(tag)}/machines`);
+              if (!response.ok) {
+                throw new Error(`Failed to load machines for tag ${tag}: ${response.statusText}`);
+              }
+              const machines = await response.json();
+              
+              // Update tagBuckets with the machine IDs for this tag
+              this.tagBuckets[tag] = machines.map(machine => machine.id);
+            } catch (error) {
+              console.error(`Error loading machines for tag ${tag}:`, error);
+              // Keep the tag bucket as an empty array if there's an error
+            }
+          });
+          
+          // Wait for all tag machine fetches to complete
+          await Promise.all(tagPromises);
+          
+          // Force UI update after all machines have been loaded for all tags
+          this.forceRefresh();
+        } catch (error) {
+          console.error('Error loading machines for tags:', error);
+        }
+      },
+      
+      // Create a tag in the API
+      async createTagInAPI(tag) {
+        try {
+          const response = await fetch('/api/tags', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ name: tag })
+          });
+          
+          if (!response.ok) {
+            throw new Error(`Failed to create tag: ${response.statusText}`);
+          }
+          
+          return true;
+        } catch (error) {
+          console.error('Error creating tag in API:', error);
+          return false;
+        }
+      },
+      
+      // Delete a tag from the API
+      async deleteTagFromAPI(tag) {
+        try {
+          const response = await fetch(`/api/tags/${encodeURIComponent(tag)}`, {
+            method: 'DELETE'
+          });
+          
+          if (!response.ok) {
+            throw new Error(`Failed to delete tag: ${response.statusText}`);
+          }
+          
+          return true;
+        } catch (error) {
+          console.error('Error deleting tag from API:', error);
+          return false;
+        }
+      },
+      
       // Load tags from localStorage
       loadLocalTags() {
-        try {
-          const savedTags = localStorage.getItem('dragonfly_empty_tags');
-          if (savedTags) {
-            const emptyTags = JSON.parse(savedTags);
-            
-            // Add each empty tag, preserving existing tagBuckets
-            const updatedBuckets = {...this.tagBuckets};
-            emptyTags.forEach(tag => {
-              if (!updatedBuckets[tag]) {
-                updatedBuckets[tag] = [];
-              }
-            });
-            
-            // Sort the tags alphabetically
-            const sortedEntries = Object.entries(updatedBuckets).sort(([a], [b]) => a.localeCompare(b));
-            this.tagBuckets = Object.fromEntries(sortedEntries);
-            
-            // Force UI update
-            this.forceRefresh();
-          }
-        } catch (e) {
-          console.error('Error loading tags from localStorage:', e);
-        }
+        console.log('loadLocalTags is deprecated, now using API for tag storage');
       },
       
       // Save empty tags to localStorage
       saveLocalTags() {
-        try {
-          // Get tags that have no machines
-          const emptyTags = Object.entries(this.tagBuckets)
-            .filter(([_, nodes]) => nodes.length === 0)
-            .map(([tag, _]) => tag);
-          
-          localStorage.setItem('dragonfly_empty_tags', JSON.stringify(emptyTags));
-        } catch (e) {
-          console.error('Error saving tags to localStorage:', e);
-        }
+        console.log('saveLocalTags is deprecated, now using API for tag storage');
       },
 
       // Rebuild tagBuckets from availableNodes.tags
@@ -1418,18 +1537,14 @@
           return;
         }
 
-        // Create the tag in a way that triggers Alpine reactivity
+        // Create the tag in the API
+        await this.createTagInAPI(tag);
+        
+        // Create an empty bucket for the new tag
         this.tagBuckets = {
           ...this.tagBuckets,
           [tag]: [] 
         };
-        
-        // Re-sort tags (preserving reactivity)
-        const sortedEntries = Object.entries(this.tagBuckets).sort(([a], [b]) => a.localeCompare(b));
-        this.tagBuckets = Object.fromEntries(sortedEntries);
-        
-        // Save to localStorage immediately
-        this.saveLocalTags();
         
         // Force UI update
         this.forceRefresh();
@@ -1441,6 +1556,15 @@
           try {
             const promises = nodeIdsToAssign.map(nodeId => this.assignNodeToTag(nodeId, tag));
             await Promise.all(promises);
+            
+            // After assigning, fetch the updated list of machines with this tag
+            const response = await fetch(`/api/tags/${encodeURIComponent(tag)}/machines`);
+            if (response.ok) {
+              const machines = await response.json();
+              this.tagBuckets[tag] = machines.map(machine => machine.id);
+              this.forceRefresh();
+            }
+            
             this.showToast(`Assigned ${nodeIdsToAssign.length} node${nodeIdsToAssign.length > 1 ? 's' : ''} to tag '${tag}'`);
           } catch (error) {
             console.error('Error assigning nodes to new tag:', error);
@@ -1458,24 +1582,23 @@
         const nodeIds = [...(this.tagBuckets[tag] || [])]; // Copy IDs before modifying
 
         try {
-          // Remove tag from all nodes via API
-          const removalPromises = nodeIds.map(nodeId => this.removeTagFromNodeAPI(nodeId, tag));
-          await Promise.all(removalPromises);
+          // Delete the tag from the API
+          await this.deleteTagFromAPI(tag);
 
           // Update UI optimistically: remove bucket and update nodes
           delete this.tagBuckets[tag];
+          
+          // Update the tags array for each affected node
           this.availableNodes.forEach(node => {
              if (node.tags && node.tags.includes(tag)) {
                  node.tags = node.tags.filter(t => t !== tag);
              }
           });
-           // Re-filter nodes in case the removed tag was part of the filter
-           this.filterNodes(this.currentFilter);
-           this.rebuildTagBuckets(); // Keep tags list consistent
-           // Save updated empty tags
-           this.saveLocalTags();
+          
+          // Re-filter nodes in case the removed tag was part of the filter
+          this.filterNodes(this.currentFilter);
 
-           this.showToast(`Tag '${tag}' deleted`);
+          this.showToast(`Tag '${tag}' deleted`);
 
         } catch (error) {
             console.error('Error deleting tag:', error);
@@ -1608,6 +1731,38 @@
         // Don't interfere with drag operations
         if (this.isDragging) return;
         
+        // Check if shift key is pressed for range selection
+        if (event.shiftKey && this.lastClickedNodeId && this.selectedNodeIds.length > 0) {
+          // Get all nodes between last clicked and current
+          const nodesInRange = this.getNodesInRange(this.lastClickedNodeId, nodeId);
+          
+          // Check if clicked node is already in selection
+          const isNodeInSelection = this.selectedNodeIds.includes(nodeId);
+          
+          if (event.metaKey || event.ctrlKey || (event.shiftKey && isNodeInSelection)) {
+            // Add to existing selection with CMD/CTRL+Shift (or just Shift if clicking within selection)
+            const newSelection = [...new Set([...this.selectedNodeIds, ...nodesInRange])];
+            this.selectedNodeIds = newSelection;
+          } else {
+            // Replace selection with range
+            this.selectedNodeIds = nodesInRange;
+          }
+          
+          // Update current node to the newly clicked one
+          this.currentNodeId = nodeId;
+          this.selectedNodeId = nodeId; // For gamepad compatibility
+          
+          // Store the new clicked node for future range selections
+          this.lastClickedNodeId = nodeId;
+          
+          // Prevent event from bubbling
+          event.stopPropagation();
+          
+          // Force UI refresh
+          this.forceRefresh();
+          return;
+        }
+        
         // Check if CMD (Mac) or CTRL (Windows/Linux) is pressed
         const isMultiSelectKey = event.metaKey || event.ctrlKey;
         
@@ -1647,6 +1802,9 @@
           }
         }
         
+        // Always update last clicked node ID for shift selection
+        this.lastClickedNodeId = nodeId;
+        
         // For gamepad compatibility
         this.selectedNodeId = this.currentNodeId;
         
@@ -1655,6 +1813,86 @@
         
         // Force UI refresh
         this.forceRefresh();
+      },
+      
+      // Get all nodes within a rectangular range between two nodes
+      getNodesInRange(startNodeId, endNodeId) {
+        // Get DOM elements for start and end nodes
+        const startNodeEl = document.getElementById(`node-${startNodeId}`);
+        const endNodeEl = document.getElementById(`node-${endNodeId}`);
+        
+        if (!startNodeEl || !endNodeEl) {
+          console.error('Cannot find start or end node elements');
+          return [startNodeId, endNodeId];
+        }
+        
+        // Get the grid container
+        const container = document.getElementById('nodes-container');
+        const grid = document.getElementById('nodes-grid');
+        
+        if (!grid) {
+          console.error('Cannot find grid element');
+          return [startNodeId, endNodeId];
+        }
+        
+        // Get all node elements
+        const nodeEls = Array.from(grid.querySelectorAll('.node-card'));
+        
+        // Get container's bounds
+        const containerRect = container.getBoundingClientRect();
+        
+        // Get bounds for start and end nodes (relative to container)
+        const startRect = startNodeEl.getBoundingClientRect();
+        const endRect = endNodeEl.getBoundingClientRect();
+        
+        // Calculate the selection rectangle (min/max values)
+        const selectionRect = {
+          left: Math.min(startRect.left, endRect.left) - containerRect.left,
+          right: Math.max(startRect.right, endRect.right) - containerRect.left,
+          top: Math.min(startRect.top, endRect.top) - containerRect.top,
+          bottom: Math.max(startRect.bottom, endRect.bottom) - containerRect.top
+        };
+        
+        // Include a small buffer to ensure edge nodes are captured
+        const buffer = 2; // 2px buffer to make selection more inclusive
+        selectionRect.left -= buffer;
+        selectionRect.top -= buffer;
+        selectionRect.right += buffer;
+        selectionRect.bottom += buffer;
+        
+        // Make sure startNodeId and endNodeId are always included in the results
+        const nodesInRange = [startNodeId, endNodeId];
+        
+        // Find all node IDs whose elements are within the selection rectangle
+        nodeEls.forEach(nodeEl => {
+          const nodeId = nodeEl.dataset.nodeId;
+          if (!nodeId || nodeId === startNodeId || nodeId === endNodeId) return;
+          
+          const nodeRect = nodeEl.getBoundingClientRect();
+          
+          // Calculate node position relative to container
+          const nodeCenter = {
+            x: (nodeRect.left + nodeRect.right) / 2 - containerRect.left,
+            y: (nodeRect.top + nodeRect.bottom) / 2 - containerRect.top
+          };
+          
+          // Check if node's center is within selection rectangle
+          if (
+            nodeCenter.x >= selectionRect.left &&
+            nodeCenter.x <= selectionRect.right &&
+            nodeCenter.y >= selectionRect.top &&
+            nodeCenter.y <= selectionRect.bottom
+          ) {
+            nodesInRange.push(nodeId);
+          }
+        });
+        
+        // Always ensure both end points are included
+        if (!nodesInRange.includes(startNodeId)) nodesInRange.push(startNodeId);
+        if (!nodesInRange.includes(endNodeId)) nodesInRange.push(endNodeId);
+        
+        console.log(`Range selection found ${nodesInRange.length} nodes`);
+        return nodesInRange;
       },
       
       // Check if a node is selected
@@ -1698,8 +1936,10 @@
                   
                   // Call API to persist change
                   await this.removeTagFromNodeAPI(nodeId, tag);
-                  // Update localStorage since this tag might now be empty
-                  this.saveLocalTags();
+                  
+                  // Refresh the tag bucket by fetching the machines with this tag
+                  await this.refreshTagBucket(tag);
+                  
                   // Force UI update
                   this.forceRefresh();
                   
@@ -1740,8 +1980,10 @@
           // Call API to persist change
           try {
               await this.addTagToNodeAPI(nodeId, tag);
-              // Update localStorage since this tag now has nodes
-              this.saveLocalTags();
+              
+              // Refresh the tag bucket by fetching the machines with this tag
+              await this.refreshTagBucket(tag);
+              
               // Force UI refresh
               this.forceRefresh();
           } catch (error) {
@@ -1754,6 +1996,21 @@
                    this.filteredNodes[filteredIndex] = { ...node };
                }
           }
+      },
+      
+      // Refresh a tag bucket by fetching the machines with this tag
+      async refreshTagBucket(tag) {
+        try {
+          const response = await fetch(`/api/tags/${encodeURIComponent(tag)}/machines`);
+          if (!response.ok) {
+            throw new Error(`Failed to refresh tag bucket for ${tag}: ${response.statusText}`);
+          }
+          const machines = await response.json();
+          this.tagBuckets[tag] = machines.map(machine => machine.id);
+        } catch (error) {
+          console.error(`Error refreshing tag bucket for ${tag}:`, error);
+          // Leave the tag bucket as is if there's an error
+        }
       },
       
       // Assign all selected nodes to a tag
@@ -1845,7 +2102,14 @@
       },
 
       // --- Emoji Selector Functions ---
-      toggleEmojiDropdown(nodeId) {
+      toggleEmojiDropdown(event, nodeId) {
+        // Don't allow emoji selection while holding modifier keys
+        if (event.ctrlKey || event.metaKey || event.shiftKey) {
+          // If modifier key is pressed, ignore the emoji click and 
+          // let the selection logic handle it instead
+          return;
+        }
+        
         if (this.currentEmojiNode === nodeId && this.showEmojiDropdown) {
           this.showEmojiDropdown = false;
         } else {
@@ -2065,6 +2329,65 @@
           this.selectedNodeId = null;
           this.forceRefresh();
         }
+      },
+
+      // Select all nodes that have the given tag
+      selectAllNodesWithTag(event, tag) {
+        // Get all node IDs for this tag from the tagBuckets object
+        const nodeIds = this.tagBuckets[tag] || [];
+        
+        // If shift key is pressed, add to selection instead of replacing
+        if (event.shiftKey) {
+          // Add to existing selection
+          const newSelection = [...new Set([...this.selectedNodeIds, ...nodeIds])];
+          this.selectedNodeIds = newSelection;
+        } else {
+          // Replace current selection with nodes having this tag
+          this.selectedNodeIds = [...nodeIds];
+        }
+        
+        // If we have selected nodes, update the current node
+        if (this.selectedNodeIds.length > 0) {
+          this.currentNodeId = this.selectedNodeIds[0];
+          // Also update for gamepad compatibility
+          this.selectedNodeId = this.currentNodeId;
+        } else {
+          this.currentNodeId = null;
+          this.selectedNodeId = null;
+        }
+        
+        // Update last clicked node ID for range selection
+        if (this.selectedNodeIds.length > 0) {
+          this.lastClickedNodeId = this.selectedNodeIds[0];
+        }
+        
+        // Show a toast message with the number of selected nodes
+        const count = this.selectedNodeIds.length;
+        if (count > 0) {
+          // Don't display this
+          // this.showToast(`Selected ${count} node${count === 1 ? '' : 's'} with tag "${tag}"`);
+        } else {
+          this.showToast(`No nodes found with tag "${tag}"`, 'info');
+        }
+        
+        // Force UI refresh
+        this.forceRefresh();
+        
+        // Scroll selected nodes into view if any are selected
+        this.$nextTick(() => {
+          if (this.selectedNodeIds.length > 0) {
+            const firstSelectedNode = document.getElementById(`node-${this.selectedNodeIds[0]}`);
+            if (firstSelectedNode) {
+              firstSelectedNode.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+          }
+        });
+      },
+
+      // Check if a tag has any selected nodes
+      hasSelectedNodes(tag) {
+        if (!this.tagBuckets[tag] || !this.selectedNodeIds.length) return false;
+        return this.tagBuckets[tag].some(nodeId => this.selectedNodeIds.includes(nodeId));
       },
     };
   }

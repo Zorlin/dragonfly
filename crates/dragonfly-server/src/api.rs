@@ -49,8 +49,10 @@ use crate::ui; // Import the ui module
 use std::net::SocketAddr;
 use axum::middleware::Next; // Add this import back
 use chrono::Utc;
+use axum::extract::DefaultBodyLimit;
 
 pub fn api_router() -> Router<crate::AppState> {
+    // Core API routes
     Router::new()
         .route("/machines", get(get_all_machines).post(register_machine))
         .route("/machines/install-status", get(get_install_status))
@@ -70,6 +72,11 @@ pub fn api_router() -> Router<crate::AppState> {
         // --- Proxmox Routes ---
         .route("/proxmox/connect", post(crate::handlers::proxmox::connect_proxmox_handler))
         .route("/proxmox/discover", get(crate::handlers::proxmox::discover_proxmox_handler))
+        // Add new tag management routes
+        .route("/tags", get(api_get_tags).post(api_create_tag))
+        .route("/tags/{tag_name}", delete(api_delete_tag))
+        .route("/tags/{tag_name}/machines", get(api_get_machines_by_tag))
+        .layer(DefaultBodyLimit::max(1024 * 1024 * 50)) // 50 MB
 }
 
 // Content constants
@@ -2947,3 +2954,139 @@ async fn get_machine_status_and_progress_partial(
 }
 
 // Utility function to extract client IP
+
+// --- Tag Management API ---
+/// Get all tags in the system
+#[axum::debug_handler]
+async fn api_get_tags(
+    State(state): State<AppState>,
+    auth_session: AuthSession,
+) -> Response {
+    // Check if user is authenticated as admin
+    if let Err(response) = crate::auth::require_admin(&auth_session) {
+        return response;
+    }
+
+    match db::get_all_tags().await {
+        Ok(tags) => (StatusCode::OK, Json(tags)).into_response(),
+        Err(e) => {
+            error!("Failed to get all tags: {}", e);
+            let error_response = ErrorResponse {
+                error: "Database Error".to_string(),
+                message: format!("Failed to retrieve tags: {}", e),
+            };
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(error_response)).into_response()
+        }
+    }
+}
+
+/// Create a new tag
+#[axum::debug_handler]
+async fn api_create_tag(
+    State(state): State<AppState>,
+    auth_session: AuthSession,
+    Json(payload): Json<serde_json::Value>,
+) -> Response {
+    // Check if user is authenticated as admin
+    if let Err(response) = crate::auth::require_admin(&auth_session) {
+        return response;
+    }
+
+    // Extract tag name from JSON payload
+    let tag_name = match payload.get("name").and_then(|v| v.as_str()) {
+        Some(name) => name.to_string(),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST, 
+                Json(json!({"error": "Missing tag name", "message": "Tag name is required"}))
+            ).into_response();
+        }
+    };
+
+    // Validate tag name - no empty tags
+    if tag_name.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "Invalid tag name", "message": "Tag name cannot be empty"}))
+        ).into_response();
+    }
+
+    match db::create_tag(&tag_name).await {
+        Ok(true) => {
+            // Emit tag created event
+            let _ = state.event_manager.send("tags_updated".to_string());
+            (StatusCode::CREATED, Json(json!({"success": true, "message": "Tag created"}))).into_response()
+        },
+        Ok(false) => {
+            (
+                StatusCode::CONFLICT,
+                Json(json!({"error": "Tag exists", "message": "A tag with this name already exists"}))
+            ).into_response()
+        },
+        Err(e) => {
+            error!("Failed to create tag '{}': {}", tag_name, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error", "message": format!("Failed to create tag: {}", e)}))
+            ).into_response()
+        }
+    }
+}
+
+/// Delete a tag from the system
+#[axum::debug_handler]
+async fn api_delete_tag(
+    State(state): State<AppState>,
+    auth_session: AuthSession,
+    Path(tag_name): Path<String>,
+) -> Response {
+    // Check if user is authenticated as admin
+    if let Err(response) = crate::auth::require_admin(&auth_session) {
+        return response;
+    }
+
+    match db::delete_tag(&tag_name).await {
+        Ok(true) => {
+            // Emit tag deleted event
+            let _ = state.event_manager.send("tags_updated".to_string());
+            (StatusCode::OK, Json(json!({"success": true, "message": "Tag deleted"}))).into_response()
+        },
+        Ok(false) => {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "Not found", "message": "Tag not found"}))
+            ).into_response()
+        },
+        Err(e) => {
+            error!("Failed to delete tag '{}': {}", tag_name, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Database error", "message": format!("Failed to delete tag: {}", e)}))
+            ).into_response()
+        }
+    }
+}
+
+/// Get all machines with a specific tag
+#[axum::debug_handler]
+async fn api_get_machines_by_tag(
+    auth_session: AuthSession,
+    Path(tag_name): Path<String>,
+) -> Response {
+    // Check if user is authenticated as admin
+    if let Err(response) = crate::auth::require_admin(&auth_session) {
+        return response;
+    }
+
+    match db::get_machines_by_tag(&tag_name).await {
+        Ok(machines) => (StatusCode::OK, Json(machines)).into_response(),
+        Err(e) => {
+            error!("Failed to get machines for tag {}: {}", tag_name, e);
+            let error_response = ErrorResponse {
+                error: "Database Error".to_string(),
+                message: format!("Failed to retrieve machines: {}", e),
+            };
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(error_response)).into_response()
+        }
+    }
+}
