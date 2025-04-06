@@ -15,18 +15,9 @@ use anyhow::{Context, anyhow};
 use listenfd::ListenFd;
 use axum::extract::MatchedPath;
 
-use crate::{
-    // handlers::proxmox,
-    // handlers::machines,
-    auth::{self, AuthError, AuthSession, Credentials}, // Removed unused load/save/generate functions from here
-    db::{self, init_db, run_migrations, setup_connection_pool},
-    event_manager::{self, EventManager},
-    // handlers,
-    mode::AppMode,
-    settings::{self, Settings}, // Removed unused load_settings
-    tasks::{self, start_background_tasks},
-    ui::TemplateEnv,
-};
+use crate::auth::{AdminBackend, auth_router, load_credentials, generate_default_credentials, load_settings, Settings, Credentials};
+use crate::db::init_db;
+use crate::event_manager::EventManager;
 
 // Add MiniJinja imports
 use minijinja::path_loader;
@@ -470,7 +461,7 @@ pub async fn run() -> anyhow::Result<()> {
 
     // Auth backend setup
     // Pass the pool and settings directly from AppState
-    let backend = auth::AdminBackend::new(app_state.dbpool.clone(), app_state.settings.lock().await.clone());
+    let backend = AdminBackend::new(app_state.dbpool.clone(), app_state.settings.lock().await.clone());
     
     // Build the auth layer
     let auth_layer = AuthManagerLayerBuilder::new(backend, session_layer)
@@ -478,7 +469,7 @@ pub async fn run() -> anyhow::Result<()> {
 
     // --- Build Router --- 
     let app = Router::new()
-        .merge(auth::auth_router())
+        .merge(auth_router())
         .merge(ui::ui_router())
         .route("/favicon.ico", get(handle_favicon))
         .route("/{mac}", get(api::ipxe_script))
