@@ -1281,6 +1281,7 @@
                 port: 8006,
                 username: '',
                 password: '',
+                skipTlsVerify: false
             },
             vmSelectionOption: 'all', // 'all', 'none', 'tags'
             discoveredClusters: [], // Array to hold discovered machines {host: string, port?: number, hostname?: string}
@@ -1291,7 +1292,7 @@
 
             initModal() {
                 // Reset state when modal opens
-                this.formData = { host: '', port: 8006, username: '', password: '' };
+                this.formData = { host: '', port: 8006, username: '', password: '', skipTlsVerify: false };
                 this.vmSelectionOption = 'all';
                 this.isConnecting = false;
                 this.isScanning = false;
@@ -1381,44 +1382,49 @@
                         port: this.formData.port || 8006,
                         username: this.formData.username,
                         password: this.formData.password,
-                        vm_selection_option: this.vmSelectionOption.toLowerCase()
+                        vm_selection_option: this.vmSelectionOption.toLowerCase(),
+                        skip_tls_verify: this.formData.skipTlsVerify
                     })
                 })
                 .then(response => {
                     if (!response.ok) {
                         return response.json().then(err => { 
+                            // Pass along the suggestion if it's a TLS error
+                            if (err.suggest_disable_tls_verify) {
+                                throw new Error(err.message + " Would you like to try again with certificate validation disabled?", 
+                                               { cause: { suggestDisableTls: true }});
+                            }
                             throw new Error(err.error || `HTTP error! status: ${response.status}`);
                         });
                     }
                     return response.json();
                 })
                 .then(data => {
-                    // Handle success
-                    let message = data.message;
+                    // Success - show success message and refresh the page
+                    console.log("Successfully connected to Proxmox:", data);
+                    this.proxmoxMachineModal = false;
                     
-                    // Display more detailed results if available
-                    if (data.machines && data.machines.length > 0) {
-                        // Count the different types of machines
-                        const hostCount = data.machines.filter(m => m.machine_type === 'proxmox-host').length;
-                        const nodeCount = data.machines.filter(m => m.machine_type === 'proxmox-node').length;
-                        const vmCount = data.machines.filter(m => m.machine_type === 'proxmox-vm').length;
-                        
-                        message = `Successfully connected to ${hostCount} Proxmox host(s) with ${nodeCount} node(s) and ${vmCount} VM(s)`;
-                    }
-                    
-                    showToast(message, 'success');
-                    this.proxmoxMachineModal = false; // Close the modal
-                    
-                    // Refresh machine list to show newly added VMs
-                    if (data.added_vms && data.added_vms > 0) {
-                        refreshMachineList();
-                    }
+                    // Refresh the page to show new machines
+                    window.location.reload();
                 })
                 .catch(error => {
                     console.error("Error connecting to Proxmox:", error);
-                    this.errorMessage = `Failed to connect to Proxmox host: ${error.message}`;
-                })
-                .finally(() => {
+                    
+                    // Check if this is a TLS error with suggestion to disable verification
+                    if (error.cause && error.cause.suggestDisableTls) {
+                        this.errorMessage = error.message;
+                        
+                        // Ask user if they want to try again with TLS verification disabled
+                        if (confirm("TLS certificate verification failed. Would you like to try again with certificate validation disabled?")) {
+                            this.formData.skipTlsVerify = true;
+                            this.connectProxmox(); // Try the connection again
+                            return;
+                        }
+                    } else {
+                        // Regular error
+                        this.errorMessage = `Connection failed: ${error.message}`;
+                    }
+                    
                     this.isConnecting = false;
                 });
             }

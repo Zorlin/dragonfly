@@ -277,6 +277,7 @@ pub async fn connect_proxmox_handler(
         settings.proxmox_username = Some(username_input.clone());
         settings.proxmox_password = Some(password.clone());
         settings.proxmox_port = Some(port);
+        settings.proxmox_skip_tls_verify = Some(skip_tls_verify);
     }
 
     // Create HTTPS connector
@@ -443,7 +444,7 @@ fn handle_proxmox_error(e: ProxmoxClientError, skip_tls_verify: bool) -> Proxmox
 async fn discover_and_register_proxmox_vms(
     client: &ProxmoxApiClient,
     cluster_name: &str,
-    state: &AppState,
+    _state: &AppState,
 ) -> ProxmoxResult<(usize, usize, Vec<DiscoveredProxmox>)> {
     info!("Discovering and registering Proxmox VMs for cluster: {}", cluster_name);
     
@@ -925,7 +926,7 @@ async fn discover_and_register_proxmox_vms(
                         Err(e) => warn!("Failed to get network interfaces from QEMU Guest Agent for VM {}: {}", vmid, e),
                     }
                 } else {
-                    info!("QEMU Guest Agent is enabled but not running for VM {}. Is it installed inside the VM?", vmid);
+                    info!("QEMU Guest Agent not enabled for VM {}. IP will be set to Unknown.", vmid);
                 }
             } else {
                 info!("QEMU Guest Agent not enabled for VM {}. IP will be set to Unknown.", vmid);
@@ -1160,9 +1161,7 @@ pub async fn start_proxmox_sync_task(
     state: std::sync::Arc<crate::AppState>,
     mut shutdown_rx: tokio::sync::watch::Receiver<()>
 ) {
-    use dragonfly_common::models::MachineStatus;
     use std::time::Duration;
-    use std::collections::HashSet;
     
     // Clone the state for the task
     let state_clone = state.clone();
@@ -1233,7 +1232,7 @@ pub async fn start_proxmox_sync_task(
 // Connect to Proxmox using the saved credentials
 async fn connect_to_proxmox(state: &crate::AppState) -> Result<ProxmoxApiClient, anyhow::Error> {
     // Get Proxmox settings
-    let (host, username, password, port, skip_tls_verify) = {
+    let (host, username, password, port, _skip_tls_verify) = {
         let settings = state.settings.lock().await;
         let host = settings.proxmox_host.clone().ok_or_else(|| anyhow::anyhow!("Proxmox host not configured"))?;
         let username = settings.proxmox_username.clone().ok_or_else(|| anyhow::anyhow!("Proxmox username not configured"))?;
@@ -1253,7 +1252,7 @@ async fn connect_to_proxmox(state: &crate::AppState) -> Result<ProxmoxApiClient,
     };
     
     // Create HTTPS connector with appropriate TLS settings
-    let https = HttpsConnector::new();
+    let _https = HttpsConnector::new();
     
     // Use just the host URL for client initialization
     let host_url = format!("https://{}:{}", host, port);

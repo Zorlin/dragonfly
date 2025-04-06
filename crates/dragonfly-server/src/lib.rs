@@ -448,6 +448,11 @@ pub async fn run() -> anyhow::Result<()> {
         // Store the db_pool directly
         dbpool: db_pool.clone(),
     };
+    
+    // Start the Proxmox sync task (regardless of deployment mode)
+    // This will check if machines removed from Proxmox should be removed from Dragonfly
+    info!("Starting Proxmox synchronization task with interval of 90s");
+    handlers::proxmox::start_proxmox_sync_task(std::sync::Arc::new(app_state.clone()), shutdown_rx.clone()).await;
 
     // Session store setup
     let session_store = SqliteStore::new(db_pool.clone()); // Create store from the pool

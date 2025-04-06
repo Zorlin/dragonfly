@@ -1076,6 +1076,7 @@ pub async fn update_settings(
             proxmox_username: current_settings.proxmox_username.clone(),
             proxmox_password: current_settings.proxmox_password.clone(),
             proxmox_port: current_settings.proxmox_port,
+            proxmox_skip_tls_verify: current_settings.proxmox_skip_tls_verify,
         };
 
         info!("Saving settings: require_login={}, default_os={:?}, setup_completed={:?}", 

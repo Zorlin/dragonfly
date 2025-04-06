@@ -184,6 +184,7 @@ pub struct Settings {
     pub proxmox_username: Option<String>,
     pub proxmox_password: Option<String>,
     pub proxmox_port: Option<u16>,
+    pub proxmox_skip_tls_verify: Option<bool>,
 }
 
 impl Default for Settings {
@@ -203,6 +204,7 @@ impl Default for Settings {
             proxmox_username: None,
             proxmox_password: None,
             proxmox_port: None,
+            proxmox_skip_tls_verify: Some(false),
         }
     }
 }
