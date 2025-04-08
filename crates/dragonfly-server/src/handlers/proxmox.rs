@@ -160,7 +160,7 @@ impl IntoResponse for ProxmoxHandlerError {
                     (
                         // Use axum's StatusCode here for the HTTP response
                         axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("Proxmox API interaction failed: {}", e),
+                    format!("Proxmox API interaction failed: {}", e),
                         "API_ERROR".to_string(),
                         false
                     )
@@ -236,7 +236,7 @@ impl IntoResponse for ProxmoxHandlerError {
                     (
                         // Use axum's StatusCode here
                         axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("Proxmox HTTP communication failed: {}", e),
+                    format!("Proxmox HTTP communication failed: {}", e),
                         "HTTP_ERROR".to_string(),
                         false
                     )
@@ -470,50 +470,190 @@ pub async fn connect_proxmox_handler(
             // Attempt to create the tokens
             let tokens_result = generate_proxmox_tokens_with_credentials(&token_request).await;
             
-            match tokens_result {
-                Ok(token_set) => {
-                    // Save tokens to database (encrypted) and also add to in-memory store
-                    match save_proxmox_tokens(&state, token_set).await {
-                        Ok(_) => {
-                            info!("Successfully created and saved specialized Proxmox API tokens");
+            // Create a client for discovery and registration
+            let host_url = format!("https://{}:{}", host, port);
+            let host_uri = match host_url.parse::<hyper::Uri>() {
+                Ok(uri) => uri,
+                Err(e) => {
+                    error!("Invalid Proxmox URL: {}", e);
+                    return (StatusCode::BAD_REQUEST, Json(json!({
+                        "success": false,
+                        "message": format!("Invalid Proxmox URL: {}", e)
+                    })));
+                }
+            };
+            
+            let client = ProxmoxApiClient::new(host_uri);
+            
+            // Create login request
+            let login_builder = proxmox_login::Login::new(
+                &host_url, 
+                username.to_string(), 
+                password.to_string()
+            );
+            
+            // Attempt login for the client we'll use for discovery
+            let login_result = client.login(login_builder).await;
+            
+            match login_result {
+                Ok(None) => {
+                    info!("Successfully authenticated client for VM discovery");
+                    
+                    // Determine cluster name (default to hostname if not available)
+                    let cluster_name = match client.get("/api2/json/cluster/status").await {
+                        Ok(response) => {
+                            if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&response.body) {
+                                if let Some(data) = value.get("data").and_then(|d| d.as_array()) {
+                                    // Try to find the cluster name in the response
+                                    let cluster_entry = data.iter().find(|item| {
+                                        item.get("type").and_then(|t| t.as_str()) == Some("cluster")
+                                    });
+                                    
+                                    if let Some(name) = cluster_entry.and_then(|e| e.get("name")).and_then(|n| n.as_str()) {
+                                        name.to_string()
+                                    } else {
+                                        host.clone() // Fallback to hostname
+                                    }
+                                } else {
+                                    host.clone() // Fallback to hostname
+                                }
+                            } else {
+                                host.clone() // Fallback to hostname
+                            }
+                        },
+                        Err(_) => host.clone() // Fallback to hostname on error
+                    };
+
+                    info!("Discovered Proxmox cluster name: {}", cluster_name);
+                    
+                    // Now discover and register VMs
+                    let state_ref = &state;
+                    match discover_and_register_proxmox_vms(&client, &cluster_name, state_ref).await {
+                        Ok((registered, failed, discovered)) => {
+                            info!("Successfully discovered and registered {} Proxmox VMs ({} failed)",
+                                 registered, failed);
+                            
+                            // Continue with token processing
+                            match tokens_result {
+                                Ok(token_set) => {
+                                    // Save tokens to database (encrypted) and also add to in-memory store
+                                    match save_proxmox_tokens(&state, token_set).await {
+                                        Ok(_) => {
+                                            info!("Successfully created and saved specialized Proxmox API tokens");
+                                        },
+                                        Err(e) => {
+                                            warn!("Successfully created tokens but failed to save them: {}", e);
+                                            return (StatusCode::OK, Json(json!({
+                                                "success": true,
+                                                "message": format!("Successfully connected to Proxmox API but failed to save tokens: {}", e),
+                                                "tokens_created": true,
+                                                "tokens_saved": false,
+                                                "added_vms": registered,
+                                                "failed_vms": failed,
+                                                "machines": discovered
+                                            })));
+                                        }
+                                    }
+                                    
+                                    (StatusCode::OK, Json(json!({
+                                        "success": true,
+                                        "message": format!("Successfully connected to Proxmox API, created tokens, and imported {} VMs", registered),
+                                        "tokens_created": true,
+                                        "tokens_saved": true,
+                                        "added_vms": registered,
+                                        "failed_vms": failed,
+                                        "machines": discovered
+                                    })))
+                                },
+                                Err(e) => {
+                                    warn!("Successfully connected to Proxmox but failed to create API tokens: {}", e);
+                                    
+                                    // Provide clearer guidance in the error message
+                                    let error_message = if e.contains("Parameter verification failed") || e.contains("privileges") || e.contains("privs") {
+                                        format!("Failed to create API tokens: {}. This might be due to API version differences between Proxmox versions. Please check your Proxmox version and permissions.", e)
+                                    } else if e.contains("permission") || e.contains("unauthorized") || e.contains("access") {
+                                        format!("Failed to create API tokens: {}. The user needs permission to create API tokens in Proxmox. Please check that your account has administrative privileges.", e)
+            } else {
+                                        format!("Failed to create API tokens: {}. Please try again or check Proxmox documentation for your specific version.", e)
+                                    };
+                                    
+                                    // We still consider this a success since the main connection worked and VMs were imported
+                                    (StatusCode::OK, Json(json!({
+                                        "success": true,
+                                        "message": format!("Successfully connected to Proxmox API and imported {} VMs, but failed to create tokens: {}", registered, e),
+                                        "tokens_created": false,
+                                        "token_error": error_message,
+                                        "added_vms": registered,
+                                        "failed_vms": failed,
+                                        "machines": discovered
+                                    })))
+                                }
+                            }
                         },
                         Err(e) => {
-                            warn!("Successfully created tokens but failed to save them: {}", e);
-                            return (StatusCode::OK, Json(json!({
-                                "success": true,
-                                "message": format!("Successfully connected to Proxmox API but failed to save tokens: {}", e),
-                                "tokens_created": true,
-                                "tokens_saved": false
-                            })));
+                            error!("Failed to discover and register Proxmox VMs: {}", e);
+                            // We still continue with token processing
+                            match tokens_result {
+                                Ok(token_set) => {
+                                    if let Err(e) = save_proxmox_tokens(&state, token_set).await {
+                                        warn!("Successfully created tokens but failed to save them: {}", e);
+                                    }
+                                    
+                                    (StatusCode::OK, Json(json!({
+                                        "success": true,
+                                        "message": format!("Successfully connected to Proxmox API and created tokens, but failed to discover VMs: {}", e),
+                                        "tokens_created": true,
+                                        "tokens_saved": true,
+                                        "vm_discovery_error": e.to_string()
+                                    })))
+                                },
+                                Err(token_err) => {
+                                    (StatusCode::OK, Json(json!({
+                                        "success": true,
+                                        "message": format!("Successfully connected to Proxmox API, but failed to create tokens and discover VMs"),
+                                        "tokens_created": false,
+                                        "token_error": token_err,
+                                        "vm_discovery_error": e.to_string()
+                                    })))
+                                }
+                            }
                         }
                     }
-                    
-                    (StatusCode::OK, Json(json!({
-                        "success": true,
-                        "message": "Successfully connected to Proxmox API and created specialized API tokens",
-                        "tokens_created": true,
-                        "tokens_saved": true
-                    })))
+                },
+                Ok(Some(_)) => {
+                    error!("Two-factor authentication is required but not supported");
+                    return (StatusCode::BAD_REQUEST, Json(json!({
+                        "success": false,
+                        "message": "Two-factor authentication is required but not supported"
+                    })));
                 },
                 Err(e) => {
-                    warn!("Successfully connected to Proxmox but failed to create API tokens: {}", e);
-                    
-                    // Provide clearer guidance in the error message
-                    let error_message = if e.contains("Parameter verification failed") || e.contains("privileges") || e.contains("privs") {
-                        format!("Failed to create API tokens: {}. This might be due to API version differences between Proxmox versions. Please check your Proxmox version and permissions.", e)
-                    } else if e.contains("permission") || e.contains("unauthorized") || e.contains("access") {
-                        format!("Failed to create API tokens: {}. The user needs permission to create API tokens in Proxmox. Please check that your account has administrative privileges.", e)
-    } else {
-                        format!("Failed to create API tokens: {}. Please try again or check Proxmox documentation for your specific version.", e)
-                    };
-                    
-                    // We still consider this a success since the main connection worked
-                    (StatusCode::OK, Json(json!({
-                        "success": true,
-                        "message": format!("Successfully connected to Proxmox API but failed to create tokens: {}", e),
-                        "tokens_created": false,
-                        "token_error": error_message
-                    })))
+                    error!("Failed to authenticate client for VM discovery: {}", e);
+                    // Still try to process tokens
+                    match tokens_result {
+                        Ok(token_set) => {
+                            if let Err(e) = save_proxmox_tokens(&state, token_set).await {
+                                warn!("Successfully created tokens but failed to save them: {}", e);
+                            }
+                            
+                            (StatusCode::OK, Json(json!({
+                                "success": true,
+                                "message": format!("Successfully connected to Proxmox API and created tokens, but couldn't discover VMs: Authentication failed for discovery"),
+                                "tokens_created": true,
+                                "tokens_saved": true,
+                                "vm_discovery_error": format!("Authentication failed: {}", e)
+                            })))
+                        },
+                        Err(token_err) => {
+                            (StatusCode::OK, Json(json!({
+                                "success": true,
+                                "message": format!("Successfully connected to Proxmox API, but failed to create tokens and discover VMs"),
+                                "tokens_created": false,
+                                "token_error": token_err,
+                                "vm_discovery_error": format!("Authentication failed: {}", e)
+                            })))
+                        }
+                    }
                 }
             }
         },

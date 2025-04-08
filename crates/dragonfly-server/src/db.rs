@@ -36,6 +36,9 @@ pub async fn init_db() -> Result<SqlitePool> {
         .await
         .map_err(|e| anyhow!("Failed to connect to SQLite database at {}: {}", database_url, e))?;
     
+    // Initialize base tables for fresh installation
+    create_base_tables(&pool).await?;
+    
     // Run migrations
     migrate_db(&pool).await?;
     migrate_add_proxmox_settings(&pool).await?;
@@ -47,6 +50,126 @@ pub async fn init_db() -> Result<SqlitePool> {
     
     info!("Database initialized successfully at {}", db_path);
     Ok(pool)
+}
+
+// Create base tables for a fresh installation
+async fn create_base_tables(pool: &Pool<Sqlite>) -> Result<()> {
+    // Check if machines table exists
+    let result = sqlx::query(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='machines'"
+    )
+    .fetch_one(pool)
+    .await?;
+    
+    let table_exists: i64 = result.get(0);
+    
+    // Create machines table if it doesn't exist
+    if table_exists == 0 {
+        info!("Creating machines table");
+        sqlx::query(
+            r#"
+            CREATE TABLE machines (
+                id TEXT PRIMARY KEY,
+                mac_address TEXT NOT NULL,
+                ip_address TEXT,
+                hostname TEXT,
+                status TEXT NOT NULL,
+                os_choice TEXT,
+                os_installed TEXT,
+                disks TEXT NOT NULL,
+                nameservers TEXT NOT NULL,
+                memorable_name TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                bmc_credentials TEXT,
+                installation_progress INTEGER DEFAULT 0,
+                installation_step TEXT,
+                last_deployment_duration INTEGER,
+                cpu_model TEXT,
+                cpu_cores INTEGER,
+                total_ram_bytes INTEGER,
+                proxmox_vmid INTEGER,
+                proxmox_node TEXT,
+                proxmox_cluster TEXT,
+                is_proxmox_host BOOLEAN DEFAULT FALSE NOT NULL
+            )
+            "#,
+        )
+        .execute(pool)
+        .await?;
+    }
+    
+    // Check if admin_credentials table exists
+    let result = sqlx::query(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='admin_credentials'"
+    )
+    .fetch_one(pool)
+    .await?;
+    
+    let table_exists: i64 = result.get(0);
+    
+    // Create admin_credentials table if it doesn't exist
+    if table_exists == 0 {
+        info!("Creating admin_credentials table");
+        sqlx::query(
+            r#"
+            CREATE TABLE admin_credentials (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            "#,
+        )
+        .execute(pool)
+        .await?;
+    }
+    
+    // Check if app_settings table exists
+    let result = sqlx::query(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='app_settings'"
+    )
+    .fetch_one(pool)
+    .await?;
+    
+    let table_exists: i64 = result.get(0);
+    
+    // Create app_settings table if it doesn't exist
+    if table_exists == 0 {
+        info!("Creating app_settings table");
+        sqlx::query(
+            r#"
+            CREATE TABLE app_settings (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                require_login BOOLEAN NOT NULL DEFAULT 0,
+                default_os TEXT,
+                setup_completed BOOLEAN NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            "#,
+        )
+        .execute(pool)
+        .await?;
+        
+        // Insert default settings
+        let now = Utc::now();
+        let now_str = now.to_rfc3339();
+        
+        sqlx::query(
+            r#"
+            INSERT INTO app_settings (id, require_login, setup_completed, created_at, updated_at)
+            VALUES (1, 0, 0, ?, ?)
+            "#,
+        )
+        .bind(&now_str)
+        .bind(&now_str)
+        .execute(pool)
+        .await?;
+    }
+    
+    Ok(())
 }
 
 // Get a reference to the database pool
@@ -2087,6 +2210,99 @@ async fn migrate_add_proxmox_settings(pool: &SqlitePool) -> Result<()> {
     .await?;
     
     info!("Created proxmox_settings table");
+    
+    // Check if vm_create_token column exists
+    let result = sqlx::query(
+        r#"
+        SELECT COUNT(*) AS count FROM pragma_table_info('proxmox_settings') WHERE name = 'vm_create_token'
+        "#,
+    )
+    .fetch_one(pool)
+    .await?;
+    
+    let column_exists: i64 = result.get(0);
+    
+    // Add vm_create_token column if it doesn't exist
+    if column_exists == 0 {
+        info!("Adding vm_create_token column to proxmox_settings table");
+        sqlx::query(
+            r#"
+            ALTER TABLE proxmox_settings ADD COLUMN vm_create_token TEXT
+            "#,
+        )
+        .execute(pool)
+        .await?;
+    }
+    
+    // Check if vm_power_token column exists
+    let result = sqlx::query(
+        r#"
+        SELECT COUNT(*) AS count FROM pragma_table_info('proxmox_settings') WHERE name = 'vm_power_token'
+        "#,
+    )
+    .fetch_one(pool)
+    .await?;
+    
+    let column_exists: i64 = result.get(0);
+    
+    // Add vm_power_token column if it doesn't exist
+    if column_exists == 0 {
+        info!("Adding vm_power_token column to proxmox_settings table");
+        sqlx::query(
+            r#"
+            ALTER TABLE proxmox_settings ADD COLUMN vm_power_token TEXT
+            "#,
+        )
+        .execute(pool)
+        .await?;
+    }
+    
+    // Check if vm_config_token column exists
+    let result = sqlx::query(
+        r#"
+        SELECT COUNT(*) AS count FROM pragma_table_info('proxmox_settings') WHERE name = 'vm_config_token'
+        "#,
+    )
+    .fetch_one(pool)
+    .await?;
+    
+    let column_exists: i64 = result.get(0);
+    
+    // Add vm_config_token column if it doesn't exist
+    if column_exists == 0 {
+        info!("Adding vm_config_token column to proxmox_settings table");
+        sqlx::query(
+            r#"
+            ALTER TABLE proxmox_settings ADD COLUMN vm_config_token TEXT
+            "#,
+        )
+        .execute(pool)
+        .await?;
+    }
+    
+    // Check if vm_sync_token column exists
+    let result = sqlx::query(
+        r#"
+        SELECT COUNT(*) AS count FROM pragma_table_info('proxmox_settings') WHERE name = 'vm_sync_token'
+        "#,
+    )
+    .fetch_one(pool)
+    .await?;
+    
+    let column_exists: i64 = result.get(0);
+    
+    // Add vm_sync_token column if it doesn't exist
+    if column_exists == 0 {
+        info!("Adding vm_sync_token column to proxmox_settings table");
+        sqlx::query(
+            r#"
+            ALTER TABLE proxmox_settings ADD COLUMN vm_sync_token TEXT
+            "#,
+        )
+        .execute(pool)
+        .await?;
+    }
+    
     Ok(())
 }
 
@@ -2138,7 +2354,8 @@ pub async fn get_proxmox_settings() -> Result<Option<ProxmoxSettings>> {
     let row = sqlx::query(
         r#"
         SELECT id, host, port, username, auth_ticket, csrf_token, 
-               ticket_timestamp, skip_tls_verify, created_at, updated_at
+               ticket_timestamp, skip_tls_verify, created_at, updated_at,
+               vm_create_token, vm_power_token, vm_config_token, vm_sync_token
         FROM proxmox_settings
         WHERE id = 1
         "#
@@ -2160,6 +2377,12 @@ pub async fn get_proxmox_settings() -> Result<Option<ProxmoxSettings>> {
             let created_at_str: String = r.try_get("created_at")?;
             let updated_at_str: String = r.try_get("updated_at")?;
             
+            // Get token values
+            let vm_create_token: Option<String> = r.try_get("vm_create_token").ok();
+            let vm_power_token: Option<String> = r.try_get("vm_power_token").ok();
+            let vm_config_token: Option<String> = r.try_get("vm_config_token").ok();
+            let vm_sync_token: Option<String> = r.try_get("vm_sync_token").ok();
+            
             let created_at = chrono::DateTime::parse_from_rfc3339(&created_at_str)?
                 .with_timezone(&chrono::Utc);
             let updated_at = chrono::DateTime::parse_from_rfc3339(&updated_at_str)?
@@ -2176,10 +2399,10 @@ pub async fn get_proxmox_settings() -> Result<Option<ProxmoxSettings>> {
                 skip_tls_verify: skip_tls_verify != 0,
                 created_at,
                 updated_at,
-                vm_create_token: None,
-                vm_power_token: None,
-                vm_config_token: None,
-                vm_sync_token: None,
+                vm_create_token,
+                vm_power_token,
+                vm_config_token,
+                vm_sync_token,
             }))
         },
         None => Ok(None),
