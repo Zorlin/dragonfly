@@ -428,6 +428,36 @@ impl ProvisioningService {
             }
         }
 
+        let (action, workflow_id, machine) = self
+            .decide_and_prepare_action(machine, info.existing_os.as_ref(), is_new)
+            .await?;
+
+        Ok(CheckInResponse {
+            machine_id: machine.id.to_string(),
+            memorable_name: machine.config.memorable_name,
+            is_new,
+            action,
+            workflow_id,
+        })
+    }
+
+    /// Decide the agent's next action for an already-resolved machine and perform
+    /// the side effects needed to act on it (state transitions, workflow creation).
+    ///
+    /// Extracted from `handle_checkin` so the WebSocket push path (`current_intent`)
+    /// reuses the *exact same* decision logic. Two parameters are load-bearing:
+    /// - `is_new`: gates the global `default_os` auto-assign branch. The HTTP checkin
+    ///   path passes the real value; the push path passes `false` (the machine is
+    ///   already registered).
+    /// - `existing_os`: the freshly-probed OS. The push path passes `None`, which is
+    ///   correct because a machine only reaches `Wait` when no existing OS was
+    ///   detected — see the final `Wait` arm below.
+    async fn decide_and_prepare_action(
+        &self,
+        machine: Machine,
+        existing_os: Option<&DetectedOs>,
+        is_new: bool,
+    ) -> Result<(AgentAction, Option<String>, Machine), ProvisioningError> {
         // Check for workflows
         let workflows = self.get_workflows_for_machine(&machine).await?;
         let active_workflow = workflows.into_iter().find(|wf| {
@@ -461,7 +491,7 @@ impl ProvisioningService {
                     machine.id,
                     wf.metadata.name,
                     state_desc,
-                    if info.existing_os.is_some() {
+                    if existing_os.is_some() {
                         " (will replace existing OS)"
                     } else {
                         ""
@@ -491,7 +521,7 @@ impl ProvisioningService {
                 // Rules:
                 // - No existing OS → safe to image (nothing to lose)
                 // - Has existing OS → require molly guard (os_choice + reimage_requested)
-                let os_to_install = if info.existing_os.is_none() {
+                let os_to_install = if existing_os.is_none() {
                     // No existing OS - safe to image without molly guard
                     if machine.config.os_choice.is_some() {
                         info!(
@@ -520,7 +550,7 @@ impl ProvisioningService {
                     info!(
                         "Machine {} has existing OS '{}' but reimage requested, will install {}",
                         machine.id,
-                        info.existing_os.as_ref().unwrap().name,
+                        existing_os.unwrap().name,
                         machine.config.os_choice.as_ref().unwrap()
                     );
                     machine.config.os_choice.clone()
@@ -555,7 +585,7 @@ impl ProvisioningService {
                         AgentAction::Execute,
                         machine,
                     )
-                } else if let Some(ref existing_os) = info.existing_os {
+                } else if let Some(existing_os) = existing_os {
                     // Existing OS detected and no workflow to run - boot it
                     let mut machine = machine;
 
@@ -589,13 +619,7 @@ impl ProvisioningService {
             }
         };
 
-        Ok(CheckInResponse {
-            machine_id: machine.id.to_string(),
-            memorable_name: machine.config.memorable_name,
-            is_new,
-            action,
-            workflow_id,
-        })
+        Ok((action, workflow_id, machine))
     }
 
     /// Create machine from check-in info
