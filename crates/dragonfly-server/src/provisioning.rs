@@ -622,6 +622,43 @@ impl ProvisioningService {
         Ok((action, workflow_id, machine))
     }
 
+    /// Recompute the current intent for an already-registered machine, for the
+    /// WebSocket push path. Returns `None` when the machine no longer exists —
+    /// the signal for the server to close the agent's socket.
+    ///
+    /// Reuses `decide_and_prepare_action` with `existing_os = None` and
+    /// `is_new = false`, which is correct because a machine only persists on a
+    /// `Wait` socket when it has no existing OS (an OS would have produced
+    /// `LocalBoot` and closed the socket on the initial checkin).
+    ///
+    /// NON-GOAL: this only drives `Wait → Execute` transitions. If the helper
+    /// computes `LocalBoot`/`Reboot`, the WebSocket handler treats it as
+    /// no-change — the push channel cannot re-probe the disk, and the agent
+    /// already acted on its initial response. Callers must not push those as new
+    /// instructions.
+    pub async fn current_intent(
+        &self,
+        machine_id: Uuid,
+    ) -> Result<Option<CheckInResponse>, ProvisioningError> {
+        let machine = match self.store.get_machine(machine_id).await {
+            Ok(Some(m)) => m,
+            Ok(None) => return Ok(None),
+            Err(e) => return Err(ProvisioningError::Store(e)),
+        };
+
+        let (action, workflow_id, machine) = self
+            .decide_and_prepare_action(machine, None, false)
+            .await?;
+
+        Ok(Some(CheckInResponse {
+            machine_id: machine.id.to_string(),
+            memorable_name: machine.config.memorable_name,
+            is_new: false,
+            action,
+            workflow_id,
+        }))
+    }
+
     /// Create machine from check-in info
     fn create_machine_from_checkin(
         &self,
@@ -1436,6 +1473,77 @@ mod tests {
             response.workflow_id.is_some(),
             "Should have workflow_id for reimaging"
         );
+    }
+
+    #[tokio::test]
+    async fn test_current_intent_returns_none_for_missing_machine() {
+        let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
+        let service = ProvisioningService::new(store, test_ipxe_config(), DeploymentMode::Simple);
+
+        // A machine that does not exist signals the socket to close.
+        let result = service.current_intent(Uuid::now_v7()).await.unwrap();
+        assert!(result.is_none(), "Missing machine should signal socket close");
+    }
+
+    #[tokio::test]
+    async fn test_current_intent_wait_then_execute_on_os_choice() {
+        let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
+        let service =
+            ProvisioningService::new(store.clone(), test_ipxe_config(), DeploymentMode::Simple);
+
+        // Register a no-OS machine: no os_choice, no default_os -> Wait.
+        let response = service.handle_checkin(&test_checkin()).await.unwrap();
+        assert_eq!(response.action, AgentAction::Wait);
+        let machine_id: Uuid = response.machine_id.parse().unwrap();
+
+        // Push path with nothing changed -> still Wait.
+        let intent = service.current_intent(machine_id).await.unwrap().unwrap();
+        assert_eq!(intent.action, AgentAction::Wait);
+        assert!(intent.workflow_id.is_none());
+
+        // Admin assigns an OS (mirrors assign_os setting os_choice).
+        let mut machine = store.get_machine(machine_id).await.unwrap().unwrap();
+        machine.config.os_choice = Some("debian-12".to_string());
+        store.put_machine(&machine).await.unwrap();
+
+        // Push path must now create the workflow and return Execute.
+        let intent = service.current_intent(machine_id).await.unwrap().unwrap();
+        assert_eq!(intent.action, AgentAction::Execute);
+        assert!(
+            intent.workflow_id.is_some(),
+            "Push path must create the workflow"
+        );
+
+        // The workflow must actually be in the store.
+        let wfs = store.get_workflows_for_machine(machine_id).await.unwrap();
+        assert!(wfs.iter().any(|w| w
+            .status
+            .as_ref()
+            .map(|s| s.state == WorkflowState::StatePending)
+            .unwrap_or(false)));
+    }
+
+    #[tokio::test]
+    async fn test_current_intent_returns_execute_after_precreated_workflow() {
+        let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
+        let service =
+            ProvisioningService::new(store.clone(), test_ipxe_config(), DeploymentMode::Simple);
+
+        let response = service.handle_checkin(&test_checkin()).await.unwrap();
+        let machine_id: Uuid = response.machine_id.parse().unwrap();
+        let machine = store.get_machine(machine_id).await.unwrap().unwrap();
+
+        // reimage_machine pre-creates a Pending workflow before the agent notices.
+        let wf = service
+            .create_imaging_workflow(&machine, "debian-12")
+            .await
+            .unwrap();
+        let precreated_id = wf.metadata.name.clone();
+
+        // Push path finds the existing active workflow and returns Execute with its id.
+        let intent = service.current_intent(machine_id).await.unwrap().unwrap();
+        assert_eq!(intent.action, AgentAction::Execute);
+        assert_eq!(intent.workflow_id.as_deref(), Some(precreated_id.as_str()));
     }
 
     #[tokio::test]
