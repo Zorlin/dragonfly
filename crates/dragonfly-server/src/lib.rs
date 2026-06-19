@@ -41,6 +41,7 @@ use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt};
 mod api;
 pub mod api_token;
 mod auth;
+pub mod agent_ws;
 pub mod cluster;
 pub mod dns_sync;
 pub mod event_manager;

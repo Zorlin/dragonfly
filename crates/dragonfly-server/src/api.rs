@@ -261,6 +261,7 @@ pub fn api_router() -> Router<crate::AppState> {
         .route("/tags/{tag_name}/machines", get(api_get_machines_by_tag))
         // --- Agent Routes ---
         .route("/agent/checkin", post(agent_checkin_handler))
+        .route("/agent/ws", get(crate::agent_ws::agent_ws_handler))
         .route(
             "/agent/request-install",
             post(agent_request_install_handler),
