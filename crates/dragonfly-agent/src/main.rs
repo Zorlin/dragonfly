@@ -2,6 +2,7 @@ mod boot_menu;
 mod kexec;
 mod probe;
 mod workflow;
+mod ws;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -428,6 +429,11 @@ async fn main() -> Result<()> {
         .or_else(|| env::var("DRAGONFLY_API_URL").ok())
         .unwrap_or_else(|| "http://localhost:3000".to_string());
 
+    // A ws:// / wss:// server URL opts the agent into the WebSocket push channel
+    // (near-instant reimage/assign pickup) instead of the 30s HTTP poll. All HTTP
+    // API calls still go to the equivalent http(s):// base.
+    let (api_url, ws_url) = split_server_url(&api_url);
+
     // --- Get required system info FIRST ---
     // Get MAC address and IP address (using improved logic)
     let mac_address = get_mac_address().context("Failed to get MAC address")?;
@@ -567,8 +573,26 @@ async fn main() -> Result<()> {
         Duration::from_secs(args.checkin_interval),
         args.action.clone(),
         kernel_params.mode.as_deref(),
+        ws_url.as_deref(),
     )
     .await
+}
+
+/// Split a configured server URL into its HTTP base and, if it is a WebSocket
+/// scheme, its WebSocket base.
+///
+/// A `ws://`/`wss://` URL opts the agent into the push channel: the HTTP base
+/// (scheme swapped to `http`/`https`) is used for all normal API calls, while
+/// the WebSocket base drives `ws::run_ws_provisioning_loop`. Any other URL
+/// yields no WebSocket base, so the agent keeps using the HTTP poll unchanged.
+fn split_server_url(url: &str) -> (String, Option<String>) {
+    if let Some(rest) = url.strip_prefix("ws://") {
+        (format!("http://{rest}"), Some(format!("ws://{rest}")))
+    } else if let Some(rest) = url.strip_prefix("wss://") {
+        (format!("https://{rest}"), Some(format!("wss://{rest}")))
+    } else {
+        (url.to_string(), None)
+    }
 }
 
 /// Build a Hardware CRD from detected system information
@@ -648,6 +672,7 @@ async fn run_native_provisioning_loop(
     checkin_interval: Duration,
     action_filter: Option<Vec<usize>>,
     boot_mode: Option<&str>,
+    ws_url: Option<&str>,
 ) -> Result<()> {
     let is_imaging = boot_mode == Some("imaging");
     info!("Starting native provisioning (mode={:?})", boot_mode);
@@ -838,6 +863,23 @@ async fn run_native_provisioning_loop(
     // If we get here after LocalBoot/Execute, the action didn't terminate
     // Enter the main loop for ongoing check-ins (only if action was Wait)
     if initial_response.action == AgentAction::Wait {
+        if let Some(ws_base) = ws_url {
+            // WebSocket push channel: a persistent connection replaces the poll,
+            // so a reimage or OS assignment is picked up near-instantly.
+            return ws::run_ws_provisioning_loop(
+                client,
+                ws_base,
+                server_url,
+                mac,
+                effective_hostname,
+                ip_address,
+                &existing_os,
+                &hardware,
+                agent_hw_info,
+                &action_filter,
+            )
+            .await;
+        }
         loop {
             tokio::time::sleep(checkin_interval).await;
 

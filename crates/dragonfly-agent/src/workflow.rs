@@ -355,18 +355,17 @@ pub struct AgentHardwareInfo {
     pub nameservers: Vec<String>,
 }
 
-/// Check in with the server using native provisioning endpoint
-pub async fn checkin_native(
-    client: &Client,
-    server_url: &str,
+/// Build the `HardwareCheckIn` JSON payload sent to the server on checkin.
+///
+/// Shared by the HTTP checkin path (`checkin_native`) and the WebSocket push
+/// channel (`ws::run_ws_provisioning_loop`), so both send an identical payload.
+pub fn build_checkin_payload(
     mac: &str,
     hostname: Option<&str>,
     ip_address: Option<&str>,
     existing_os: Option<&DetectedOs>,
     hardware: Option<&AgentHardwareInfo>,
-) -> Result<CheckInResponse> {
-    let url = format!("{}/api/agent/checkin", server_url);
-
+) -> serde_json::Value {
     let mut payload = serde_json::json!({
         "mac": mac,
         "hostname": hostname,
@@ -407,6 +406,21 @@ pub async fn checkin_native(
         }
     }
 
+    payload
+}
+
+/// Check in with the server using native provisioning endpoint
+pub async fn checkin_native(
+    client: &Client,
+    server_url: &str,
+    mac: &str,
+    hostname: Option<&str>,
+    ip_address: Option<&str>,
+    existing_os: Option<&DetectedOs>,
+    hardware: Option<&AgentHardwareInfo>,
+) -> Result<CheckInResponse> {
+    let url = format!("{}/api/agent/checkin", server_url);
+    let payload = build_checkin_payload(mac, hostname, ip_address, existing_os, hardware);
     let response = client.post(&url).json(&payload).send().await?;
 
     if !response.status().is_success() {
