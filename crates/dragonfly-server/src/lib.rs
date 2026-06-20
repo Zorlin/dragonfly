@@ -45,6 +45,7 @@ pub mod agent_ws;
 pub mod cluster;
 pub mod dns_sync;
 pub mod event_manager;
+pub mod events_ws;
 mod filters; // Uncomment unused module
 pub mod ha;
 pub mod handlers;
