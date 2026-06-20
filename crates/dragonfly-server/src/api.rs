@@ -239,6 +239,7 @@ pub fn api_router() -> Router<crate::AppState> {
         )
         .route("/installation/progress", put(update_installation_progress))
         .route("/events", get(machine_events))
+        .route("/events/ws", get(crate::events_ws::events_ws_handler))
         .route("/heartbeat", get(heartbeat))
         // --- Proxmox Routes ---
         .route("/proxmox/status", get(proxmox_status))
@@ -2262,6 +2263,9 @@ async fn get_machine_os(Path(id): Path<Uuid>) -> Response {
     "#, id)).into_response()
 }
 
+/// DEPRECATED: SSE event stream. Replaced by the WebSocket `GET /api/events/ws`
+/// (`events_ws::events_ws_handler`). Retained only until the UI's `EventSource`
+/// consumers migrate off SSE — do not add new consumers. See issue #20.
 // Rename from sse_events to machine_events to match the function name used in the working implementation
 async fn machine_events(
     State(state): State<AppState>,
