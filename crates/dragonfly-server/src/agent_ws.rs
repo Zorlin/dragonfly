@@ -275,4 +275,83 @@ mod tests {
         assert!(should_push(Some(&last), &wait));
         assert!(!should_push(Some(&last), &localboot));
     }
+
+    /// End-to-end: boot the real API router on a socket, connect a real
+    /// WebSocket client, and confirm a pushed `Execute` arrives when the
+    /// machine's intent changes — the core of issue #18.
+    #[tokio::test]
+    async fn ws_handler_pushes_execute_when_intent_changes() {
+        use crate::api::api_router;
+        use crate::test_helpers::create_test_app_state_with_provisioning;
+        use futures::{SinkExt, StreamExt};
+        use tokio_tungstenite::{connect_async, tungstenite::Message};
+
+        // Boot the real router (provisioning enabled) on an ephemeral port.
+        // api_router() is mounted under /api, exactly as the real server does it.
+        let state = create_test_app_state_with_provisioning().await;
+        let app = axum::Router::new()
+            .nest("/api", api_router())
+            .with_state(state.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app.into_make_service()).await;
+        });
+
+        // Connect a real WebSocket client and send a HardwareCheckIn.
+        let url = format!("ws://{addr}/api/agent/ws");
+        let (mut ws, _response) = connect_async(url.as_str()).await.unwrap();
+        let checkin = serde_json::json!({
+            "mac": "00:11:22:33:44:99",
+            "all_macs": ["00:11:22:33:44:99"],
+            "existing_os": null,
+        });
+        ws.send(Message::Text(checkin.to_string().into()))
+            .await
+            .unwrap();
+
+        // CheckInResponse is Serialize-only on the server side, so parse the wire
+        // JSON into a tiny local view for assertions.
+        #[derive(serde::Deserialize)]
+        struct WireResponse {
+            machine_id: String,
+            action: String,
+            workflow_id: Option<String>,
+        }
+
+        // Initial response: a fresh no-OS machine with no os_choice -> wait.
+        let first = ws.next().await.unwrap().unwrap();
+        let first_text = match first {
+            Message::Text(t) => t,
+            other => panic!("expected text message, got {other:?}"),
+        };
+        let initial: WireResponse = serde_json::from_str(first_text.as_str()).unwrap();
+        assert_eq!(initial.action, "wait");
+        let machine_id: Uuid = initial.machine_id.parse().unwrap();
+
+        // Simulate exactly what assign_os now does: set os_choice, persist, emit.
+        let mut machine = state.store.get_machine(machine_id).await.unwrap().unwrap();
+        machine.config.os_choice = Some("debian-12".to_string());
+        state.store.put_machine(&machine).await.unwrap();
+        let _ = state
+            .event_manager
+            .send(format!("machine_updated:{machine_id}"));
+
+        // The server must push a fresh execute (workflow created) within seconds.
+        let pushed = tokio::time::timeout(std::time::Duration::from_secs(5), ws.next())
+            .await
+            .expect("timed out waiting for push")
+            .unwrap()
+            .unwrap();
+        let pushed_text = match pushed {
+            Message::Text(t) => t,
+            other => panic!("expected text push, got {other:?}"),
+        };
+        let pushed: WireResponse = serde_json::from_str(pushed_text.as_str()).unwrap();
+        assert_eq!(pushed.action, "execute");
+        assert!(
+            pushed.workflow_id.is_some(),
+            "pushed execute must carry a workflow_id"
+        );
+    }
 }

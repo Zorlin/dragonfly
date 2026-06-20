@@ -155,3 +155,5 @@ minijinja-embed = "2.3.0"
 [dev-dependencies]
 tempfile = "3.8"
 serial_test = "3.0"
+# WebSocket client for agent push integration tests.
+tokio-tungstenite = { version = "0.27" }
