@@ -6482,39 +6482,13 @@ async fn reimage_machine(
         workflow_id, id, os_choice
     );
 
-    // Convert to common Machine for Proxmox reboot
-    let machine: Machine = crate::store::conversions::machine_to_common(&v1_machine);
-
-    // Emit machine updated event
+    // Emit machine updated event. This is the imaging trigger: an agent already
+    // in Mage receives the reimage over the push channel, and Spark (via its
+    // idle re-check) picks it up on the next check-in. We deliberately do NOT
+    // reboot here — `qm reboot` on a guest without qemu-guest-agent is an ACPI
+    // reboot the guest ignores, so PVE blocks that VMID's API until the reboot
+    // times out; a forced net-boot only matters for bare metal (IPMI), not VMs.
     let _ = state.event_manager.send(format!("machine_updated:{}", id));
-
-    // If this is a Proxmox VM, reboot it into PXE boot mode
-    if machine.proxmox_vmid.is_some() && machine.proxmox_node.is_some() {
-        info!("Rebooting Proxmox VM {} for reimage", id);
-        // Create a request to reboot into PXE
-        let power_action = crate::handlers::machines::BmcPowerActionRequest {
-            action: "reboot-pxe".to_string(),
-        };
-
-        // Call the power action handler
-        match crate::handlers::machines::bmc_power_action_handler(
-            State(state.clone()),
-            Path(id),
-            Json(power_action),
-        )
-        .await
-        {
-            Ok(_) => {
-                info!("Successfully initiated PXE reboot for Proxmox VM {}", id);
-            }
-            Err(e) => {
-                // Log the error but continue - machine state is updated, just reboot failed
-                error!("Failed to reboot Proxmox VM {}: {:?}", id, e);
-            }
-        }
-    } else {
-        info!("Machine {} is not a Proxmox VM, skipping reboot", id);
-    }
 
     // Return success response
     let response_html = format!(
