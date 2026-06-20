@@ -139,31 +139,41 @@ pub fn read_base_url_from_config() -> Option<String> {
     None
 }
 
-/// Derive the agent WebSocket push URL to emit in iPXE when push is enabled.
+/// Derive the agent WebSocket push URL to emit in iPXE.
 ///
-/// Enabled by `DRAGONFLY_AGENT_WS=1` (or any truthy value). When enabled, the
-/// agent URL is the base URL with its scheme swapped to `ws://` (from `http://`)
-/// or `wss://` (from `https://`), so Mage boots opt into the WebSocket push
-/// channel. Returns None when disabled — iPXE then emits the plain `http://`
-/// base URL and the agent polls as before.
+/// Push is **on by default**: the agent URL is the base URL with its scheme
+/// swapped to `ws://` (from `http://`) or `wss://` (from `https://`), so Mage
+/// boots opt into the WebSocket push channel automatically. Opt out by setting
+/// `DRAGONFLY_DISABLE_AGENT_WS=1` (or any truthy value); iPXE then emits the
+/// plain `http://` base URL and the agent polls as before.
 fn agent_ws_url(base_url: &str) -> Option<String> {
-    let enabled = std::env::var("DRAGONFLY_AGENT_WS")
-        .ok()
-        .map(|v| {
-            let v = v.trim().to_ascii_lowercase();
-            !v.is_empty() && v != "0" && v != "false" && v != "no" && v != "off"
-        })
-        .unwrap_or(false);
-    if !enabled {
+    if agent_ws_disabled(std::env::var("DRAGONFLY_DISABLE_AGENT_WS").ok().as_deref()) {
         return None;
     }
-    Some(
-        base_url
-            .strip_prefix("https://")
-            .map(|r| format!("wss://{r}"))
-            .or_else(|| base_url.strip_prefix("http://").map(|r| format!("ws://{r}")))
-            .unwrap_or_else(|| base_url.to_string()),
-    )
+    Some(swap_to_ws(base_url))
+}
+
+/// Truthiness of the `DRAGONFLY_DISABLE_AGENT_WS` opt-out flag.
+///
+/// `None`/empty/`0`/`false`/`no`/`off` => push stays **on** (the default);
+/// anything else => push disabled. Kept pure so the default is unit-testable.
+fn agent_ws_disabled(env_value: Option<&str>) -> bool {
+    match env_value {
+        Some(v) => {
+            let v = v.trim().to_ascii_lowercase();
+            !v.is_empty() && v != "0" && v != "false" && v != "no" && v != "off"
+        }
+        None => false,
+    }
+}
+
+/// Swap an http(s) base URL to the ws(s) equivalent for the agent channel.
+fn swap_to_ws(base_url: &str) -> String {
+    base_url
+        .strip_prefix("https://")
+        .map(|r| format!("wss://{r}"))
+        .or_else(|| base_url.strip_prefix("http://").map(|r| format!("ws://{r}")))
+        .unwrap_or_else(|| base_url.to_string())
 }
 
 // Stub function to check installation status (Replace with real check later)
@@ -1182,10 +1192,16 @@ pub async fn run() -> anyhow::Result<()> {
         // Get boot server URL with auto-detection (env var > SQLite > auto-detect > localhost)
         let boot_server_url = mode::get_base_url(Some(store.as_ref())).await;
         info!("Using boot server URL: {}", boot_server_url);
-        // Optionally expose the agent push channel by emitting dragonfly.url as ws://
+        // Agent push channel: on by default (emits dragonfly.url as ws://).
         let agent_url = agent_ws_url(&boot_server_url);
-        if let Some(ref u) = agent_url {
-            info!("Agent WebSocket push enabled, emitting dragonfly.url={}", u);
+        match agent_url.as_ref() {
+            Some(u) => info!(
+                "Agent WebSocket push enabled (on by default), emitting dragonfly.url={}",
+                u
+            ),
+            None => info!(
+                "Agent WebSocket push disabled via DRAGONFLY_DISABLE_AGENT_WS; agent will poll"
+            ),
         }
 
         // Build iPXE configuration
@@ -1533,3 +1549,36 @@ pub mod test_helpers;
 
 #[cfg(test)]
 pub use test_helpers::create_test_app_state;
+
+#[cfg(test)]
+mod agent_ws_tests {
+    use super::*;
+
+    #[test]
+    fn push_is_on_by_default() {
+        // No opt-out flag (or a falsy one) => push stays ON — the sane default.
+        assert!(!agent_ws_disabled(None));
+        assert!(!agent_ws_disabled(Some("")));
+        assert!(!agent_ws_disabled(Some("0")));
+        assert!(!agent_ws_disabled(Some("false")));
+        assert!(!agent_ws_disabled(Some("no")));
+        assert!(!agent_ws_disabled(Some("off")));
+    }
+
+    #[test]
+    fn push_can_be_disabled() {
+        assert!(agent_ws_disabled(Some("1")));
+        assert!(agent_ws_disabled(Some("true")));
+        assert!(agent_ws_disabled(Some("yes")));
+        assert!(agent_ws_disabled(Some("on")));
+        assert!(agent_ws_disabled(Some("  TRUE  ")));
+    }
+
+    #[test]
+    fn swap_to_ws_scheme() {
+        assert_eq!(swap_to_ws("http://10.7.1.100:3000"), "ws://10.7.1.100:3000");
+        assert_eq!(swap_to_ws("https://dragonfly.example"), "wss://dragonfly.example");
+        // Unknown scheme passes through unchanged (agent then treats it as http).
+        assert_eq!(swap_to_ws("foo://x"), "foo://x");
+    }
+}
