@@ -7,6 +7,11 @@ use crate::disk::OsInfo;
 use crate::font;
 use crate::framebuffer::{self, colors};
 use crate::bios;
+use crate::chainload;
+use crate::cmdline;
+use crate::http;
+use crate::net;
+use crate::serial;
 use smoltcp::wire::Ipv4Address;
 
 /// Menu choices - all possible actions from the menu system
@@ -185,6 +190,11 @@ fn draw_main_menu(os: Option<&OsInfo>, width: u32, height: u32, _has_net: bool, 
         }
     }
 
+    // Idle recheck cadence: how often (while parked at this menu) we re-check-in
+    // with the server so a reimage/reboot is noticed without a keypress.
+    let mut last_check_millis = net::now().total_millis();
+    let idle_check_ms = i64::from(cmdline::params().idle_check_secs) * 1000;
+
     loop {
         // Check for keypress
         if let Some(scancode) = bios::read_scancode() {
@@ -210,6 +220,38 @@ fn draw_main_menu(os: Option<&OsInfo>, width: u32, height: u32, _has_net: bool, 
                     stack.freeze_dhcp();
                     draw_ip_footer(width, height, ip);
                     ip_displayed = true;
+                }
+            }
+        }
+
+        // Bounded idle recheck: a machine parked at this menu notices a
+        // server-assigned reimage/reboot without a manual keypress. This is the
+        // only way to wake on no_std bare metal (interrupts are disabled), and it
+        // is scoped to this idle state only.
+        if ip_displayed {
+            let now = net::now().total_millis();
+            if now.saturating_sub(last_check_millis) >= idle_check_ms {
+                last_check_millis = now;
+                if let Some(stack) = net_stack.as_mut() {
+                    let (server_ip, server_port) = crate::resolve_server(stack);
+                    let mac = stack.device.mac_address();
+                    if let Some(response) =
+                        http::checkin(stack, server_ip, server_port, &mac, os)
+                    {
+                        match response.action {
+                            http::AgentAction::Execute => {
+                                serial::println(
+                                    "Idle recheck: server assigned imaging, booting Mage",
+                                );
+                                chainload::boot_imaging();
+                            }
+                            http::AgentAction::Reboot => {
+                                serial::println("Idle recheck: server requested reboot");
+                                bios::reboot();
+                            }
+                            _ => {} // Wait/LocalBoot: stay in the menu
+                        }
+                    }
                 }
             }
         }

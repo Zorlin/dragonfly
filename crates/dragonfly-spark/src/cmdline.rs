@@ -17,6 +17,8 @@ pub struct BootParams {
     pub server_port: u16,
     /// Whether server was specified
     pub has_server: bool,
+    /// Seconds between idle-menu rechecks (prompt reimage pickup while parked)
+    pub idle_check_secs: u16,
 }
 
 impl Default for BootParams {
@@ -25,6 +27,7 @@ impl Default for BootParams {
             server_ip: [0, 0, 0, 0],
             server_port: 3000, // Default port
             has_server: false,
+            idle_check_secs: 5,
         }
     }
 }
@@ -34,6 +37,7 @@ static mut BOOT_PARAMS: BootParams = BootParams {
     server_ip: [0, 0, 0, 0],
     server_port: 3000,
     has_server: false,
+    idle_check_secs: 5,
 };
 
 /// Parse multiboot2 info to extract command line
@@ -176,6 +180,23 @@ fn parse_params(cmdline: &str) {
                     serial::print_dec(port as u32);
                 }
             }
+            serial::println("");
+        }
+    }
+
+    // Parse idle_check_secs (Spark's idle-menu recheck interval)
+    if let Some(start) = cmdline.find("idle_check_secs=") {
+        let value_start = start + "idle_check_secs=".len();
+        let value_end = cmdline[value_start..]
+            .find(|c: char| c.is_whitespace())
+            .map(|i| value_start + i)
+            .unwrap_or(cmdline.len());
+        if let Some(secs) = parse_u16(&cmdline[value_start..value_end]) {
+            unsafe {
+                BOOT_PARAMS.idle_check_secs = secs;
+            }
+            serial::print("Parsed idle_check_secs: ");
+            serial::print_dec(secs as u32);
             serial::println("");
         }
     }

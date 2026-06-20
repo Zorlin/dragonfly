@@ -39,6 +39,12 @@ pub struct IpxeConfig {
     /// Base URL for fetching resources (e.g., http://192.168.1.1:8080)
     pub base_url: String,
 
+    /// Optional agent push URL emitted as `dragonfly.url` in the iPXE kernel
+    /// cmdline (e.g. `ws://host:3000`). When set, Mage boots opt into the
+    /// WebSocket push channel instead of HTTP polling. Asset downloads still
+    /// use `base_url`. When None, `dragonfly.url` falls back to `base_url`.
+    pub agent_url: Option<String>,
+
     /// Spark ELF URL (multiboot2 binary for initial boot)
     pub spark_url: Option<String>,
 
@@ -68,6 +74,7 @@ impl Default for IpxeConfig {
     fn default() -> Self {
         Self {
             base_url: String::new(),
+            agent_url: None,
             spark_url: None,
             kernel_params: Vec::new(),
             console: None,
@@ -516,7 +523,10 @@ boot
         }
 
         // Dragonfly parameters
-        params.push(format!("dragonfly.url={}", self.config.base_url));
+        params.push(format!(
+            "dragonfly.url={}",
+            self.config.agent_url.as_deref().unwrap_or(&self.config.base_url)
+        ));
         params.push(format!("dragonfly.mode={}", mode));
         params.push("dragonfly.mac=${mac}".to_string());
 
@@ -560,7 +570,10 @@ boot
         }
 
         // Dragonfly parameters
-        params.push(format!("dragonfly.url={}", self.config.base_url));
+        params.push(format!(
+            "dragonfly.url={}",
+            self.config.agent_url.as_deref().unwrap_or(&self.config.base_url)
+        ));
         params.push(format!("dragonfly.mode={}", mode));
         params.push("dragonfly.mac=${mac}".to_string());
 
@@ -787,6 +800,34 @@ mod tests {
         // Should NOT have Alpine-specific params
         assert!(!params.contains("alpine_repo"));
         assert!(!params.contains("modules=loop"));
+    }
+
+    #[test]
+    fn test_agent_url_emitted_when_set() {
+        // When agent_url is set, iPXE emits it as dragonfly.url so Mage opts
+        // into the WebSocket push channel (ws:// instead of http://).
+        let mut config = test_config();
+        config.agent_url = Some("ws://10.0.0.1:3000".to_string());
+        let params = IpxeScriptGenerator::new(config).debian_kernel_params(None, "imaging");
+        assert!(
+            params.contains("dragonfly.url=ws://10.0.0.1:3000"),
+            "agent_url must be emitted as dragonfly.url: {params}"
+        );
+    }
+
+    #[test]
+    fn test_agent_url_falls_back_to_base_url() {
+        // Without agent_url, dragonfly.url falls back to the http base_url so
+        // the agent keeps polling (no behavior change when push is disabled).
+        let params = IpxeScriptGenerator::new(test_config()).debian_kernel_params(None, "imaging");
+        assert!(
+            params.contains("dragonfly.url=http://"),
+            "fallback must be the http base_url: {params}"
+        );
+        assert!(
+            !params.contains("dragonfly.url=ws://"),
+            "push must be off by default: {params}"
+        );
     }
 
     #[test]

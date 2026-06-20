@@ -262,6 +262,7 @@ pub fn api_router() -> Router<crate::AppState> {
         .route("/tags/{tag_name}/machines", get(api_get_machines_by_tag))
         // --- Agent Routes ---
         .route("/agent/checkin", post(agent_checkin_handler))
+        .route("/agent/ws", get(crate::agent_ws::agent_ws_handler))
         .route(
             "/agent/request-install",
             post(agent_request_install_handler),
@@ -1277,6 +1278,13 @@ async fn assign_os_internal(app_state: &AppState, id: Uuid, os_choice: String) -
     // Save back to store
     match app_state.store.put_machine(&machine).await {
         Ok(()) => {
+            // Notify subscribers (UI + connected agent WebSockets) that this
+            // machine's intent may have changed. Without this, assigning an OS to
+            // an idle machine never triggers a push, so a Mage agent on the
+            // WebSocket path would not pick it up until its next poll.
+            let _ = app_state
+                .event_manager
+                .send(format!("machine_updated:{}", id));
             let html = if os_choice.is_empty() {
                 format!(
                     r###"

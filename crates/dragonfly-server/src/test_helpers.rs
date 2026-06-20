@@ -6,8 +6,11 @@ use crate::auth::Settings;
 use crate::event_manager::EventManager;
 use crate::ha;
 use crate::image_cache::ImageCache;
+use crate::mode::DeploymentMode;
+use crate::provisioning::ProvisioningService;
 use crate::store::v1::MemoryStore;
 use crate::{AppState, TemplateEnv};
+use dragonfly_ipxe::IpxeConfig;
 use minijinja::Environment;
 use std::collections::HashMap;
 use std::sync::{Arc, atomic::AtomicBool};
@@ -74,6 +77,22 @@ pub async fn create_test_app_state() -> AppState {
 pub async fn create_test_api_router() -> axum::Router {
     let app_state = create_test_app_state().await;
     crate::api::api_router().with_state(app_state)
+}
+
+/// Create a test AppState with the native provisioning service enabled.
+///
+/// `create_test_app_state` leaves `provisioning: None`, which makes
+/// `/api/agent/checkin` and `/api/agent/ws` return 503. Anything exercising the
+/// agent checkin/push path needs this variant.
+pub async fn create_test_app_state_with_provisioning() -> AppState {
+    let mut state = create_test_app_state().await;
+    let provisioning = Arc::new(ProvisioningService::new(
+        state.store.clone(),
+        IpxeConfig::new("http://localhost:3000"),
+        DeploymentMode::Simple,
+    ));
+    state.provisioning = Some(provisioning);
+    state
 }
 
 #[cfg(test)]
