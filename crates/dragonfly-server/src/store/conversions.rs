@@ -453,6 +453,23 @@ pub fn apply_machine_update(machine: &mut Machine, req: UpdateMachineRequest) {
         // Update displayed IP to match the configured static address
         machine.status.current_ip = Some(static_ipv4.address.clone());
         machine.config.static_ipv4 = Some(static_ipv4);
+        // A configured static IPv4 address is meaningless under a DHCP mode:
+        // `generate_network_config` switches on `network_mode` first and would
+        // emit DHCP, silently dropping the address. Promote DHCP modes to
+        // StaticIpv4 so the configured address actually reaches cloud-init.
+        // Explicitly static modes (StaticIpv4/StaticIpv6/StaticDualStack) are
+        // left untouched.
+        if matches!(
+            machine.config.network_mode,
+            dragonfly_common::NetworkMode::Dhcp | dragonfly_common::NetworkMode::DhcpStaticDns
+        ) {
+            snapshot_and_mark(
+                machine,
+                "network_mode",
+                serde_json::json!(machine.config.network_mode),
+            );
+            machine.config.network_mode = dragonfly_common::NetworkMode::StaticIpv4;
+        }
     }
     if let Some(static_ipv6) = req.static_ipv6 {
         snapshot_and_mark(
@@ -829,6 +846,7 @@ pub fn source_from_register_request(req: &CommonRegisterRequest) -> Option<Machi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dragonfly_common::{NetworkMode, StaticIpConfig};
 
     fn sample_register_request() -> CommonRegisterRequest {
         CommonRegisterRequest {
@@ -845,6 +863,91 @@ mod tests {
             proxmox_cluster: None,
             proxmox_type: None,
         }
+    }
+
+    /// An `UpdateMachineRequest` with every field unset — a clean base for
+    /// partial-update tests.
+    fn empty_update_request() -> UpdateMachineRequest {
+        UpdateMachineRequest {
+            hostname: None,
+            memorable_name: None,
+            ip_address: None,
+            os_choice: None,
+            tags: None,
+            status: None,
+            network_mode: None,
+            static_ipv4: None,
+            static_ipv6: None,
+            nameservers: None,
+            domain: None,
+            network_id: None,
+            cpu_cores: None,
+            total_ram_bytes: None,
+            primary_interface: None,
+        }
+    }
+
+    fn sample_machine() -> Machine {
+        Machine::new(MachineIdentity::from_mac("00:11:22:33:44:55"))
+    }
+
+    fn static_v4(addr: &str) -> StaticIpConfig {
+        StaticIpConfig {
+            address: addr.to_string(),
+            prefix_len: 24,
+            gateway: Some("10.7.1.1".to_string()),
+        }
+    }
+
+    #[test]
+    fn static_ipv4_update_promotes_default_dhcp_to_static() {
+        // A fresh machine defaults to DHCP.
+        let mut machine = sample_machine();
+        assert_eq!(machine.config.network_mode, NetworkMode::Dhcp);
+
+        // Apply a static IPv4 address with no explicit network_mode.
+        let req = UpdateMachineRequest {
+            static_ipv4: Some(static_v4("10.7.1.55")),
+            ..empty_update_request()
+        };
+        apply_machine_update(&mut machine, req);
+
+        // The address must not be silently dropped by the DHCP mode.
+        assert_eq!(machine.config.network_mode, NetworkMode::StaticIpv4);
+        assert_eq!(
+            machine.config.static_ipv4.as_ref().unwrap().address,
+            "10.7.1.55"
+        );
+    }
+
+    #[test]
+    fn static_ipv4_update_leaves_explicit_static_modes_alone() {
+        // An explicitly static mode must not be clobbered by a v4 address.
+        let mut machine = sample_machine();
+        machine.config.network_mode = NetworkMode::StaticDualStack;
+
+        let req = UpdateMachineRequest {
+            static_ipv4: Some(static_v4("10.7.1.55")),
+            ..empty_update_request()
+        };
+        apply_machine_update(&mut machine, req);
+
+        assert_eq!(machine.config.network_mode, NetworkMode::StaticDualStack);
+    }
+
+    #[test]
+    fn static_ipv4_update_overrides_a_dhcp_mode_in_the_same_request() {
+        // A contradictory request (DHCP mode + a static address) must honour the
+        // explicit address rather than silently dropping it.
+        let mut machine = sample_machine();
+        let req = UpdateMachineRequest {
+            network_mode: Some(NetworkMode::Dhcp),
+            static_ipv4: Some(static_v4("10.7.1.55")),
+            ..empty_update_request()
+        };
+        apply_machine_update(&mut machine, req);
+
+        assert_eq!(machine.config.network_mode, NetworkMode::StaticIpv4);
     }
 
     #[test]
