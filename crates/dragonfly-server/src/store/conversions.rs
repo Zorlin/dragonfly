@@ -792,39 +792,103 @@ pub fn machine_from_register_request(req: &CommonRegisterRequest) -> Machine {
     };
 
     // Set Proxmox source based on type
-    match req.proxmox_type.as_deref() {
-        Some("lxc") => {
-            if let Some(ctid) = req.proxmox_vmid {
-                machine.metadata.source = MachineSource::ProxmoxLxc {
-                    cluster: req.proxmox_cluster.clone().unwrap_or_default(),
-                    node: req.proxmox_node.clone().unwrap_or_default(),
-                    ctid,
-                };
-            }
-        }
-        Some("node") => {
-            machine.metadata.source = MachineSource::ProxmoxNode {
-                cluster: req.proxmox_cluster.clone().unwrap_or_default(),
-                node: req.proxmox_node.clone().unwrap_or_default(),
-            };
-        }
-        _ => {
-            if let Some(vmid) = req.proxmox_vmid {
-                machine.metadata.source = MachineSource::Proxmox {
-                    cluster: req.proxmox_cluster.clone().unwrap_or_default(),
-                    node: req.proxmox_node.clone().unwrap_or_default(),
-                    vmid,
-                };
-            }
-        }
+    if let Some(source) = source_from_register_request(req) {
+        machine.metadata.source = source;
     }
 
     machine
 }
 
+/// Build the machine source from a registration request's Proxmox fields.
+///
+/// Returns `None` when no Proxmox VM ID is present (so a bare re-register
+/// doesn't clobber an existing source). Shared by `machine_from_register_request`
+/// (new machines) and the register endpoint's update path (existing machines),
+/// so unauthenticated registration can carry a Proxmox VM ID on both paths —
+/// the open-registration threat model (a Dragon Key LOTO-style gate is the
+/// later lockdown, not an admin token).
+pub fn source_from_register_request(req: &CommonRegisterRequest) -> Option<MachineSource> {
+    match req.proxmox_type.as_deref() {
+        Some("lxc") => req.proxmox_vmid.map(|ctid| MachineSource::ProxmoxLxc {
+            cluster: req.proxmox_cluster.clone().unwrap_or_default(),
+            node: req.proxmox_node.clone().unwrap_or_default(),
+            ctid,
+        }),
+        Some("node") => Some(MachineSource::ProxmoxNode {
+            cluster: req.proxmox_cluster.clone().unwrap_or_default(),
+            node: req.proxmox_node.clone().unwrap_or_default(),
+        }),
+        _ => req.proxmox_vmid.map(|vmid| MachineSource::Proxmox {
+            cluster: req.proxmox_cluster.clone().unwrap_or_default(),
+            node: req.proxmox_node.clone().unwrap_or_default(),
+            vmid,
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample_register_request() -> CommonRegisterRequest {
+        CommonRegisterRequest {
+            mac_address: "00:11:22:33:44:55".to_string(),
+            ip_address: "10.7.1.55".to_string(),
+            hostname: None,
+            disks: Vec::new(),
+            nameservers: Vec::new(),
+            cpu_model: None,
+            cpu_cores: None,
+            total_ram_bytes: None,
+            proxmox_vmid: None,
+            proxmox_node: None,
+            proxmox_cluster: None,
+            proxmox_type: None,
+        }
+    }
+
+    #[test]
+    fn source_from_register_request_proxmox_vm() {
+        let mut req = sample_register_request();
+        req.proxmox_type = Some("vm".to_string());
+        req.proxmox_vmid = Some(106);
+        req.proxmox_node = Some("pve1".to_string());
+        req.proxmox_cluster = Some("london".to_string());
+        match source_from_register_request(&req) {
+            Some(MachineSource::Proxmox { cluster, node, vmid }) => {
+                assert_eq!(cluster, "london");
+                assert_eq!(node, "pve1");
+                assert_eq!(vmid, 106);
+            }
+            other => panic!("expected Proxmox, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn source_from_register_request_none_without_vmid() {
+        // No proxmox fields -> None (so updates don't clobber an existing source).
+        assert!(source_from_register_request(&sample_register_request()).is_none());
+        // type "vm" but no vmid -> still None.
+        let mut req = sample_register_request();
+        req.proxmox_type = Some("vm".to_string());
+        assert!(source_from_register_request(&req).is_none());
+    }
+
+    #[test]
+    fn source_from_register_request_lxc_and_node() {
+        let mut req = sample_register_request();
+        req.proxmox_type = Some("lxc".to_string());
+        req.proxmox_vmid = Some(200);
+        assert!(matches!(
+            source_from_register_request(&req),
+            Some(MachineSource::ProxmoxLxc { ctid: 200, .. })
+        ));
+        req.proxmox_type = Some("node".to_string());
+        assert!(matches!(
+            source_from_register_request(&req),
+            Some(MachineSource::ProxmoxNode { .. })
+        ));
+    }
 
     #[test]
     fn test_machine_to_response() {
