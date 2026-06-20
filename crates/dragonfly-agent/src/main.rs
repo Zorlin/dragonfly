@@ -1410,3 +1410,34 @@ fn get_ip_from_default_route_interface() -> Result<Option<String>> {
 
     Ok(None) // No default route found or couldn't parse it
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_server_url_converts_ws_to_http_base() {
+        // ws:// opts into the push channel; HTTP calls (checkin, workflow fetch)
+        // go to the scheme-swapped base so reqwest never sees a ws:// URL.
+        let (http, ws) = split_server_url("ws://10.7.1.100:3000");
+        assert_eq!(http, "http://10.7.1.100:3000");
+        assert_eq!(ws.as_deref(), Some("ws://10.7.1.100:3000"));
+
+        let (https, wss) = split_server_url("wss://dragonfly.example");
+        assert_eq!(https, "https://dragonfly.example");
+        assert_eq!(wss.as_deref(), Some("wss://dragonfly.example"));
+    }
+
+    #[test]
+    fn split_server_url_passes_http_through_unchanged() {
+        // A non-WS URL leaves the base unchanged and yields no ws base, so the
+        // agent keeps using the HTTP poll.
+        let (http, ws) = split_server_url("http://10.7.1.100:3000");
+        assert_eq!(http, "http://10.7.1.100:3000");
+        assert!(ws.is_none());
+
+        let (https, wss) = split_server_url("https://dragonfly.example");
+        assert_eq!(https, "https://dragonfly.example");
+        assert!(wss.is_none());
+    }
+}
