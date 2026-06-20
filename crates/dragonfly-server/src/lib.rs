@@ -139,6 +139,33 @@ pub fn read_base_url_from_config() -> Option<String> {
     None
 }
 
+/// Derive the agent WebSocket push URL to emit in iPXE when push is enabled.
+///
+/// Enabled by `DRAGONFLY_AGENT_WS=1` (or any truthy value). When enabled, the
+/// agent URL is the base URL with its scheme swapped to `ws://` (from `http://`)
+/// or `wss://` (from `https://`), so Mage boots opt into the WebSocket push
+/// channel. Returns None when disabled — iPXE then emits the plain `http://`
+/// base URL and the agent polls as before.
+fn agent_ws_url(base_url: &str) -> Option<String> {
+    let enabled = std::env::var("DRAGONFLY_AGENT_WS")
+        .ok()
+        .map(|v| {
+            let v = v.trim().to_ascii_lowercase();
+            !v.is_empty() && v != "0" && v != "false" && v != "no" && v != "off"
+        })
+        .unwrap_or(false);
+    if !enabled {
+        return None;
+    }
+    Some(
+        base_url
+            .strip_prefix("https://")
+            .map(|r| format!("wss://{r}"))
+            .or_else(|| base_url.strip_prefix("http://").map(|r| format!("ws://{r}")))
+            .unwrap_or_else(|| base_url.to_string()),
+    )
+}
+
 // Stub function to check installation status (Replace with real check later)
 // Checks environment variable DRAGONFLY_FORCE_INSTALLED=true for testing
 // Also checks for /var/lib/dragonfly and dragonfly StatefulSet status
@@ -1155,10 +1182,16 @@ pub async fn run() -> anyhow::Result<()> {
         // Get boot server URL with auto-detection (env var > SQLite > auto-detect > localhost)
         let boot_server_url = mode::get_base_url(Some(store.as_ref())).await;
         info!("Using boot server URL: {}", boot_server_url);
+        // Optionally expose the agent push channel by emitting dragonfly.url as ws://
+        let agent_url = agent_ws_url(&boot_server_url);
+        if let Some(ref u) = agent_url {
+            info!("Agent WebSocket push enabled, emitting dragonfly.url={}", u);
+        }
 
         // Build iPXE configuration
         let ipxe_config = dragonfly_ipxe::IpxeConfig {
             base_url: boot_server_url,
+            agent_url,
             spark_url: std::env::var("DRAGONFLY_SPARK_URL").ok(),
             mage_kernel_url: std::env::var("DRAGONFLY_MAGE_KERNEL_URL").ok(),
             mage_initramfs_url: std::env::var("DRAGONFLY_MAGE_INITRAMFS_URL").ok(),
