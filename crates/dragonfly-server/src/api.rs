@@ -832,6 +832,14 @@ async fn register_machine(
         }
         machine.metadata.updated_at = chrono::Utc::now();
 
+        // Honor a Proxmox source carried on the open registration path so that
+        // re-registering an already-known MAC links it to its Proxmox VM (and
+        // thus reimage can reboot-pxe it). Only set when proxmox fields are
+        // present — don't clobber an existing source on a bare re-register.
+        if let Some(source) = crate::store::conversions::source_from_register_request(&payload) {
+            machine.metadata.source = source;
+        }
+
         if let Err(e) = state.store.put_machine(&machine).await {
             error!("Failed to update existing machine: {}", e);
             return (
