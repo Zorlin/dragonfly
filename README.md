@@ -49,6 +49,26 @@ More features:
 - 🩻 Introspection - view details of your machines,
   including hardware, OS, and network configuration.
 - 🔍 Search - find any machine by name, tag, or ID.
+- ⚡ Near-instant reimage pickup — agents receive intents over a WebSocket push channel the moment they're set, instead of polling.
+
+## ⚡ Agent push channel
+
+The Mage agent holds a persistent WebSocket to the server and receives reimage
+and OS-assign intents the moment they're set — near-instant pickup with no
+polling in steady state (it previously polled every 30s). It's **on by
+default**: iPXE emits `dragonfly.url` as `ws://` (or `wss://`), so every Mage
+netboot uses the channel automatically.
+
+To opt out and fall back to the 30s HTTP poll, set one variable on the **server**:
+
+    DRAGONFLY_DISABLE_AGENT_WS=1
+
+Spark (the no_std bare-metal agent) can't hold a WebSocket, so a machine parked
+at Spark's "No OS" menu instead re-checks-in on a short loop and notices a
+reimage without a manual reboot. That interval is a multiboot cmdline parameter,
+default 5s:
+
+    idle_check_secs=5
 
 ## 🛣️ Roadmap
 
