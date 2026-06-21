@@ -1529,6 +1529,29 @@ pub async fn run() -> anyhow::Result<()> {
         });
     };
 
+    // TCP keepalive + NODELAY on every accepted connection.
+    //
+    // Keepalive is the *correct* dead-peer detector: it probes the socket and
+    // only closes it when the peer is truly unresponsive (no ACKs). A slow
+    // client (e.g. BIOS iPXE on a contended box) still ACKs, so it is never
+    // harmed — unlike a progress-based stall timeout, which cannot tell "slow"
+    // from "dead" and aborts healthy-but-slow transfers mid-download. Stalled
+    // in-flight streams are reaped by TCP retransmission; idle-vanished peers
+    // are reaped here (~60s idle + a few probes), not after the OS default of
+    // hours.
+    use axum::serve::ListenerExt;
+    let listener = listener.tap_io(|stream| {
+        let keepalive = socket2::TcpKeepalive::new()
+            .with_time(std::time::Duration::from_secs(60))
+            .with_interval(std::time::Duration::from_secs(15));
+        if let Err(e) = socket2::SockRef::from(&*stream).set_tcp_keepalive(&keepalive) {
+            debug!(error = %e, "failed to set TCP keepalive on incoming connection");
+        }
+        if let Err(e) = stream.set_nodelay(true) {
+            debug!(error = %e, "failed to set TCP_NODELAY on incoming connection");
+        }
+    });
+
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),

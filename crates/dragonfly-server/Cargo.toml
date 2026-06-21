@@ -37,6 +37,7 @@ uuid = { version = "1.8.0", features = ["v4", "v5", "v7", "serde"] }
 tower = { version = "0.4", features = ["util"] }
 tower-http = { version = "0.5.0", features = ["fs", "trace", "cors"] }
 tokio = { version = "1.36.0", features = ["full"] }
+socket2 = { version = "0.5", features = ["all"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures = "0.3"
 serde = { version = "1.0", features = ["derive"] }
@@ -154,9 +155,6 @@ minijinja-embed = "2.3.0"
 
 [dev-dependencies]
 tempfile = "3.8"
-# tokio test-util: paused-clock (`start_paused`) + `time::advance` for testing
-# stall/timeout behaviour without real sleeps.
-tokio = { version = "1.36.0", features = ["test-util", "macros", "rt-multi-thread", "time"] }
 serial_test = "3.0"
 # WebSocket client for integration tests (agent push + events stream).
 tokio-tungstenite = { version = "0.27" }
