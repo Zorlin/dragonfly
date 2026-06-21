@@ -682,51 +682,37 @@ async fn sync_proxmox_machines(
     Ok(())
 }
 
-/// Apply a Proxmox QEMU VM's API status to a machine, returning whether
-/// anything changed. A `running` VM is marked `Installed` and — if it wasn't
-/// already — the install is *completed* (`os_installed` set from `os_choice`,
-/// `os_choice` cleared, progress 100) so the mark is whole and
-/// `reimage_machine`'s OS fallback has something to work with (#26). Without
-/// this, a VM marked `Installed` only by the sync daemon (the pre-reboot
-/// workflow-event notification was lost) had `os_installed = None`, so Jetpack's
-/// `is_installed()` and the reimage OS-resolution both missed it.
+/// Apply a Proxmox QEMU VM's power state to a machine, returning whether
+/// anything changed.
+///
+/// Proxmox is the source of truth for **power** state only. A QEMU VM's install
+/// state (`Installed`) is owned by the imaging workflow and set the instant its
+/// reboot/kexec action starts — the pre-boot-agent handoff into the finished OS
+/// (see the `action_started` handler in `api.rs`). Proxmox `"running"` just means
+/// powered-on: the VM could be in the install environment, mid-install, or
+/// already booted into the installed OS. Mapping `"running"` → `Installed`
+/// (the #26 regression) conflated power with install and let Jetpack's
+/// idempotent re-run reimage freshly-built nodes.
+///
+/// So this reflects power-off only (`stopped` → `Offline`). It never asserts
+/// `Installed`, never completes the install mark, and never touches `os_choice`
+/// / `os_installed` / `installation_progress`. (LXC containers are different —
+/// a container *is* its OS, so `running` → `Installed` is correct for them and
+/// is handled in the LXC branch.)
 fn apply_proxmox_vm_state(machine: &mut dragonfly_common::Machine, api_status: &str) -> bool {
     use dragonfly_common::MachineState;
-    let new_state = match api_status {
-        "running" => MachineState::Installed,
-        "stopped" => MachineState::Offline,
-        _ => MachineState::ExistingOs {
-            os_name: "Proxmox VM".to_string(),
-        },
-    };
-    let becoming_installed = matches!(new_state, MachineState::Installed);
-    let mut changed = false;
-    if machine.status.state != new_state {
-        info!(
-            "Sync: machine {} status {:?} → {:?}",
-            machine.id, machine.status.state, new_state
-        );
-        machine.status.state = new_state;
-        changed = true;
+    if api_status != "stopped" {
+        return false;
     }
-    // Complete the Installed mark: a running VM has finished booting its
-    // (installed) OS, so record what we installed if we haven't yet.
-    if becoming_installed {
-        if machine.config.os_installed.is_none() && machine.config.os_choice.is_some() {
-            machine.config.os_installed = machine.config.os_choice.take();
-            info!(
-                "Sync: machine {} completed Installed mark (os_installed={})",
-                machine.id,
-                machine.config.os_installed.as_deref().unwrap_or("?")
-            );
-            changed = true;
-        }
-        if machine.config.installation_progress != 100 {
-            machine.config.installation_progress = 100;
-            changed = true;
-        }
+    if matches!(machine.status.state, MachineState::Offline) {
+        return false;
     }
-    changed
+    info!(
+        "Sync: machine {} powered off (Proxmox: stopped) → Offline",
+        machine.id
+    );
+    machine.status.state = MachineState::Offline;
+    true
 }
 
 #[cfg(test)]
@@ -742,41 +728,44 @@ mod tests {
     }
 
     #[test]
-    fn running_vm_completes_the_installed_mark() {
+    fn running_vm_is_never_marked_installed() {
+        // The #26 regression mapped Proxmox "running" → Installed. A VM that is
+        // powered on but mid-install (Initializing) must stay mid-install — the
+        // reboot/kexec action_started handoff owns the Installed mark, not power
+        // state. Sync must not touch the install mark either.
         let mut m = vm(MachineState::Initializing, Some("debian-13"));
-        assert!(apply_proxmox_vm_state(&mut m, "running"));
-        assert_eq!(m.status.state, MachineState::Installed);
-        assert_eq!(m.config.os_installed.as_deref(), Some("debian-13"));
-        assert_eq!(m.config.os_choice, None);
-        assert_eq!(m.config.installation_progress, 100);
+        assert!(!apply_proxmox_vm_state(&mut m, "running"));
+        assert_eq!(m.status.state, MachineState::Initializing);
+        assert_eq!(m.config.os_installed, None);
+        assert_eq!(m.config.os_choice.as_deref(), Some("debian-13"));
+        assert_eq!(m.config.installation_progress, 0);
     }
 
     #[test]
-    fn already_installed_running_vm_is_idempotent() {
+    fn running_does_not_overwrite_an_installed_vm() {
+        // A genuinely Installed VM (marked by the agent handoff) that is running
+        // stays Installed — sync neither clobbers nor re-asserts it.
         let mut m = vm(MachineState::Installed, None);
-        m.config.os_installed = Some("ubuntu-2404".into());
+        m.config.os_installed = Some("debian-13".into());
         m.config.installation_progress = 100;
         assert!(!apply_proxmox_vm_state(&mut m, "running"));
-        assert_eq!(m.config.os_installed.as_deref(), Some("ubuntu-2404"));
-        assert_eq!(m.config.installation_progress, 100);
-    }
-
-    #[test]
-    fn running_vm_without_os_choice_is_marked_installed_anyway() {
-        let mut m = vm(MachineState::Discovered, None);
-        assert!(apply_proxmox_vm_state(&mut m, "running"));
         assert_eq!(m.status.state, MachineState::Installed);
-        assert_eq!(m.config.os_installed, None);
+        assert_eq!(m.config.os_installed.as_deref(), Some("debian-13"));
         assert_eq!(m.config.installation_progress, 100);
     }
 
     #[test]
-    fn stopped_vm_is_marked_offline_without_completing_install() {
+    fn stopped_vm_is_marked_offline() {
         let mut m = vm(MachineState::Installed, Some("debian-13"));
         assert!(apply_proxmox_vm_state(&mut m, "stopped"));
         assert_eq!(m.status.state, MachineState::Offline);
-        assert_eq!(m.config.os_installed, None);
-        assert_eq!(m.config.installation_progress, 0);
+    }
+
+    #[test]
+    fn already_offline_stopped_vm_is_idempotent() {
+        let mut m = vm(MachineState::Offline, None);
+        assert!(!apply_proxmox_vm_state(&mut m, "stopped"));
+        assert_eq!(m.status.state, MachineState::Offline);
     }
 }
 
