@@ -21,7 +21,9 @@ async fn main() -> anyhow::Result<()> {
     let base = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "ws://localhost:3000".to_string());
-    let http = base.replacen("ws://", "http://", 1).replacen("wss://", "https://", 1);
+    let http = base
+        .replacen("ws://", "http://", 1)
+        .replacen("wss://", "https://", 1);
 
     let url = format!("{base}/api/events/ws");
     println!("connecting to {url}");

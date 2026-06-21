@@ -958,7 +958,11 @@ mod tests {
         req.proxmox_node = Some("pve1".to_string());
         req.proxmox_cluster = Some("london".to_string());
         match source_from_register_request(&req) {
-            Some(MachineSource::Proxmox { cluster, node, vmid }) => {
+            Some(MachineSource::Proxmox {
+                cluster,
+                node,
+                vmid,
+            }) => {
                 assert_eq!(cluster, "london");
                 assert_eq!(node, "pve1");
                 assert_eq!(vmid, 106);

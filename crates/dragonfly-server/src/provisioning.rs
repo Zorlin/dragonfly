@@ -646,9 +646,8 @@ impl ProvisioningService {
             Err(e) => return Err(ProvisioningError::Store(e)),
         };
 
-        let (action, workflow_id, machine) = self
-            .decide_and_prepare_action(machine, None, false)
-            .await?;
+        let (action, workflow_id, machine) =
+            self.decide_and_prepare_action(machine, None, false).await?;
 
         Ok(Some(CheckInResponse {
             machine_id: machine.id.to_string(),
@@ -1482,7 +1481,10 @@ mod tests {
 
         // A machine that does not exist signals the socket to close.
         let result = service.current_intent(Uuid::now_v7()).await.unwrap();
-        assert!(result.is_none(), "Missing machine should signal socket close");
+        assert!(
+            result.is_none(),
+            "Missing machine should signal socket close"
+        );
     }
 
     #[tokio::test]
@@ -1516,11 +1518,12 @@ mod tests {
 
         // The workflow must actually be in the store.
         let wfs = store.get_workflows_for_machine(machine_id).await.unwrap();
-        assert!(wfs.iter().any(|w| w
-            .status
-            .as_ref()
-            .map(|s| s.state == WorkflowState::StatePending)
-            .unwrap_or(false)));
+        assert!(wfs.iter().any(|w| {
+            w.status
+                .as_ref()
+                .map(|s| s.state == WorkflowState::StatePending)
+                .unwrap_or(false)
+        }));
     }
 
     #[tokio::test]

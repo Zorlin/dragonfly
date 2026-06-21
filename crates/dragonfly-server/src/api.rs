@@ -119,7 +119,11 @@ fn build_machine_source(req: &AdminCreateMachineRequest) -> MachineSource {
                 req.proxmox_node.clone(),
                 req.proxmox_vmid,
             ) {
-                MachineSource::ProxmoxLxc { cluster, node, ctid }
+                MachineSource::ProxmoxLxc {
+                    cluster,
+                    node,
+                    ctid,
+                }
             } else {
                 MachineSource::Manual
             }
@@ -156,7 +160,10 @@ fn build_machine_source(req: &AdminCreateMachineRequest) -> MachineSource {
 /// create and update branches of `admin_create_machine`). Extracted from the
 /// handler so the static-vs-DHCP decision is unit-testable without standing up
 /// the router/auth stack.
-fn apply_admin_create_config(machine: &mut dragonfly_common::Machine, payload: &AdminCreateMachineRequest) {
+fn apply_admin_create_config(
+    machine: &mut dragonfly_common::Machine,
+    payload: &AdminCreateMachineRequest,
+) {
     machine.metadata.source = build_machine_source(payload);
     machine.metadata.updated_at = chrono::Utc::now();
     machine.status.current_ip = payload.ip_address.clone();
@@ -761,7 +768,10 @@ async fn admin_create_machine(
             (machine, true)
         }
         Err(e) => {
-            error!("Failed to lookup existing machine by MAC {}: {}", normalized_mac, e);
+            error!(
+                "Failed to lookup existing machine by MAC {}: {}",
+                normalized_mac, e
+            );
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
@@ -811,7 +821,10 @@ async fn admin_create_machine(
                 .into_response()
         }
         Err(e) => {
-            error!("Failed to save precreated machine {}: {}", normalized_mac, e);
+            error!(
+                "Failed to save precreated machine {}: {}",
+                normalized_mac, e
+            );
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
@@ -10439,7 +10452,10 @@ mod admin_create_tests {
     #[test]
     fn static_ip_configures_static_ipv4_mode() {
         let mut machine = fresh_machine();
-        apply_admin_create_config(&mut machine, &request("bc:24:11:22:33:44", Some("10.7.1.241")));
+        apply_admin_create_config(
+            &mut machine,
+            &request("bc:24:11:22:33:44", Some("10.7.1.241")),
+        );
 
         assert_eq!(machine.config.network_mode, NetworkMode::StaticIpv4);
         let cfg = machine
@@ -10477,7 +10493,10 @@ mod admin_create_tests {
     #[test]
     fn re_precreate_without_ip_converges_back_to_dhcp() {
         let mut machine = fresh_machine();
-        apply_admin_create_config(&mut machine, &request("bc:24:11:22:33:44", Some("10.7.1.241")));
+        apply_admin_create_config(
+            &mut machine,
+            &request("bc:24:11:22:33:44", Some("10.7.1.241")),
+        );
         assert_eq!(machine.config.network_mode, NetworkMode::StaticIpv4);
 
         // A second precreate that drops the IP must reset to DHCP.
