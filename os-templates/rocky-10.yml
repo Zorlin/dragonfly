@@ -61,8 +61,8 @@ spec:
             # Only install qemu-guest-agent if virtio serial port exists (running on QEMU/KVM)
             if [ -e /dev/virtio-ports/org.qemu.guest_agent.0 ]; then
               dnf install -y qemu-guest-agent
-              systemctl enable qemu-guest-agent
-              systemctl start qemu-guest-agent
+              systemctl daemon-reload
+              systemctl start qemu-guest-agent 2>/dev/null || true
             fi
       mode: "0644"
       timeout: 90
