@@ -5593,7 +5593,7 @@ pub async fn download_ipxe_binaries() -> anyhow::Result<()> {
 const OS_IMAGES_DIR: &str = "/var/lib/dragonfly/os-images";
 
 /// Serve OS image file
-pub async fn serve_os_image(os: &str, arch: &str) -> Response {
+pub async fn serve_os_image(os: &str, arch: &str, range: Option<&HeaderValue>) -> Response {
     let path = match os {
         "debian-13" => {
             let filename = format!("debian-13-generic-{}.tar.xz", arch);
@@ -5612,24 +5612,16 @@ pub async fn serve_os_image(os: &str, arch: &str) -> Response {
             .into_response();
     }
 
-    match tokio::fs::read(&path).await {
-        Ok(content) => (
-            StatusCode::OK,
-            [(axum::http::header::CONTENT_TYPE, "application/x-xz")],
-            content,
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to read: {}", e),
-        )
-            .into_response(),
-    }
+    // OS images are multi-GB and every imaging machine pulls one concurrently;
+    // stream in 64 KiB chunks (constant memory + Range) instead of buffering
+    // the whole file. See `stream_artifact`.
+    stream_artifact(&path, "application/x-xz", range, None, None).await
 }
 
 /// Serve cached image file (JIT-converted QCOW2 to raw)
 pub async fn serve_cached_image(
     State(state): State<crate::AppState>,
+    headers: HeaderMap,
     Path(name): Path<String>,
 ) -> Response {
     let cache_dir = state.image_cache.cache_dir();
@@ -5638,36 +5630,25 @@ pub async fn serve_cached_image(
     // Security: ensure the path stays within cache directory
     match path.canonicalize() {
         Ok(canonical) if canonical.starts_with(cache_dir) => {
-            match tokio::fs::read(&canonical).await {
-                Ok(content) => {
-                    let content_type = if name.ends_with(".tar.zst") {
-                        "application/zstd"
-                    } else if name.ends_with(".tar.xz") {
-                        "application/x-xz"
-                    } else {
-                        "application/octet-stream"
-                    };
-                    (
-                        StatusCode::OK,
-                        [(axum::http::header::CONTENT_TYPE, content_type)],
-                        content,
-                    )
-                        .into_response()
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => (
-                    StatusCode::NOT_FOUND,
-                    format!("Cached image not found: {}", name),
-                )
-                    .into_response(),
-                Err(e) => {
-                    error!(name = %name, error = %e, "Failed to read cached image");
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("Failed to read: {}", e),
-                    )
-                        .into_response()
-                }
-            }
+            let content_type = if name.ends_with(".tar.zst") {
+                "application/zstd"
+            } else if name.ends_with(".tar.xz") {
+                "application/x-xz"
+            } else {
+                "application/octet-stream"
+            };
+            // JIT-converted images can be multi-GB and are pulled concurrently
+            // across imaging machines; stream (constant memory + Range) instead
+            // of buffering. `canonical` already resolved so the file existed; a
+            // mid-stream open failure (rare race) surfaces as 500.
+            stream_artifact(
+                &canonical,
+                content_type,
+                headers.get(axum::http::header::RANGE),
+                None,
+                None,
+            )
+            .await
         }
         Ok(_) => {
             warn!(name = %name, "Path traversal attempt detected");
