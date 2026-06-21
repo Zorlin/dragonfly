@@ -154,6 +154,9 @@ minijinja-embed = "2.3.0"
 
 [dev-dependencies]
 tempfile = "3.8"
+# tokio test-util: paused-clock (`start_paused`) + `time::advance` for testing
+# stall/timeout behaviour without real sleeps.
+tokio = { version = "1.36.0", features = ["test-util", "macros", "rt-multi-thread", "time"] }
 serial_test = "3.0"
 # WebSocket client for integration tests (agent push + events stream).
 tokio-tungstenite = { version = "0.27" }
