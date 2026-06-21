@@ -2656,7 +2656,7 @@ async fn stream_artifact(
 /// of hanging forever at a partial percentage. Slow-but-progressing clients
 /// never trip it: `tx.send` only stalls when the client makes zero progress for
 /// the whole window.
-const STREAM_STALL_TIMEOUT: Duration = Duration::from_secs(60);
+const STREAM_STALL_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Outcome of pushing one chunk to the streaming client.
 #[derive(Debug)]
