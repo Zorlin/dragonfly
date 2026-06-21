@@ -2957,7 +2957,7 @@ pub async fn serve_ipxe_artifact(
     let artifact_path = base_path.join(&requested_path);
 
     // --- Serve from Cache First ---
-    if artifact_path.exists() {
+    if tokio::fs::try_exists(&artifact_path).await.unwrap_or(false) {
         info!(
             "[SERVE_ARTIFACT] Cached artifact exists at {}, will use read_file_as_stream",
             artifact_path.display()
@@ -3040,7 +3040,10 @@ pub async fn serve_ipxe_artifact(
 
             // Check if we need to regenerate (base_url changed or file doesn't exist)
             let url_marker_path = generation_target_path.with_extension("url");
-            let needs_regeneration = if generation_target_path.exists() {
+            let needs_regeneration = if tokio::fs::try_exists(&generation_target_path)
+                .await
+                .unwrap_or(false)
+            {
                 // Check if base_url changed
                 match tokio::fs::read_to_string(&url_marker_path).await {
                     Ok(stored_url) => stored_url.trim() != base_url,
@@ -3416,7 +3419,7 @@ async fn stream_download_with_caching(
     }
 
     // Check if file is already cached
-    if cache_path.exists() {
+    if tokio::fs::try_exists(cache_path).await.unwrap_or(false) {
         // Even when serving from cache, track progress for range requests
         if let (Some(machine_id), Some(state), Some(range_val)) = (machine_id, state, range_header)
         {
@@ -4827,7 +4830,7 @@ const GRUB_CHAIN_PATH: &str = "/var/lib/dragonfly/grub-spark.0";
 pub async fn serve_spark_elf(headers: HeaderMap) -> Response {
     let spark_path = std::path::Path::new(SPARK_ELF_PATH);
 
-    if !spark_path.exists() {
+    if !tokio::fs::try_exists(spark_path).await.unwrap_or(false) {
         warn!("404 /boot/spark.elf: File not found at {:?}", spark_path);
         return (
             StatusCode::NOT_FOUND,
@@ -4853,7 +4856,7 @@ pub async fn serve_spark_elf(headers: HeaderMap) -> Response {
 pub async fn serve_spark_efi_elf(headers: HeaderMap) -> Response {
     let spark_path = std::path::Path::new(SPARK_EFI_ELF_PATH);
 
-    if !spark_path.exists() {
+    if !tokio::fs::try_exists(spark_path).await.unwrap_or(false) {
         warn!(
             "404 /boot/spark-efi.elf: File not found at {:?}",
             spark_path
@@ -4883,7 +4886,7 @@ pub async fn serve_spark_efi_elf(headers: HeaderMap) -> Response {
 pub async fn serve_grub_spark_efi(headers: HeaderMap) -> Response {
     let path = std::path::Path::new(GRUB_SPARK_EFI_PATH);
 
-    if !path.exists() {
+    if !tokio::fs::try_exists(path).await.unwrap_or(false) {
         warn!("404 /boot/grub-spark.efi: File not found at {:?}", path);
         return (
             StatusCode::NOT_FOUND,
@@ -4911,7 +4914,7 @@ pub async fn serve_grub_spark_efi(headers: HeaderMap) -> Response {
 pub async fn serve_ipxe_efi(headers: HeaderMap) -> Response {
     let path = std::path::Path::new(IPXE_EFI_PATH);
 
-    if !path.exists() {
+    if !tokio::fs::try_exists(path).await.unwrap_or(false) {
         warn!("404 /boot/ipxe.efi: File not found at {:?}", path);
         return (
             StatusCode::NOT_FOUND,
@@ -4934,7 +4937,7 @@ pub async fn serve_ipxe_efi(headers: HeaderMap) -> Response {
 pub async fn serve_memtest(headers: HeaderMap) -> Response {
     let path = std::path::Path::new(MEMTEST_PATH);
 
-    if !path.exists() {
+    if !tokio::fs::try_exists(path).await.unwrap_or(false) {
         warn!("404 /boot/memtest86plus.bin: File not found at {:?}", path);
         return (
             StatusCode::NOT_FOUND,
@@ -4995,7 +4998,7 @@ pub async fn serve_libcom32(headers: HeaderMap) -> Response {
 async fn serve_static_file(file_path: &str, name: &str, range: Option<&HeaderValue>) -> Response {
     let path = std::path::Path::new(file_path);
 
-    if !path.exists() {
+    if !tokio::fs::try_exists(path).await.unwrap_or(false) {
         warn!("404 {}: Not found", name);
         return (StatusCode::NOT_FOUND, "File not found").into_response();
     }
@@ -5008,7 +5011,7 @@ pub async fn serve_pxelinux_config(headers: HeaderMap) -> Response {
     let config_path = "/var/lib/dragonfly/pxelinux.cfg/default";
     let path = std::path::Path::new(config_path);
 
-    if !path.exists() {
+    if !tokio::fs::try_exists(path).await.unwrap_or(false) {
         warn!("404 pxelinux.cfg/default: Not found");
         return (StatusCode::NOT_FOUND, "PXELINUX config not found").into_response();
     }
@@ -5051,9 +5054,9 @@ pub async fn download_mage_artifacts(alpine_version: &str, arch: &str) -> anyhow
     let mage_dir = FilePath::new(MAGE_DIR).join(arch);
 
     // Create directory if it doesn't exist
-    if !mage_dir.exists() {
+    if !tokio::fs::try_exists(&mage_dir).await.unwrap_or(false) {
         info!("Creating Mage directory: {:?}", mage_dir);
-        std::fs::create_dir_all(&mage_dir)?;
+        tokio::fs::create_dir_all(&mage_dir).await?;
     }
 
     // Construct base URL for Alpine netboot
@@ -5087,8 +5090,8 @@ pub async fn download_mage_artifacts(alpine_version: &str, arch: &str) -> anyhow
                 let dest_path = mage_dir.join(&local_name);
 
                 // Skip if file already exists and has content
-                if dest_path.exists() {
-                    if let Ok(metadata) = std::fs::metadata(&dest_path) {
+                if tokio::fs::try_exists(&dest_path).await.unwrap_or(false) {
+                    if let Ok(metadata) = tokio::fs::metadata(&dest_path).await {
                         if metadata.len() > 0 {
                             info!(
                                 "Mage artifact {} already exists, skipping download",
@@ -5111,7 +5114,9 @@ pub async fn download_mage_artifacts(alpine_version: &str, arch: &str) -> anyhow
                         if content.is_empty() {
                             anyhow::bail!("Downloaded {} is empty", local_name);
                         }
-                        std::fs::write(&dest_path, &content)?;
+                        tokio::fs::write(&dest_path, &content).await.map_err(|e| {
+                            anyhow::anyhow!("Failed to write {}: {}", local_name, e)
+                        })?;
                         info!("Downloaded {} ({} bytes)", local_name, content.len());
                     }
                     _ => {
@@ -5133,7 +5138,9 @@ pub async fn download_mage_artifacts(alpine_version: &str, arch: &str) -> anyhow
                         if content.is_empty() {
                             anyhow::bail!("Downloaded {} is empty", local_name);
                         }
-                        std::fs::write(&dest_path, &content)?;
+                        tokio::fs::write(&dest_path, &content).await.map_err(|e| {
+                            anyhow::anyhow!("Failed to write {}: {}", local_name, e)
+                        })?;
                         info!(
                             "Downloaded {} from fallback ({} bytes)",
                             local_name,
@@ -5219,14 +5226,17 @@ pub async fn generate_mage_apkovl_arch(
     let agent_binary_path = mage_dir.join("dragonfly-agent");
 
     // Ensure Mage directory exists
-    if !mage_dir.exists() {
-        std::fs::create_dir_all(&mage_dir).map_err(|e| {
+    if !tokio::fs::try_exists(&mage_dir).await.unwrap_or(false) {
+        tokio::fs::create_dir_all(&mage_dir).await.map_err(|e| {
             dragonfly_common::Error::Internal(format!("Failed to create Mage directory: {}", e))
         })?;
     }
 
     // Check that agent binary exists (should be built by agent_build_fut)
-    if !agent_binary_path.exists() {
+    if !tokio::fs::try_exists(&agent_binary_path)
+        .await
+        .unwrap_or(false)
+    {
         return Err(dragonfly_common::Error::Internal(format!(
             "Agent binary not found at {:?} - build failed?",
             agent_binary_path
@@ -5314,7 +5324,7 @@ pub async fn serve_boot_asset(
         let url_marker_path = file_path.with_extension("url");
 
         // Check if we need to regenerate
-        let needs_regeneration = if file_path.exists() {
+        let needs_regeneration = if tokio::fs::try_exists(&file_path).await.unwrap_or(false) {
             match tokio::fs::read_to_string(&url_marker_path).await {
                 Ok(stored_url) => stored_url.trim() != base_url,
                 Err(_) => true,
@@ -5347,7 +5357,7 @@ pub async fn serve_boot_asset(
         }
     }
 
-    if !file_path.exists() {
+    if !tokio::fs::try_exists(&file_path).await.unwrap_or(false) {
         warn!(
             "404 /boot/{}/{}: File not found at {:?}",
             arch, asset, file_path
@@ -5438,7 +5448,7 @@ pub async fn serve_debian_boot_asset(
         .join(normalized_arch)
         .join(filename);
 
-    if !file_path.exists() {
+    if !tokio::fs::try_exists(&file_path).await.unwrap_or(false) {
         warn!(
             "404 /boot-debian/{}/{}: File not found at {:?}",
             arch, asset, file_path
@@ -5516,9 +5526,9 @@ pub async fn download_ipxe_binaries() -> anyhow::Result<()> {
     let tftp_dir = FilePath::new("/var/lib/dragonfly/tftp");
 
     // Create directory structure if it doesn't exist
-    if !tftp_dir.exists() {
+    if !tokio::fs::try_exists(&tftp_dir).await.unwrap_or(false) {
         info!("Creating TFTP directory: {:?}", tftp_dir);
-        std::fs::create_dir_all(&tftp_dir)?;
+        tokio::fs::create_dir_all(&tftp_dir).await?;
     }
 
     // iPXE binaries to download from boot.ipxe.org
@@ -5539,8 +5549,8 @@ pub async fn download_ipxe_binaries() -> anyhow::Result<()> {
                 let dest_path = tftp_dir.join(&filename);
 
                 // Skip if file already exists and has content
-                if dest_path.exists() {
-                    if let Ok(metadata) = std::fs::metadata(&dest_path) {
+                if tokio::fs::try_exists(&dest_path).await.unwrap_or(false) {
+                    if let Ok(metadata) = tokio::fs::metadata(&dest_path).await {
                         if metadata.len() > 0 {
                             info!("iPXE binary {} already exists, skipping download", filename);
                             return Ok::<_, anyhow::Error>(());
@@ -5565,7 +5575,9 @@ pub async fn download_ipxe_binaries() -> anyhow::Result<()> {
                     anyhow::bail!("Downloaded {} is empty", filename);
                 }
 
-                std::fs::write(&dest_path, &content)?;
+                tokio::fs::write(&dest_path, &content)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to write {}: {}", filename, e))?;
                 info!(
                     "Downloaded {} ({} bytes) to {:?}",
                     filename,
@@ -5604,7 +5616,7 @@ pub async fn serve_os_image(os: &str, arch: &str, range: Option<&HeaderValue>) -
         }
     };
 
-    if !path.exists() {
+    if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
         return (
             StatusCode::NOT_FOUND,
             format!("OS image not downloaded. Use API to download first."),
@@ -7960,7 +7972,11 @@ pub async fn agent_boot_mode_handler(
             // Verify ISO exists on disk
             let iso_name = req.iso_name.as_ref().unwrap();
             let iso_path = std::path::Path::new("/var/lib/dragonfly/isos").join(iso_name);
-            if !iso_path.exists() || !iso_path.is_file() {
+            let iso_ok = tokio::fs::metadata(&iso_path)
+                .await
+                .map(|m| m.is_file())
+                .unwrap_or(false);
+            if !iso_ok {
                 return (StatusCode::NOT_FOUND, Json(json!({
                     "success": false, "message": format!("ISO '{}' not found on server", iso_name)
                 }))).into_response();
@@ -8027,25 +8043,33 @@ pub async fn agent_boot_mode_handler(
 ///
 /// Response format: `["debian-13.iso","ubuntu-24.04.iso"]`
 pub async fn agent_list_isos_handler() -> Response {
-    let iso_dir = std::path::Path::new("/var/lib/dragonfly/isos");
+    let iso_dir = std::path::PathBuf::from("/var/lib/dragonfly/isos");
 
-    if !iso_dir.exists() {
+    if !tokio::fs::try_exists(&iso_dir).await.unwrap_or(false) {
         return Json(json!([])).into_response();
     }
 
-    let mut isos: Vec<String> = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(iso_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name.ends_with(".iso") || name.ends_with(".ISO") {
-                        isos.push(name.to_string());
+    // Directory enumeration is inherently sync I/O; run it on the blocking
+    // pool so it never pins a tokio worker (which would stall artifact
+    // transfers for every other client mid-boot-storm).
+    let mut isos: Vec<String> = tokio::task::spawn_blocking(move || {
+        let mut v = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&iso_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                        if name.ends_with(".iso") || name.ends_with(".ISO") {
+                            v.push(name.to_string());
+                        }
                     }
                 }
             }
         }
-    }
+        v
+    })
+    .await
+    .unwrap_or_default();
     isos.sort();
 
     Json(json!(isos)).into_response()
@@ -8065,37 +8089,44 @@ pub async fn list_isos_handler(caller: AuthenticatedCaller) -> Response {
             .into_response();
     }
 
-    let iso_dir = std::path::Path::new("/var/lib/dragonfly/isos");
+    let iso_dir = std::path::PathBuf::from("/var/lib/dragonfly/isos");
 
-    if !iso_dir.exists() {
+    if !tokio::fs::try_exists(&iso_dir).await.unwrap_or(false) {
         return Json(json!({ "isos": serde_json::Value::Array(vec![]) })).into_response();
     }
 
-    let mut isos = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(iso_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name.ends_with(".iso") || name.ends_with(".ISO") {
-                        let metadata = std::fs::metadata(&path).ok();
-                        let size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
-                        let modified = metadata
-                            .as_ref()
-                            .and_then(|m| m.modified().ok())
-                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                            .map(|d| d.as_secs())
-                            .unwrap_or(0);
-                        isos.push(json!({
-                            "name": name,
-                            "size": size,
-                            "modified": modified
-                        }));
+    // Directory enumeration + per-file metadata is inherently sync I/O; run it
+    // on the blocking pool so it never pins a tokio worker.
+    let mut isos: Vec<serde_json::Value> = tokio::task::spawn_blocking(move || {
+        let mut v = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&iso_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                        if name.ends_with(".iso") || name.ends_with(".ISO") {
+                            let metadata = std::fs::metadata(&path).ok();
+                            let size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
+                            let modified = metadata
+                                .as_ref()
+                                .and_then(|m| m.modified().ok())
+                                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                                .map(|d| d.as_secs())
+                                .unwrap_or(0);
+                            v.push(json!({
+                                "name": name,
+                                "size": size,
+                                "modified": modified
+                            }));
+                        }
                     }
                 }
             }
         }
-    }
+        v
+    })
+    .await
+    .unwrap_or_default();
     isos.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
 
     Json(json!({ "isos": isos })).into_response()
@@ -8288,7 +8319,7 @@ pub async fn delete_iso_handler(
 
     let path = std::path::Path::new("/var/lib/dragonfly/isos").join(&sanitized);
 
-    if !path.exists() {
+    if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
         return (
             StatusCode::NOT_FOUND,
             Json(json!({
@@ -8298,7 +8329,7 @@ pub async fn delete_iso_handler(
             .into_response();
     }
 
-    match std::fs::remove_file(&path) {
+    match tokio::fs::remove_file(&path).await {
         Ok(()) => {
             info!("ISO deleted: {}", sanitized);
             Json(json!({ "success": true })).into_response()
@@ -9476,7 +9507,7 @@ async fn dev_mode_toggle_handler(
 
         // Validate path exists
         let raw = std::path::Path::new(&raw_path);
-        if !raw.exists() {
+        if !tokio::fs::try_exists(raw).await.unwrap_or(false) {
             return Json(json!({
                 "success": false,
                 "message": format!("Path does not exist: {}", raw_path),
@@ -9487,11 +9518,14 @@ async fn dev_mode_toggle_handler(
         // 1. If the path already contains templates directly (has base.html), use as-is
         // 2. If the path is a git checkout root, look for crates/dragonfly-server/templates/
         // 3. Otherwise, fail with a helpful message
-        let template_path = if raw.join("base.html").exists() {
+        let template_path = if tokio::fs::try_exists(raw.join("base.html"))
+            .await
+            .unwrap_or(false)
+        {
             raw_path.clone()
-        } else if raw
-            .join("crates/dragonfly-server/templates/base.html")
-            .exists()
+        } else if tokio::fs::try_exists(raw.join("crates/dragonfly-server/templates/base.html"))
+            .await
+            .unwrap_or(false)
         {
             raw.join("crates/dragonfly-server/templates")
                 .to_string_lossy()
@@ -9510,7 +9544,7 @@ async fn dev_mode_toggle_handler(
         let essential = ["base.html", "login.html", "settings.html", "index.html"];
         let tp = std::path::Path::new(&template_path);
         for name in &essential {
-            if !tp.join(name).exists() {
+            if !tokio::fs::try_exists(tp.join(name)).await.unwrap_or(false) {
                 return Json(json!({
                     "success": false,
                     "message": format!("Missing essential template '{}' in {}", name, template_path),
@@ -10022,7 +10056,8 @@ async fn credentials_delete_handler(
                 .store
                 .put_setting("cluster_management_privkey", "")
                 .await;
-            let _ = std::fs::remove_file("/var/lib/dragonfly/cluster-deploy/management_key");
+            let _ =
+                tokio::fs::remove_file("/var/lib/dragonfly/cluster-deploy/management_key").await;
             Json(json!({
                 "success": true,
                 "message": "Cluster key removed",
@@ -10038,7 +10073,7 @@ async fn credentials_delete_handler(
                 .store
                 .put_setting("machine_management_privkey", "")
                 .await;
-            let _ = std::fs::remove_file("/var/lib/dragonfly/machine_key");
+            let _ = tokio::fs::remove_file("/var/lib/dragonfly/machine_key").await;
             Json(json!({
                 "success": true,
                 "message": "Machine key removed",
