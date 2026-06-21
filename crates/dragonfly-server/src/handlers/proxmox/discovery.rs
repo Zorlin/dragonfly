@@ -1675,16 +1675,23 @@ pub async fn discover_proxmox_handler() -> impl IntoResponse {
     match scan_result {
         Ok(Ok(addresses)) => {
             info!("Proxmox scan found {} potential machines", addresses.len());
-            let machines: Vec<DiscoveredProxmox> = addresses
-                .into_iter()
-                .map(|socket_addr| {
+            let machines: Vec<DiscoveredProxmox> =
+                futures::future::join_all(addresses.into_iter().map(|socket_addr| async move {
                     let ip = socket_addr.ip();
                     let host = ip.to_string();
+                    // Reverse-DNS can stall for seconds when a host is unreachable.
+                    // Offload each lookup to the blocking pool (NOT a tokio worker)
+                    // and run them concurrently, so discovery never pins a runtime
+                    // worker and stalls artifact transfers for the rest of the daemon.
                     let hostname =
-                        match tokio::task::block_in_place(|| dns_lookup::lookup_addr(&ip).ok()) {
-                            Some(name) if name != host => Some(name),
-                            _ => None,
-                        };
+                        tokio::task::spawn_blocking(move || dns_lookup::lookup_addr(&ip).ok())
+                            .await
+                            .ok()
+                            .flatten();
+                    let hostname = match hostname {
+                        Some(name) if name != host => Some(name),
+                        _ => None,
+                    };
                     DiscoveredProxmox {
                         host,
                         port: PROXMOX_PORT,
@@ -1694,8 +1701,8 @@ pub async fn discover_proxmox_handler() -> impl IntoResponse {
                         vmid: None,
                         parent_host: None,
                     }
-                })
-                .collect();
+                }))
+                .await;
             info!(
                 "Completed Proxmox discovery with {} machines",
                 machines.len()
