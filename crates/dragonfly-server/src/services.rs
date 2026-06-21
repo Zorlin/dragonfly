@@ -321,7 +321,9 @@ impl ServiceRunner {
         let socket = loop {
             match server.bind_socket().await {
                 Ok(socket) => break socket,
-                Err(err) if should_retry_dhcp_bind(&err) && attempt < Self::DHCP_BIND_RETRY_ATTEMPTS => {
+                Err(err)
+                    if should_retry_dhcp_bind(&err) && attempt < Self::DHCP_BIND_RETRY_ATTEMPTS =>
+                {
                     attempt += 1;
                     warn!(
                         attempt,

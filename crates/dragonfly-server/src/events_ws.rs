@@ -7,8 +7,8 @@
 
 use std::time::Duration;
 
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::response::Response;
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
@@ -28,10 +28,7 @@ const PING_INTERVAL: Duration = Duration::from_secs(30);
 /// receive events, they don't need to send. On connect the server emits a single
 /// `{"type":"stream_ready"}` message so clients can confirm the stream is live
 /// (and gate on it) before acting.
-pub async fn events_ws_handler(
-    State(state): State<AppState>,
-    ws: WebSocketUpgrade,
-) -> Response {
+pub async fn events_ws_handler(State(state): State<AppState>, ws: WebSocketUpgrade) -> Response {
     ws.on_upgrade(move |socket| run_events_ws(socket, state))
 }
 
@@ -90,7 +87,10 @@ async fn run_events_ws(socket: WebSocket, state: AppState) {
 /// skip-on-missing-payload behaviour).
 pub(crate) fn event_envelope(event_string: &str) -> Option<serde_json::Value> {
     let (kind, payload) = event_string.split_once(':').unwrap_or((event_string, ""));
-    if matches!(kind, "ip_download_progress" | "workflow_progress" | "cluster") {
+    if matches!(
+        kind,
+        "ip_download_progress" | "workflow_progress" | "cluster"
+    ) {
         if payload.is_empty() {
             return None;
         }

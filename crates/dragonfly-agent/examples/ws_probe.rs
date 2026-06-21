@@ -32,7 +32,9 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|| "ws://localhost:3000".to_string());
     let mac = env_or("WS_PROBE_MAC", "00:11:22:33:44:aa");
     let template = env_or("WS_PROBE_TEMPLATE", "debian-12");
-    let http_base = base.replacen("ws://", "http://", 1).replacen("wss://", "https://", 1);
+    let http_base = base
+        .replacen("ws://", "http://", 1)
+        .replacen("wss://", "https://", 1);
 
     let url = format!("{base}/api/agent/ws");
     println!("connecting to {url} (mac={mac}, template={template})");

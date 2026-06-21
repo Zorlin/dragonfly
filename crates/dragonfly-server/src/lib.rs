@@ -38,10 +38,10 @@ use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt};
 // Ensure prelude is still imported if needed elsewhere
 // use tracing_subscriber::prelude::*;
 
+pub mod agent_ws;
 mod api;
 pub mod api_token;
 mod auth;
-pub mod agent_ws;
 pub mod cluster;
 pub mod dns_sync;
 pub mod event_manager;
@@ -173,7 +173,11 @@ fn swap_to_ws(base_url: &str) -> String {
     base_url
         .strip_prefix("https://")
         .map(|r| format!("wss://{r}"))
-        .or_else(|| base_url.strip_prefix("http://").map(|r| format!("ws://{r}")))
+        .or_else(|| {
+            base_url
+                .strip_prefix("http://")
+                .map(|r| format!("ws://{r}"))
+        })
         .unwrap_or_else(|| base_url.to_string())
 }
 
@@ -1578,7 +1582,10 @@ mod agent_ws_tests {
     #[test]
     fn swap_to_ws_scheme() {
         assert_eq!(swap_to_ws("http://10.7.1.100:3000"), "ws://10.7.1.100:3000");
-        assert_eq!(swap_to_ws("https://dragonfly.example"), "wss://dragonfly.example");
+        assert_eq!(
+            swap_to_ws("https://dragonfly.example"),
+            "wss://dragonfly.example"
+        );
         // Unknown scheme passes through unchanged (agent then treats it as http).
         assert_eq!(swap_to_ws("foo://x"), "foo://x");
     }
