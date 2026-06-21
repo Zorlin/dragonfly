@@ -525,7 +525,10 @@ boot
         // Dragonfly parameters
         params.push(format!(
             "dragonfly.url={}",
-            self.config.agent_url.as_deref().unwrap_or(&self.config.base_url)
+            self.config
+                .agent_url
+                .as_deref()
+                .unwrap_or(&self.config.base_url)
         ));
         params.push(format!("dragonfly.mode={}", mode));
         params.push("dragonfly.mac=${mac}".to_string());
@@ -572,7 +575,10 @@ boot
         // Dragonfly parameters
         params.push(format!(
             "dragonfly.url={}",
-            self.config.agent_url.as_deref().unwrap_or(&self.config.base_url)
+            self.config
+                .agent_url
+                .as_deref()
+                .unwrap_or(&self.config.base_url)
         ));
         params.push(format!("dragonfly.mode={}", mode));
         params.push("dragonfly.mac=${mac}".to_string());

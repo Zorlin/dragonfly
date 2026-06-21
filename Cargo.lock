@@ -1660,7 +1660,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1714,7 +1714,7 @@ checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 
 [[package]]
 name = "dragonfly"
-version = "0.4.0-alpha4"
+version = "0.5.0-alpha1"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1873,7 +1873,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-dns"
-version = "0.4.0-alpha4"
+version = "0.5.0-alpha1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1907,7 +1907,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-server"
-version = "0.4.0-alpha4"
+version = "0.5.0-alpha1"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2160,7 +2160,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3181,7 +3181,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.2",
+ "socket2 0.5.10",
  "tokio",
  "tower-service",
  "tracing",
@@ -4529,7 +4529,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5283,7 +5283,7 @@ dependencies = [
 [[package]]
 name = "proxmox-base64"
 version = "1.0.1"
-source = "git+https://github.com/proxmox/proxmox-rs#0645c1cb4c36fdb69f2eed139dad0c4d9a52a308"
+source = "git+https://github.com/proxmox/proxmox-rs#0746104b1fa5af3e4fa08725563c4b4d69b67c9d"
 dependencies = [
  "base64 0.22.1",
  "serde",
@@ -5366,12 +5366,12 @@ dependencies = [
 [[package]]
 name = "proxmox-lang"
 version = "1.5.0"
-source = "git+https://github.com/proxmox/proxmox-rs#0645c1cb4c36fdb69f2eed139dad0c4d9a52a308"
+source = "git+https://github.com/proxmox/proxmox-rs#0746104b1fa5af3e4fa08725563c4b4d69b67c9d"
 
 [[package]]
 name = "proxmox-login"
 version = "1.0.3"
-source = "git+https://github.com/proxmox/proxmox-rs#0645c1cb4c36fdb69f2eed139dad0c4d9a52a308"
+source = "git+https://github.com/proxmox/proxmox-rs#0746104b1fa5af3e4fa08725563c4b4d69b67c9d"
 dependencies = [
  "http 1.4.0",
  "js-sys",
@@ -5385,7 +5385,7 @@ dependencies = [
 [[package]]
 name = "proxmox-rate-limiter"
 version = "1.0.0"
-source = "git+https://github.com/proxmox/proxmox-rs#0645c1cb4c36fdb69f2eed139dad0c4d9a52a308"
+source = "git+https://github.com/proxmox/proxmox-rs#0746104b1fa5af3e4fa08725563c4b4d69b67c9d"
 dependencies = [
  "anyhow",
  "hyper 1.8.1",
@@ -5393,8 +5393,8 @@ dependencies = [
 
 [[package]]
 name = "proxmox-schema"
-version = "5.0.1"
-source = "git+https://github.com/proxmox/proxmox-rs#0645c1cb4c36fdb69f2eed139dad0c4d9a52a308"
+version = "5.2.0"
+source = "git+https://github.com/proxmox/proxmox-rs#0746104b1fa5af3e4fa08725563c4b4d69b67c9d"
 dependencies = [
  "anyhow",
  "const_format",
@@ -5406,8 +5406,8 @@ dependencies = [
 
 [[package]]
 name = "proxmox-serde"
-version = "1.0.1"
-source = "git+https://github.com/proxmox/proxmox-rs#0645c1cb4c36fdb69f2eed139dad0c4d9a52a308"
+version = "1.0.2"
+source = "git+https://github.com/proxmox/proxmox-rs#0746104b1fa5af3e4fa08725563c4b4d69b67c9d"
 dependencies = [
  "anyhow",
  "proxmox-base64",
@@ -5465,7 +5465,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.1",
  "rustls 0.23.36",
- "socket2 0.6.2",
+ "socket2 0.5.10",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -5502,9 +5502,9 @@ dependencies = [
  "cfg_aliases 0.2.1",
  "libc",
  "once_cell",
- "socket2 0.6.2",
+ "socket2 0.5.10",
  "tracing",
- "windows-sys 0.60.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6263,7 +6263,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.11.0",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7376,7 +7376,7 @@ dependencies = [
  "getrandom 0.4.1",
  "once_cell",
  "rustix 1.1.3",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -8582,7 +8582,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

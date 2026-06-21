@@ -199,8 +199,14 @@ pub struct RegisterRequest {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AdminCreateMachineRequest {
+    /// Primary MAC — required; Dragonfly keys the machine on it.
     pub mac_address: String,
-    pub ip_address: String,
+    /// Static IPv4 address. When present the machine is created in `StaticIpv4`
+    /// mode (cloud-init bakes it; an IP reservation is made when `network_id`
+    /// is also set). When absent the machine is left in the default `Dhcp`
+    /// mode — equivalent to the open registration path.
+    #[serde(default)]
+    pub ip_address: Option<String>,
     #[serde(default)]
     pub hostname: Option<String>,
     #[serde(default)]

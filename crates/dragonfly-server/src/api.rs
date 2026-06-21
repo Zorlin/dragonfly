@@ -119,7 +119,11 @@ fn build_machine_source(req: &AdminCreateMachineRequest) -> MachineSource {
                 req.proxmox_node.clone(),
                 req.proxmox_vmid,
             ) {
-                MachineSource::ProxmoxLxc { cluster, node, ctid }
+                MachineSource::ProxmoxLxc {
+                    cluster,
+                    node,
+                    ctid,
+                }
             } else {
                 MachineSource::Manual
             }
@@ -152,12 +156,56 @@ fn build_machine_source(req: &AdminCreateMachineRequest) -> MachineSource {
     }
 }
 
+/// Apply an `AdminCreateMachineRequest` to a machine record (used for both the
+/// create and update branches of `admin_create_machine`). Extracted from the
+/// handler so the static-vs-DHCP decision is unit-testable without standing up
+/// the router/auth stack.
+fn apply_admin_create_config(
+    machine: &mut dragonfly_common::Machine,
+    payload: &AdminCreateMachineRequest,
+) {
+    machine.metadata.source = build_machine_source(payload);
+    machine.metadata.updated_at = chrono::Utc::now();
+    machine.status.current_ip = payload.ip_address.clone();
+    if machine.status.last_seen.is_none() {
+        machine.status.state = MachineState::Offline;
+    }
+    machine.config.hostname = payload.hostname.clone();
+    match &payload.ip_address {
+        Some(ip) => {
+            machine.config.network_mode = NetworkMode::StaticIpv4;
+            machine.config.static_ipv4 = Some(StaticIpConfig {
+                address: ip.clone(),
+                prefix_len: payload.prefix_len.unwrap_or(24),
+                gateway: payload.gateway.clone(),
+            });
+        }
+        None => {
+            // No static IP declared → DHCP. Reset any prior static config so a
+            // re-precreate that drops the IP converges the machine back to DHCP.
+            machine.config.network_mode = NetworkMode::Dhcp;
+            machine.config.static_ipv4 = None;
+        }
+    }
+    machine.config.nameservers = payload.nameservers.clone();
+    machine.config.domain = payload.domain.clone();
+    machine.config.network_id = payload.network_id;
+    machine.config.tags = payload.tags.clone();
+    machine.config.pending_apply = false;
+    machine.config.pending_fields.clear();
+}
+
 async fn upsert_network_reservation_for_machine(
     state: &AppState,
     req: &AdminCreateMachineRequest,
     hostname: Option<String>,
 ) -> Result<(), String> {
     let Some(network_id) = req.network_id else {
+        return Ok(());
+    };
+    // A static reservation needs an IP. DHCP machines (no ip_address) have
+    // nothing to reserve — and this path is only reached when network_id is set.
+    let Some(ip) = req.ip_address.clone() else {
         return Ok(());
     };
 
@@ -174,12 +222,12 @@ async fn upsert_network_reservation_for_machine(
         .iter_mut()
         .find(|res| dragonfly_common::normalize_mac(&res.mac) == normalized_mac)
     {
-        existing.ip = req.ip_address.clone();
+        existing.ip = ip;
         existing.hostname = hostname;
     } else {
         network.reservations.push(dragonfly_common::StaticLease {
             mac: normalized_mac,
-            ip: req.ip_address.clone(),
+            ip,
             hostname,
         });
     }
@@ -720,7 +768,10 @@ async fn admin_create_machine(
             (machine, true)
         }
         Err(e) => {
-            error!("Failed to lookup existing machine by MAC {}: {}", normalized_mac, e);
+            error!(
+                "Failed to lookup existing machine by MAC {}: {}",
+                normalized_mac, e
+            );
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
@@ -732,25 +783,7 @@ async fn admin_create_machine(
         }
     };
 
-    machine.metadata.source = build_machine_source(&payload);
-    machine.metadata.updated_at = chrono::Utc::now();
-    machine.status.current_ip = Some(payload.ip_address.clone());
-    if machine.status.last_seen.is_none() {
-        machine.status.state = MachineState::Offline;
-    }
-    machine.config.hostname = payload.hostname.clone();
-    machine.config.network_mode = NetworkMode::StaticIpv4;
-    machine.config.static_ipv4 = Some(StaticIpConfig {
-        address: payload.ip_address.clone(),
-        prefix_len: payload.prefix_len.unwrap_or(24),
-        gateway: payload.gateway.clone(),
-    });
-    machine.config.nameservers = payload.nameservers.clone();
-    machine.config.domain = payload.domain.clone();
-    machine.config.network_id = payload.network_id;
-    machine.config.tags = payload.tags.clone();
-    machine.config.pending_apply = false;
-    machine.config.pending_fields.clear();
+    apply_admin_create_config(&mut machine, &payload);
 
     match upsert_network_reservation_for_machine(&state, &payload, payload.hostname.clone()).await {
         Ok(()) => {}
@@ -788,7 +821,10 @@ async fn admin_create_machine(
                 .into_response()
         }
         Err(e) => {
-            error!("Failed to save precreated machine {}: {}", normalized_mac, e);
+            error!(
+                "Failed to save precreated machine {}: {}",
+                normalized_mac, e
+            );
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
@@ -10356,4 +10392,90 @@ async fn dns_records_by_machine_handler(
     }
 
     Json(json!({ "records": all_records })).into_response()
+}
+
+#[cfg(test)]
+mod admin_create_tests {
+    use super::*;
+
+    fn request(mac: &str, ip: Option<&str>) -> AdminCreateMachineRequest {
+        AdminCreateMachineRequest {
+            mac_address: mac.to_string(),
+            ip_address: ip.map(str::to_string),
+            hostname: Some("k8s01".to_string()),
+            network_id: None,
+            prefix_len: Some(24),
+            gateway: Some("10.7.1.1".to_string()),
+            nameservers: vec!["10.7.1.11".to_string(), "10.7.1.12".to_string()],
+            domain: None,
+            tags: vec![],
+            proxmox_vmid: Some(101),
+            proxmox_node: Some("bee".to_string()),
+            proxmox_cluster: Some("SpaceTempAgency".to_string()),
+            proxmox_type: Some("vm".to_string()),
+        }
+    }
+
+    // NOTE: bare `Machine` in api.rs is `models::Machine` (the flat DTO). The
+    // domain model the handler + helper operate on is `dragonfly_common::Machine`
+    // (it has `::new`, `.config`, `.status`).
+    fn fresh_machine() -> dragonfly_common::Machine {
+        dragonfly_common::Machine::new(MachineIdentity::from_mac("bc:24:11:22:33:44"))
+    }
+
+    #[test]
+    fn static_ip_configures_static_ipv4_mode() {
+        let mut machine = fresh_machine();
+        apply_admin_create_config(
+            &mut machine,
+            &request("bc:24:11:22:33:44", Some("10.7.1.241")),
+        );
+
+        assert_eq!(machine.config.network_mode, NetworkMode::StaticIpv4);
+        let cfg = machine
+            .config
+            .static_ipv4
+            .as_ref()
+            .expect("static_ipv4 should be set");
+        assert_eq!(cfg.address, "10.7.1.241");
+        assert_eq!(cfg.prefix_len, 24);
+        assert_eq!(cfg.gateway.as_deref(), Some("10.7.1.1"));
+        assert_eq!(machine.status.current_ip.as_deref(), Some("10.7.1.241"));
+        assert_eq!(machine.config.hostname.as_deref(), Some("k8s01"));
+        assert_eq!(
+            machine.config.nameservers,
+            vec!["10.7.1.11".to_string(), "10.7.1.12".to_string()]
+        );
+    }
+
+    #[test]
+    fn no_ip_configures_dhcp_with_no_static_config() {
+        let mut machine = fresh_machine();
+        apply_admin_create_config(&mut machine, &request("bc:24:11:22:33:44", None));
+
+        assert_eq!(machine.config.network_mode, NetworkMode::Dhcp);
+        assert!(machine.config.static_ipv4.is_none());
+        assert!(machine.status.current_ip.is_none());
+        // Non-network fields are still applied in DHCP mode.
+        assert_eq!(machine.config.hostname.as_deref(), Some("k8s01"));
+        assert_eq!(
+            machine.config.nameservers,
+            vec!["10.7.1.11".to_string(), "10.7.1.12".to_string()]
+        );
+    }
+
+    #[test]
+    fn re_precreate_without_ip_converges_back_to_dhcp() {
+        let mut machine = fresh_machine();
+        apply_admin_create_config(
+            &mut machine,
+            &request("bc:24:11:22:33:44", Some("10.7.1.241")),
+        );
+        assert_eq!(machine.config.network_mode, NetworkMode::StaticIpv4);
+
+        // A second precreate that drops the IP must reset to DHCP.
+        apply_admin_create_config(&mut machine, &request("bc:24:11:22:33:44", None));
+        assert_eq!(machine.config.network_mode, NetworkMode::Dhcp);
+        assert!(machine.config.static_ipv4.is_none());
+    }
 }

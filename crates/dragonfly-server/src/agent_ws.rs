@@ -11,11 +11,11 @@
 //! `machine_updated:{id}` notification (pull-on-notification, not event
 //! sourcing), so steady state is one open socket with no periodic polling.
 
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::Json;
 use axum::extract::State;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use bytes::Bytes;
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
@@ -25,8 +25,8 @@ use tokio::time::{interval, timeout};
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::provisioning::{AgentAction, CheckInResponse, HardwareCheckIn};
 use crate::AppState;
+use crate::provisioning::{AgentAction, CheckInResponse, HardwareCheckIn};
 
 /// Time to wait for the agent's first `HardwareCheckIn` message before giving up.
 const FIRST_MESSAGE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -39,10 +39,7 @@ const PING_INTERVAL: Duration = Duration::from_secs(30);
 /// is established MAC-bound from the first message via `handle_checkin`. A WS
 /// connection is longer-lived than a POST, but the threat model is unchanged —
 /// an attacker who can reach the server can already spoof checkins today.
-pub async fn agent_ws_handler(
-    State(state): State<AppState>,
-    ws: WebSocketUpgrade,
-) -> Response {
+pub async fn agent_ws_handler(State(state): State<AppState>, ws: WebSocketUpgrade) -> Response {
     if state.provisioning.is_none() {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -180,7 +177,9 @@ async fn run_agent_ws(socket: WebSocket, state: AppState) {
 
 /// Read and parse the first message as a `HardwareCheckIn`, with a timeout.
 async fn read_first_checkin(receiver: &mut SplitStream<WebSocket>) -> Option<HardwareCheckIn> {
-    let msg = timeout(FIRST_MESSAGE_TIMEOUT, receiver.next()).await.ok()??;
+    let msg = timeout(FIRST_MESSAGE_TIMEOUT, receiver.next())
+        .await
+        .ok()??;
     match msg {
         Ok(Message::Text(text)) => serde_json::from_str(&text).ok(),
         _ => None,
@@ -193,7 +192,10 @@ async fn send_response(
     response: &CheckInResponse,
 ) -> Result<(), ()> {
     let json = serde_json::to_string(response).map_err(|_| ())?;
-    sender.send(Message::Text(json.into())).await.map_err(|_| ())
+    sender
+        .send(Message::Text(json.into()))
+        .await
+        .map_err(|_| ())
 }
 
 /// Whether a freshly-computed intent should be pushed to the agent.
@@ -248,8 +250,14 @@ mod tests {
     fn event_concerns_machine_ignores_other_machines_and_types() {
         let id = Uuid::now_v7();
         let other = Uuid::now_v7();
-        assert!(!event_concerns_machine(&format!("machine_updated:{other}"), id));
-        assert!(!event_concerns_machine(&format!("workflow_progress:{id}"), id));
+        assert!(!event_concerns_machine(
+            &format!("machine_updated:{other}"),
+            id
+        ));
+        assert!(!event_concerns_machine(
+            &format!("workflow_progress:{id}"),
+            id
+        ));
         assert!(!event_concerns_machine("templates_ready", id));
     }
 
