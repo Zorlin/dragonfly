@@ -4824,7 +4824,7 @@ const GRUB_CHAIN_PATH: &str = "/var/lib/dragonfly/grub-spark.0";
 /// - Checks for existing bootable OS
 /// - Reports to Dragonfly server
 /// - Chainloads to Mage for imaging when needed
-pub async fn serve_spark_elf() -> Response {
+pub async fn serve_spark_elf(headers: HeaderMap) -> Response {
     let spark_path = std::path::Path::new(SPARK_ELF_PATH);
 
     if !spark_path.exists() {
@@ -4836,32 +4836,21 @@ pub async fn serve_spark_elf() -> Response {
             .into_response();
     }
 
-    match tokio::fs::read(spark_path).await {
-        Ok(content) => {
-            info!("200 /boot/spark.elf: Serving {} bytes", content.len());
-            (
-                StatusCode::OK,
-                [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
-                content,
-            )
-                .into_response()
-        }
-        Err(e) => {
-            error!("500 /boot/spark.elf: Failed to read: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to read Spark ELF: {}", e),
-            )
-                .into_response()
-        }
-    }
+    stream_artifact(
+        spark_path,
+        "application/octet-stream",
+        headers.get(axum::http::header::RANGE),
+        None,
+        None,
+    )
+    .await
 }
 
 /// Serve Spark ELF (x86_64) for EFI iPXE multiboot
 ///
 /// EFI iPXE cannot load elf32-i386 binaries — it needs the original
 /// x86_64 ELF. Same kernel, different ELF header format.
-pub async fn serve_spark_efi_elf() -> Response {
+pub async fn serve_spark_efi_elf(headers: HeaderMap) -> Response {
     let spark_path = std::path::Path::new(SPARK_EFI_ELF_PATH);
 
     if !spark_path.exists() {
@@ -4876,25 +4865,14 @@ pub async fn serve_spark_efi_elf() -> Response {
             .into_response();
     }
 
-    match tokio::fs::read(spark_path).await {
-        Ok(content) => {
-            info!("200 /boot/spark-efi.elf: Serving {} bytes", content.len());
-            (
-                StatusCode::OK,
-                [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
-                content,
-            )
-                .into_response()
-        }
-        Err(e) => {
-            error!("500 /boot/spark-efi.elf: Failed to read: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to read Spark EFI ELF: {}", e),
-            )
-                .into_response()
-        }
-    }
+    stream_artifact(
+        spark_path,
+        "application/octet-stream",
+        headers.get(axum::http::header::RANGE),
+        None,
+        None,
+    )
+    .await
 }
 
 /// Serve GRUB EFI shim for EFI PXE multiboot
@@ -4902,7 +4880,7 @@ pub async fn serve_spark_efi_elf() -> Response {
 /// EFI iPXE can't do multiboot2. This standalone GRUB EFI binary has
 /// Spark embedded and boots it via multiboot2 after doing DHCP to
 /// discover the Dragonfly server address.
-pub async fn serve_grub_spark_efi() -> Response {
+pub async fn serve_grub_spark_efi(headers: HeaderMap) -> Response {
     let path = std::path::Path::new(GRUB_SPARK_EFI_PATH);
 
     if !path.exists() {
@@ -4914,25 +4892,14 @@ pub async fn serve_grub_spark_efi() -> Response {
             .into_response();
     }
 
-    match tokio::fs::read(path).await {
-        Ok(content) => {
-            info!("200 /boot/grub-spark.efi: Serving {} bytes", content.len());
-            (
-                StatusCode::OK,
-                [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
-                content,
-            )
-                .into_response()
-        }
-        Err(e) => {
-            error!("500 /boot/grub-spark.efi: Failed to read: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to read GRUB Spark EFI: {}", e),
-            )
-                .into_response()
-        }
-    }
+    stream_artifact(
+        path,
+        "application/octet-stream",
+        headers.get(axum::http::header::RANGE),
+        None,
+        None,
+    )
+    .await
 }
 
 /// Serve iPXE EFI binary over HTTP for UEFI HTTP Boot
@@ -4941,7 +4908,7 @@ pub async fn serve_grub_spark_efi() -> Response {
 /// The DHCP server directs HTTPClient vendors to this URL.
 /// Once iPXE loads, it does its own DHCP exchange and follows
 /// the normal iPXE boot script flow.
-pub async fn serve_ipxe_efi() -> Response {
+pub async fn serve_ipxe_efi(headers: HeaderMap) -> Response {
     let path = std::path::Path::new(IPXE_EFI_PATH);
 
     if !path.exists() {
@@ -4953,32 +4920,18 @@ pub async fn serve_ipxe_efi() -> Response {
             .into_response();
     }
 
-    match tokio::fs::read(path).await {
-        Ok(content) => {
-            info!(
-                "200 /boot/ipxe.efi: Serving {} bytes (HTTP Boot)",
-                content.len()
-            );
-            (
-                StatusCode::OK,
-                [(axum::http::header::CONTENT_TYPE, "application/efi")],
-                content,
-            )
-                .into_response()
-        }
-        Err(e) => {
-            error!("500 /boot/ipxe.efi: Failed to read: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to read iPXE EFI: {}", e),
-            )
-                .into_response()
-        }
-    }
+    stream_artifact(
+        path,
+        "application/efi",
+        headers.get(axum::http::header::RANGE),
+        None,
+        None,
+    )
+    .await
 }
 
 /// Serve memtest86+ binary for iPXE kernel boot
-pub async fn serve_memtest() -> Response {
+pub async fn serve_memtest(headers: HeaderMap) -> Response {
     let path = std::path::Path::new(MEMTEST_PATH);
 
     if !path.exists() {
@@ -4989,51 +4942,57 @@ pub async fn serve_memtest() -> Response {
         ).into_response();
     }
 
-    match tokio::fs::read(path).await {
-        Ok(content) => {
-            info!(
-                "200 /boot/memtest86plus.bin: Serving {} bytes",
-                content.len()
-            );
-            (
-                StatusCode::OK,
-                [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
-                content,
-            )
-                .into_response()
-        }
-        Err(e) => {
-            error!("500 /boot/memtest86plus.bin: Failed to read: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to read memtest86plus.bin: {}", e),
-            )
-                .into_response()
-        }
-    }
+    stream_artifact(
+        path,
+        "application/octet-stream",
+        headers.get(axum::http::header::RANGE),
+        None,
+        None,
+    )
+    .await
 }
 
 /// Serve PXELINUX bootloader
-pub async fn serve_lpxelinux() -> Response {
-    serve_static_file("/var/lib/dragonfly/lpxelinux.0", "lpxelinux.0").await
+pub async fn serve_lpxelinux(headers: HeaderMap) -> Response {
+    serve_static_file(
+        "/var/lib/dragonfly/lpxelinux.0",
+        "lpxelinux.0",
+        headers.get(axum::http::header::RANGE),
+    )
+    .await
 }
 
 /// Serve ldlinux.c32 module
-pub async fn serve_ldlinux() -> Response {
-    serve_static_file("/var/lib/dragonfly/ldlinux.c32", "ldlinux.c32").await
+pub async fn serve_ldlinux(headers: HeaderMap) -> Response {
+    serve_static_file(
+        "/var/lib/dragonfly/ldlinux.c32",
+        "ldlinux.c32",
+        headers.get(axum::http::header::RANGE),
+    )
+    .await
 }
 
 /// Serve mboot.c32 multiboot module
-pub async fn serve_mboot() -> Response {
-    serve_static_file("/var/lib/dragonfly/mboot.c32", "mboot.c32").await
+pub async fn serve_mboot(headers: HeaderMap) -> Response {
+    serve_static_file(
+        "/var/lib/dragonfly/mboot.c32",
+        "mboot.c32",
+        headers.get(axum::http::header::RANGE),
+    )
+    .await
 }
 
 /// Serve libcom32.c32 library
-pub async fn serve_libcom32() -> Response {
-    serve_static_file("/var/lib/dragonfly/libcom32.c32", "libcom32.c32").await
+pub async fn serve_libcom32(headers: HeaderMap) -> Response {
+    serve_static_file(
+        "/var/lib/dragonfly/libcom32.c32",
+        "libcom32.c32",
+        headers.get(axum::http::header::RANGE),
+    )
+    .await
 }
 
-async fn serve_static_file(file_path: &str, name: &str) -> Response {
+async fn serve_static_file(file_path: &str, name: &str, range: Option<&HeaderValue>) -> Response {
     let path = std::path::Path::new(file_path);
 
     if !path.exists() {
@@ -5041,25 +5000,11 @@ async fn serve_static_file(file_path: &str, name: &str) -> Response {
         return (StatusCode::NOT_FOUND, "File not found").into_response();
     }
 
-    match tokio::fs::read(path).await {
-        Ok(content) => {
-            info!("200 {}: Serving {} bytes", name, content.len());
-            (
-                StatusCode::OK,
-                [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
-                content,
-            )
-                .into_response()
-        }
-        Err(e) => {
-            error!("500 {}: Failed to read: {}", name, e);
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed: {}", e)).into_response()
-        }
-    }
+    stream_artifact(path, "application/octet-stream", range, None, None).await
 }
 
 /// Serve PXELINUX config file
-pub async fn serve_pxelinux_config() -> Response {
+pub async fn serve_pxelinux_config(headers: HeaderMap) -> Response {
     let config_path = "/var/lib/dragonfly/pxelinux.cfg/default";
     let path = std::path::Path::new(config_path);
 
@@ -5068,21 +5013,14 @@ pub async fn serve_pxelinux_config() -> Response {
         return (StatusCode::NOT_FOUND, "PXELINUX config not found").into_response();
     }
 
-    match tokio::fs::read(path).await {
-        Ok(content) => {
-            info!("200 pxelinux.cfg/default: Serving {} bytes", content.len());
-            (
-                StatusCode::OK,
-                [(axum::http::header::CONTENT_TYPE, "text/plain")],
-                content,
-            )
-                .into_response()
-        }
-        Err(e) => {
-            error!("500 pxelinux.cfg/default: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed: {}", e)).into_response()
-        }
-    }
+    stream_artifact(
+        path,
+        "text/plain",
+        headers.get(axum::http::header::RANGE),
+        None,
+        None,
+    )
+    .await
 }
 
 // ============================================================================
