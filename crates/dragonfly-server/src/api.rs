@@ -249,6 +249,11 @@ pub fn api_router() -> Router<crate::AppState> {
     Router::new()
         .route("/machines", get(get_all_machines).post(register_machine))
         .route("/machines/admin/create", post(admin_create_machine))
+        // Look up a single machine by MAC — the right primitive for "is this MAC
+        // registered, and is it Installed?" in one call, instead of paginating
+        // the full machine list to find one row (which silently misses any
+        // machine past page 1).
+        .route("/machines/by-mac/{mac}", get(get_machine_by_mac))
         .route("/machines/install-status", get(get_install_status))
         .route("/machines/{id}/os", get(get_machine_os).post(assign_os))
         .route("/machines/{id}/reimage", post(reimage_machine)) // Add new reimage endpoint
@@ -1196,6 +1201,50 @@ async fn get_machine(State(state): State<AppState>, Path(id): Path<Uuid>) -> Res
         }
         Err(e) => {
             error!("Failed to retrieve machine {}: {}", id, e);
+            let error_response = ErrorResponse {
+                error: "Database Error".to_string(),
+                message: e.to_string(),
+            };
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(error_response)).into_response()
+        }
+    }
+}
+
+/// Look up a single machine by MAC address.
+///
+/// Returns the `simple` detail projection (`id`, `hostname`, `ip_address`,
+/// `mac_address`, `status`, `tags`) — the same shape `GET /machines` emits per
+/// row — or `404` when no machine has that MAC.
+///
+/// This is the primitive automation wants for "is this MAC registered, and is
+/// it Installed?": one row, one call. The alternative callers used to reach for
+/// — `GET /machines` and scanning for the MAC — paginates, so any machine past
+/// page 1 looks absent and gets spuriously re-imaged on every converge run.
+#[axum::debug_handler]
+async fn get_machine_by_mac(
+    State(state): State<AppState>,
+    _caller: AuthenticatedCaller, // authenticated read (same posture as the machine list)
+    Path(mac): Path<String>,
+) -> Response {
+    let normalized = dragonfly_common::normalize_mac(&mac);
+    match state.store.get_machine_by_mac(&normalized).await {
+        Ok(Some(v1_machine)) => {
+            let machine = machine_to_common(&v1_machine);
+            (
+                StatusCode::OK,
+                Json(machine_to_detail_level(&machine, "simple")),
+            )
+                .into_response()
+        }
+        Ok(None) => {
+            let error_response = ErrorResponse {
+                error: "Not Found".to_string(),
+                message: format!("Machine with MAC {} not found", mac),
+            };
+            (StatusCode::NOT_FOUND, Json(error_response)).into_response()
+        }
+        Err(e) => {
+            error!("Failed to retrieve machine by MAC {}: {}", mac, e);
             let error_response = ErrorResponse {
                 error: "Database Error".to_string(),
                 message: e.to_string(),
