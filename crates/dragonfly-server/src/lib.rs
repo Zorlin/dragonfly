@@ -1346,8 +1346,20 @@ pub async fn run() -> anyhow::Result<()> {
         // Debian Mage boot assets - Debian-based boot environment for zero-impedance provisioning
         .route("/boot-debian/{arch}/{asset}", get(api::serve_debian_boot_asset_handler))
         // OS images (served during provisioning)
-        .route("/os/debian-13/amd64", get(|| async { api::serve_os_image("debian-13", "amd64").await }))
-        .route("/os/debian-13/arm64", get(|| async { api::serve_os_image("debian-13", "arm64").await }))
+        .route(
+            "/os/debian-13/amd64",
+            get(|headers: axum::http::HeaderMap| async move {
+                api::serve_os_image("debian-13", "amd64", headers.get(axum::http::header::RANGE))
+                    .await
+            }),
+        )
+        .route(
+            "/os/debian-13/arm64",
+            get(|headers: axum::http::HeaderMap| async move {
+                api::serve_os_image("debian-13", "arm64", headers.get(axum::http::header::RANGE))
+                    .await
+            }),
+        )
         // Cached images (JIT-converted QCOW2 to raw)
         .route("/images/{name}", get(api::serve_cached_image))
         // Legacy route for backwards compatibility

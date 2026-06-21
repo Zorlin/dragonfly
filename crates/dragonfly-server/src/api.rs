@@ -2614,6 +2614,40 @@ fn create_streaming_response(
     })
 }
 
+/// Stream an on-disk artifact with constant memory and optional Range support.
+///
+/// Wraps [`read_file_as_stream`] + [`create_streaming_response`] so every
+/// boot-artifact handler serves files the same way: chunked (64 KiB) streaming
+/// rather than buffering the whole file into memory, and honoring `Range`
+/// requests (206 Partial Content). Under concurrent imaging — many machines
+/// pulling initramfs/kernel/modloop at once — this keeps memory flat at
+/// `N × chunk_size` and lets the runtime interleave reads fairly across clients,
+/// instead of each request holding a full-file `Vec<u8>` for the entire read.
+///
+/// Pass `state` + `machine_id` to emit per-machine download-progress events;
+/// `None`/`None` disables tracking. Any open/stat/parse failure maps to 500.
+async fn stream_artifact(
+    path: &StdPath,
+    content_type: &str,
+    range: Option<&HeaderValue>,
+    state: Option<&AppState>,
+    machine_id: Option<Uuid>,
+) -> Response {
+    match read_file_as_stream(path, range, state, machine_id).await {
+        Ok((stream, content_length, content_range)) => {
+            create_streaming_response(stream, content_type, content_length, content_range)
+        }
+        Err(e) => {
+            error!("Failed to stream artifact {}: {}", path.display(), e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to read artifact: {}", e),
+            )
+                .into_response()
+        }
+    }
+}
+
 async fn read_file_as_stream(
     path: &StdPath,
     range_header: Option<&HeaderValue>, // Add parameter for Range header
@@ -3664,11 +3698,13 @@ async fn parse_range_header(
     let start_str = parts[0].trim();
     let end_str = parts[1].trim();
 
-    let start = if start_str.is_empty() {
-        // Suffix range: "-<length>"
+    let is_suffix = start_str.is_empty();
+
+    let start = if is_suffix {
+        // Suffix range "bytes=-N": the last N bytes of the file.
         if end_str.is_empty() {
-            return None;
-        } // Invalid: "-"
+            return None; // Invalid: "bytes=-"
+        }
         let suffix_len = end_str.parse::<u64>().ok()?;
         if suffix_len >= total_size {
             0
@@ -3680,11 +3716,14 @@ async fn parse_range_header(
         start_str.parse::<u64>().ok()?
     };
 
-    let end = if end_str.is_empty() {
-        // Range "start-" means start to end of file
+    let end = if is_suffix {
+        // A suffix range always runs to the final byte.
+        total_size.saturating_sub(1)
+    } else if end_str.is_empty() {
+        // Open-ended "start-" means start to end of file
         total_size.saturating_sub(1)
     } else {
-        // Range "start-end"
+        // Closed "start-end"
         end_str.parse::<u64>().ok()?
     };
 
@@ -4785,7 +4824,7 @@ const GRUB_CHAIN_PATH: &str = "/var/lib/dragonfly/grub-spark.0";
 /// - Checks for existing bootable OS
 /// - Reports to Dragonfly server
 /// - Chainloads to Mage for imaging when needed
-pub async fn serve_spark_elf() -> Response {
+pub async fn serve_spark_elf(headers: HeaderMap) -> Response {
     let spark_path = std::path::Path::new(SPARK_ELF_PATH);
 
     if !spark_path.exists() {
@@ -4797,32 +4836,21 @@ pub async fn serve_spark_elf() -> Response {
             .into_response();
     }
 
-    match tokio::fs::read(spark_path).await {
-        Ok(content) => {
-            info!("200 /boot/spark.elf: Serving {} bytes", content.len());
-            (
-                StatusCode::OK,
-                [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
-                content,
-            )
-                .into_response()
-        }
-        Err(e) => {
-            error!("500 /boot/spark.elf: Failed to read: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to read Spark ELF: {}", e),
-            )
-                .into_response()
-        }
-    }
+    stream_artifact(
+        spark_path,
+        "application/octet-stream",
+        headers.get(axum::http::header::RANGE),
+        None,
+        None,
+    )
+    .await
 }
 
 /// Serve Spark ELF (x86_64) for EFI iPXE multiboot
 ///
 /// EFI iPXE cannot load elf32-i386 binaries — it needs the original
 /// x86_64 ELF. Same kernel, different ELF header format.
-pub async fn serve_spark_efi_elf() -> Response {
+pub async fn serve_spark_efi_elf(headers: HeaderMap) -> Response {
     let spark_path = std::path::Path::new(SPARK_EFI_ELF_PATH);
 
     if !spark_path.exists() {
@@ -4837,25 +4865,14 @@ pub async fn serve_spark_efi_elf() -> Response {
             .into_response();
     }
 
-    match tokio::fs::read(spark_path).await {
-        Ok(content) => {
-            info!("200 /boot/spark-efi.elf: Serving {} bytes", content.len());
-            (
-                StatusCode::OK,
-                [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
-                content,
-            )
-                .into_response()
-        }
-        Err(e) => {
-            error!("500 /boot/spark-efi.elf: Failed to read: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to read Spark EFI ELF: {}", e),
-            )
-                .into_response()
-        }
-    }
+    stream_artifact(
+        spark_path,
+        "application/octet-stream",
+        headers.get(axum::http::header::RANGE),
+        None,
+        None,
+    )
+    .await
 }
 
 /// Serve GRUB EFI shim for EFI PXE multiboot
@@ -4863,7 +4880,7 @@ pub async fn serve_spark_efi_elf() -> Response {
 /// EFI iPXE can't do multiboot2. This standalone GRUB EFI binary has
 /// Spark embedded and boots it via multiboot2 after doing DHCP to
 /// discover the Dragonfly server address.
-pub async fn serve_grub_spark_efi() -> Response {
+pub async fn serve_grub_spark_efi(headers: HeaderMap) -> Response {
     let path = std::path::Path::new(GRUB_SPARK_EFI_PATH);
 
     if !path.exists() {
@@ -4875,25 +4892,14 @@ pub async fn serve_grub_spark_efi() -> Response {
             .into_response();
     }
 
-    match tokio::fs::read(path).await {
-        Ok(content) => {
-            info!("200 /boot/grub-spark.efi: Serving {} bytes", content.len());
-            (
-                StatusCode::OK,
-                [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
-                content,
-            )
-                .into_response()
-        }
-        Err(e) => {
-            error!("500 /boot/grub-spark.efi: Failed to read: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to read GRUB Spark EFI: {}", e),
-            )
-                .into_response()
-        }
-    }
+    stream_artifact(
+        path,
+        "application/octet-stream",
+        headers.get(axum::http::header::RANGE),
+        None,
+        None,
+    )
+    .await
 }
 
 /// Serve iPXE EFI binary over HTTP for UEFI HTTP Boot
@@ -4902,7 +4908,7 @@ pub async fn serve_grub_spark_efi() -> Response {
 /// The DHCP server directs HTTPClient vendors to this URL.
 /// Once iPXE loads, it does its own DHCP exchange and follows
 /// the normal iPXE boot script flow.
-pub async fn serve_ipxe_efi() -> Response {
+pub async fn serve_ipxe_efi(headers: HeaderMap) -> Response {
     let path = std::path::Path::new(IPXE_EFI_PATH);
 
     if !path.exists() {
@@ -4914,32 +4920,18 @@ pub async fn serve_ipxe_efi() -> Response {
             .into_response();
     }
 
-    match tokio::fs::read(path).await {
-        Ok(content) => {
-            info!(
-                "200 /boot/ipxe.efi: Serving {} bytes (HTTP Boot)",
-                content.len()
-            );
-            (
-                StatusCode::OK,
-                [(axum::http::header::CONTENT_TYPE, "application/efi")],
-                content,
-            )
-                .into_response()
-        }
-        Err(e) => {
-            error!("500 /boot/ipxe.efi: Failed to read: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to read iPXE EFI: {}", e),
-            )
-                .into_response()
-        }
-    }
+    stream_artifact(
+        path,
+        "application/efi",
+        headers.get(axum::http::header::RANGE),
+        None,
+        None,
+    )
+    .await
 }
 
 /// Serve memtest86+ binary for iPXE kernel boot
-pub async fn serve_memtest() -> Response {
+pub async fn serve_memtest(headers: HeaderMap) -> Response {
     let path = std::path::Path::new(MEMTEST_PATH);
 
     if !path.exists() {
@@ -4950,51 +4942,57 @@ pub async fn serve_memtest() -> Response {
         ).into_response();
     }
 
-    match tokio::fs::read(path).await {
-        Ok(content) => {
-            info!(
-                "200 /boot/memtest86plus.bin: Serving {} bytes",
-                content.len()
-            );
-            (
-                StatusCode::OK,
-                [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
-                content,
-            )
-                .into_response()
-        }
-        Err(e) => {
-            error!("500 /boot/memtest86plus.bin: Failed to read: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to read memtest86plus.bin: {}", e),
-            )
-                .into_response()
-        }
-    }
+    stream_artifact(
+        path,
+        "application/octet-stream",
+        headers.get(axum::http::header::RANGE),
+        None,
+        None,
+    )
+    .await
 }
 
 /// Serve PXELINUX bootloader
-pub async fn serve_lpxelinux() -> Response {
-    serve_static_file("/var/lib/dragonfly/lpxelinux.0", "lpxelinux.0").await
+pub async fn serve_lpxelinux(headers: HeaderMap) -> Response {
+    serve_static_file(
+        "/var/lib/dragonfly/lpxelinux.0",
+        "lpxelinux.0",
+        headers.get(axum::http::header::RANGE),
+    )
+    .await
 }
 
 /// Serve ldlinux.c32 module
-pub async fn serve_ldlinux() -> Response {
-    serve_static_file("/var/lib/dragonfly/ldlinux.c32", "ldlinux.c32").await
+pub async fn serve_ldlinux(headers: HeaderMap) -> Response {
+    serve_static_file(
+        "/var/lib/dragonfly/ldlinux.c32",
+        "ldlinux.c32",
+        headers.get(axum::http::header::RANGE),
+    )
+    .await
 }
 
 /// Serve mboot.c32 multiboot module
-pub async fn serve_mboot() -> Response {
-    serve_static_file("/var/lib/dragonfly/mboot.c32", "mboot.c32").await
+pub async fn serve_mboot(headers: HeaderMap) -> Response {
+    serve_static_file(
+        "/var/lib/dragonfly/mboot.c32",
+        "mboot.c32",
+        headers.get(axum::http::header::RANGE),
+    )
+    .await
 }
 
 /// Serve libcom32.c32 library
-pub async fn serve_libcom32() -> Response {
-    serve_static_file("/var/lib/dragonfly/libcom32.c32", "libcom32.c32").await
+pub async fn serve_libcom32(headers: HeaderMap) -> Response {
+    serve_static_file(
+        "/var/lib/dragonfly/libcom32.c32",
+        "libcom32.c32",
+        headers.get(axum::http::header::RANGE),
+    )
+    .await
 }
 
-async fn serve_static_file(file_path: &str, name: &str) -> Response {
+async fn serve_static_file(file_path: &str, name: &str, range: Option<&HeaderValue>) -> Response {
     let path = std::path::Path::new(file_path);
 
     if !path.exists() {
@@ -5002,25 +5000,11 @@ async fn serve_static_file(file_path: &str, name: &str) -> Response {
         return (StatusCode::NOT_FOUND, "File not found").into_response();
     }
 
-    match tokio::fs::read(path).await {
-        Ok(content) => {
-            info!("200 {}: Serving {} bytes", name, content.len());
-            (
-                StatusCode::OK,
-                [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
-                content,
-            )
-                .into_response()
-        }
-        Err(e) => {
-            error!("500 {}: Failed to read: {}", name, e);
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed: {}", e)).into_response()
-        }
-    }
+    stream_artifact(path, "application/octet-stream", range, None, None).await
 }
 
 /// Serve PXELINUX config file
-pub async fn serve_pxelinux_config() -> Response {
+pub async fn serve_pxelinux_config(headers: HeaderMap) -> Response {
     let config_path = "/var/lib/dragonfly/pxelinux.cfg/default";
     let path = std::path::Path::new(config_path);
 
@@ -5029,21 +5013,14 @@ pub async fn serve_pxelinux_config() -> Response {
         return (StatusCode::NOT_FOUND, "PXELINUX config not found").into_response();
     }
 
-    match tokio::fs::read(path).await {
-        Ok(content) => {
-            info!("200 pxelinux.cfg/default: Serving {} bytes", content.len());
-            (
-                StatusCode::OK,
-                [(axum::http::header::CONTENT_TYPE, "text/plain")],
-                content,
-            )
-                .into_response()
-        }
-        Err(e) => {
-            error!("500 pxelinux.cfg/default: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed: {}", e)).into_response()
-        }
-    }
+    stream_artifact(
+        path,
+        "text/plain",
+        headers.get(axum::http::header::RANGE),
+        None,
+        None,
+    )
+    .await
 }
 
 // ============================================================================
@@ -5268,9 +5245,16 @@ pub async fn generate_mage_apkovl_arch(
 /// Handler for /boot/{arch}/{asset} routes - extracts path parameters
 pub async fn serve_boot_asset_handler(
     State(state): State<AppState>,
+    headers: HeaderMap,
     axum::extract::Path((arch, asset)): axum::extract::Path<(String, String)>,
 ) -> Response {
-    serve_boot_asset(&arch, &asset, &state).await
+    serve_boot_asset(
+        &arch,
+        &asset,
+        &state,
+        headers.get(axum::http::header::RANGE),
+    )
+    .await
 }
 
 /// Serve boot assets (kernel, initramfs, modloop, apkovl) for a specific architecture
@@ -5280,7 +5264,12 @@ pub async fn serve_boot_asset_handler(
 /// - /boot/{arch}/initramfs -> initramfs
 /// - /boot/{arch}/modloop -> modloop
 /// - /boot/{arch}/apkovl.tar.gz -> localhost.apkovl.tar.gz (dynamically generated)
-pub async fn serve_boot_asset(arch: &str, asset: &str, state: &AppState) -> Response {
+pub async fn serve_boot_asset(
+    arch: &str,
+    asset: &str,
+    state: &AppState,
+    range: Option<&HeaderValue>,
+) -> Response {
     // Normalize architecture names
     // - iPXE BIOS uses i386 (32-bit) but can boot x86_64 kernels
     // - iPXE EFI uses x86_64
@@ -5373,39 +5362,17 @@ pub async fn serve_boot_asset(arch: &str, asset: &str, state: &AppState) -> Resp
             .into_response();
     }
 
-    // Read file and serve
-    match tokio::fs::read(&file_path).await {
-        Ok(content) => {
-            info!(
-                "200 /boot/{}/{}: Serving {} bytes from {:?}",
-                arch,
-                asset,
-                content.len(),
-                file_path
-            );
-            let content_type = match asset {
-                "apkovl.tar.gz" => "application/gzip",
-                _ => "application/octet-stream",
-            };
-            (
-                StatusCode::OK,
-                [(axum::http::header::CONTENT_TYPE, content_type)],
-                content,
-            )
-                .into_response()
-        }
-        Err(e) => {
-            error!(
-                "500 /boot/{}/{}: Failed to read {:?}: {}",
-                arch, asset, file_path, e
-            );
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to read boot asset: {}", e),
-            )
-                .into_response()
-        }
-    }
+    // Stream the artifact in 64 KiB chunks (constant memory, with Range
+    // support) instead of buffering the whole file into a Vec. initramfs/modloop
+    // can be hundreds of MB and a boot storm pulls them from many machines at
+    // once; full-buffer reads contend the blocking pool + disk and stall
+    // transfers partway. See `stream_artifact`.
+    let content_type = match asset {
+        "apkovl.tar.gz" => "application/gzip",
+        _ => "application/octet-stream",
+    };
+    info!("200 /boot/{}/{}: streaming {:?}", arch, asset, file_path);
+    stream_artifact(&file_path, content_type, range, Some(state), None).await
 }
 
 // ============================================================================
@@ -5414,9 +5381,10 @@ pub async fn serve_boot_asset(arch: &str, asset: &str, state: &AppState) -> Resp
 
 /// Handler for /boot-debian/{arch}/{asset} routes — serves Debian Mage artifacts
 pub async fn serve_debian_boot_asset_handler(
+    headers: HeaderMap,
     axum::extract::Path((arch, asset)): axum::extract::Path<(String, String)>,
 ) -> Response {
-    serve_debian_boot_asset(&arch, &asset).await
+    serve_debian_boot_asset(&arch, &asset, headers.get(axum::http::header::RANGE)).await
 }
 
 /// Serve Debian Mage boot assets (kernel, initramfs) for a specific architecture
@@ -5427,7 +5395,11 @@ pub async fn serve_debian_boot_asset_handler(
 ///
 /// Unlike Alpine Mage, Debian Mage has no modloop or apkovl — the agent is
 /// baked into the initramfs and all packages are pre-installed.
-pub async fn serve_debian_boot_asset(arch: &str, asset: &str) -> Response {
+pub async fn serve_debian_boot_asset(
+    arch: &str,
+    asset: &str,
+    range: Option<&HeaderValue>,
+) -> Response {
     // Normalize architecture names
     let normalized_arch = match arch {
         "x86_64" | "i386" => "x86_64",
@@ -5481,35 +5453,13 @@ pub async fn serve_debian_boot_asset(arch: &str, asset: &str) -> Response {
             .into_response();
     }
 
-    // Read file and serve
-    match tokio::fs::read(&file_path).await {
-        Ok(content) => {
-            info!(
-                "200 /boot-debian/{}/{}: Serving {} bytes from {:?}",
-                arch,
-                asset,
-                content.len(),
-                file_path
-            );
-            (
-                StatusCode::OK,
-                [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
-                content,
-            )
-                .into_response()
-        }
-        Err(e) => {
-            error!(
-                "500 /boot-debian/{}/{}: Failed to read {:?}: {}",
-                arch, asset, file_path, e
-            );
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to read Debian Mage boot asset: {}", e),
-            )
-                .into_response()
-        }
-    }
+    // Stream in 64 KiB chunks (constant memory + Range) instead of buffering
+    // the whole initramfs/kernel. See `stream_artifact` and serve_boot_asset.
+    info!(
+        "200 /boot-debian/{}/{}: streaming {:?}",
+        arch, asset, file_path
+    );
+    stream_artifact(&file_path, "application/octet-stream", range, None, None).await
 }
 
 /// Verify that Debian Mage boot artifacts exist for the given architectures
@@ -5643,7 +5593,7 @@ pub async fn download_ipxe_binaries() -> anyhow::Result<()> {
 const OS_IMAGES_DIR: &str = "/var/lib/dragonfly/os-images";
 
 /// Serve OS image file
-pub async fn serve_os_image(os: &str, arch: &str) -> Response {
+pub async fn serve_os_image(os: &str, arch: &str, range: Option<&HeaderValue>) -> Response {
     let path = match os {
         "debian-13" => {
             let filename = format!("debian-13-generic-{}.tar.xz", arch);
@@ -5662,24 +5612,16 @@ pub async fn serve_os_image(os: &str, arch: &str) -> Response {
             .into_response();
     }
 
-    match tokio::fs::read(&path).await {
-        Ok(content) => (
-            StatusCode::OK,
-            [(axum::http::header::CONTENT_TYPE, "application/x-xz")],
-            content,
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to read: {}", e),
-        )
-            .into_response(),
-    }
+    // OS images are multi-GB and every imaging machine pulls one concurrently;
+    // stream in 64 KiB chunks (constant memory + Range) instead of buffering
+    // the whole file. See `stream_artifact`.
+    stream_artifact(&path, "application/x-xz", range, None, None).await
 }
 
 /// Serve cached image file (JIT-converted QCOW2 to raw)
 pub async fn serve_cached_image(
     State(state): State<crate::AppState>,
+    headers: HeaderMap,
     Path(name): Path<String>,
 ) -> Response {
     let cache_dir = state.image_cache.cache_dir();
@@ -5688,36 +5630,25 @@ pub async fn serve_cached_image(
     // Security: ensure the path stays within cache directory
     match path.canonicalize() {
         Ok(canonical) if canonical.starts_with(cache_dir) => {
-            match tokio::fs::read(&canonical).await {
-                Ok(content) => {
-                    let content_type = if name.ends_with(".tar.zst") {
-                        "application/zstd"
-                    } else if name.ends_with(".tar.xz") {
-                        "application/x-xz"
-                    } else {
-                        "application/octet-stream"
-                    };
-                    (
-                        StatusCode::OK,
-                        [(axum::http::header::CONTENT_TYPE, content_type)],
-                        content,
-                    )
-                        .into_response()
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => (
-                    StatusCode::NOT_FOUND,
-                    format!("Cached image not found: {}", name),
-                )
-                    .into_response(),
-                Err(e) => {
-                    error!(name = %name, error = %e, "Failed to read cached image");
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("Failed to read: {}", e),
-                    )
-                        .into_response()
-                }
-            }
+            let content_type = if name.ends_with(".tar.zst") {
+                "application/zstd"
+            } else if name.ends_with(".tar.xz") {
+                "application/x-xz"
+            } else {
+                "application/octet-stream"
+            };
+            // JIT-converted images can be multi-GB and are pulled concurrently
+            // across imaging machines; stream (constant memory + Range) instead
+            // of buffering. `canonical` already resolved so the file existed; a
+            // mid-stream open failure (rare race) surfaces as 500.
+            stream_artifact(
+                &canonical,
+                content_type,
+                headers.get(axum::http::header::RANGE),
+                None,
+                None,
+            )
+            .await
         }
         Ok(_) => {
             warn!(name = %name, "Path traversal attempt detected");
@@ -10477,5 +10408,148 @@ mod admin_create_tests {
         apply_admin_create_config(&mut machine, &request("bc:24:11:22:33:44", None));
         assert_eq!(machine.config.network_mode, NetworkMode::Dhcp);
         assert!(machine.config.static_ipv4.is_none());
+    }
+}
+
+#[cfg(test)]
+mod stream_artifact_tests {
+    use super::*;
+    use axum::body::to_bytes;
+
+    /// Write `data` to a temp file; returns its path and the `TempDir` (kept
+    /// alive for the test so the file isn't unlinked mid-read).
+    fn write_temp_file(data: &[u8]) -> (std::path::PathBuf, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("artifact.bin");
+        std::fs::write(&path, data).expect("write temp file");
+        (path, dir)
+    }
+
+    fn two_hundred_kb() -> Vec<u8> {
+        (0..200_000u32).map(|i| (i % 256) as u8).collect()
+    }
+
+    #[tokio::test]
+    async fn full_file_serves_200_with_headers_and_body() {
+        let data = two_hundred_kb();
+        let (path, _dir) = write_temp_file(&data);
+
+        let resp = stream_artifact(&path, "application/octet-stream", None, None, None).await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::ACCEPT_RANGES)
+                .unwrap(),
+            "bytes"
+        );
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CONTENT_LENGTH)
+                .unwrap(),
+            "200000"
+        );
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CONTENT_ENCODING)
+                .unwrap(),
+            "identity"
+        );
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .unwrap(),
+            "application/octet-stream"
+        );
+
+        let body = to_bytes(resp.into_body(), 300_000)
+            .await
+            .expect("read streaming body");
+        assert_eq!(body.as_ref(), data.as_slice());
+    }
+
+    #[tokio::test]
+    async fn closed_range_returns_206_with_correct_slice() {
+        let data = two_hundred_kb();
+        let (path, _dir) = write_temp_file(&data);
+        let range = HeaderValue::from_static("bytes=1000-2999");
+
+        let resp =
+            stream_artifact(&path, "application/octet-stream", Some(&range), None, None).await;
+
+        assert_eq!(resp.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CONTENT_RANGE)
+                .unwrap(),
+            "bytes 1000-2999/200000"
+        );
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CONTENT_LENGTH)
+                .unwrap(),
+            "2000"
+        );
+
+        let body = to_bytes(resp.into_body(), 4096)
+            .await
+            .expect("read streaming body");
+        assert_eq!(body.as_ref(), &data[1000..3000]);
+    }
+
+    #[tokio::test]
+    async fn open_end_range_serves_tail() {
+        let data = two_hundred_kb();
+        let (path, _dir) = write_temp_file(&data);
+        let range = HeaderValue::from_static("bytes=199990-");
+
+        let resp =
+            stream_artifact(&path, "application/octet-stream", Some(&range), None, None).await;
+
+        assert_eq!(resp.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CONTENT_RANGE)
+                .unwrap(),
+            "bytes 199990-199999/200000"
+        );
+
+        let body = to_bytes(resp.into_body(), 64)
+            .await
+            .expect("read streaming body");
+        assert_eq!(body.as_ref(), &data[199990..200000]);
+    }
+
+    #[tokio::test]
+    async fn suffix_range_serves_last_n_bytes() {
+        let data = two_hundred_kb();
+        let (path, _dir) = write_temp_file(&data);
+        let range = HeaderValue::from_static("bytes=-50");
+
+        let resp =
+            stream_artifact(&path, "application/octet-stream", Some(&range), None, None).await;
+
+        assert_eq!(resp.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CONTENT_RANGE)
+                .unwrap(),
+            "bytes 199950-199999/200000"
+        );
+
+        let body = to_bytes(resp.into_body(), 128)
+            .await
+            .expect("read streaming body");
+        assert_eq!(body.as_ref(), &data[199950..200000]);
+    }
+
+    #[tokio::test]
+    async fn missing_file_returns_500_without_panicking() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("does-not-exist.bin");
+
+        let resp = stream_artifact(&path, "application/octet-stream", None, None, None).await;
+
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 }
