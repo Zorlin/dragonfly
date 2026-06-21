@@ -2614,6 +2614,40 @@ fn create_streaming_response(
     })
 }
 
+/// Stream an on-disk artifact with constant memory and optional Range support.
+///
+/// Wraps [`read_file_as_stream`] + [`create_streaming_response`] so every
+/// boot-artifact handler serves files the same way: chunked (64 KiB) streaming
+/// rather than buffering the whole file into memory, and honoring `Range`
+/// requests (206 Partial Content). Under concurrent imaging — many machines
+/// pulling initramfs/kernel/modloop at once — this keeps memory flat at
+/// `N × chunk_size` and lets the runtime interleave reads fairly across clients,
+/// instead of each request holding a full-file `Vec<u8>` for the entire read.
+///
+/// Pass `state` + `machine_id` to emit per-machine download-progress events;
+/// `None`/`None` disables tracking. Any open/stat/parse failure maps to 500.
+async fn stream_artifact(
+    path: &StdPath,
+    content_type: &str,
+    range: Option<&HeaderValue>,
+    state: Option<&AppState>,
+    machine_id: Option<Uuid>,
+) -> Response {
+    match read_file_as_stream(path, range, state, machine_id).await {
+        Ok((stream, content_length, content_range)) => {
+            create_streaming_response(stream, content_type, content_length, content_range)
+        }
+        Err(e) => {
+            error!("Failed to stream artifact {}: {}", path.display(), e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to read artifact: {}", e),
+            )
+                .into_response()
+        }
+    }
+}
+
 async fn read_file_as_stream(
     path: &StdPath,
     range_header: Option<&HeaderValue>, // Add parameter for Range header
@@ -3664,11 +3698,13 @@ async fn parse_range_header(
     let start_str = parts[0].trim();
     let end_str = parts[1].trim();
 
-    let start = if start_str.is_empty() {
-        // Suffix range: "-<length>"
+    let is_suffix = start_str.is_empty();
+
+    let start = if is_suffix {
+        // Suffix range "bytes=-N": the last N bytes of the file.
         if end_str.is_empty() {
-            return None;
-        } // Invalid: "-"
+            return None; // Invalid: "bytes=-"
+        }
         let suffix_len = end_str.parse::<u64>().ok()?;
         if suffix_len >= total_size {
             0
@@ -3680,11 +3716,14 @@ async fn parse_range_header(
         start_str.parse::<u64>().ok()?
     };
 
-    let end = if end_str.is_empty() {
-        // Range "start-" means start to end of file
+    let end = if is_suffix {
+        // A suffix range always runs to the final byte.
+        total_size.saturating_sub(1)
+    } else if end_str.is_empty() {
+        // Open-ended "start-" means start to end of file
         total_size.saturating_sub(1)
     } else {
-        // Range "start-end"
+        // Closed "start-end"
         end_str.parse::<u64>().ok()?
     };
 
@@ -5268,9 +5307,16 @@ pub async fn generate_mage_apkovl_arch(
 /// Handler for /boot/{arch}/{asset} routes - extracts path parameters
 pub async fn serve_boot_asset_handler(
     State(state): State<AppState>,
+    headers: HeaderMap,
     axum::extract::Path((arch, asset)): axum::extract::Path<(String, String)>,
 ) -> Response {
-    serve_boot_asset(&arch, &asset, &state).await
+    serve_boot_asset(
+        &arch,
+        &asset,
+        &state,
+        headers.get(axum::http::header::RANGE),
+    )
+    .await
 }
 
 /// Serve boot assets (kernel, initramfs, modloop, apkovl) for a specific architecture
@@ -5280,7 +5326,12 @@ pub async fn serve_boot_asset_handler(
 /// - /boot/{arch}/initramfs -> initramfs
 /// - /boot/{arch}/modloop -> modloop
 /// - /boot/{arch}/apkovl.tar.gz -> localhost.apkovl.tar.gz (dynamically generated)
-pub async fn serve_boot_asset(arch: &str, asset: &str, state: &AppState) -> Response {
+pub async fn serve_boot_asset(
+    arch: &str,
+    asset: &str,
+    state: &AppState,
+    range: Option<&HeaderValue>,
+) -> Response {
     // Normalize architecture names
     // - iPXE BIOS uses i386 (32-bit) but can boot x86_64 kernels
     // - iPXE EFI uses x86_64
@@ -5373,39 +5424,17 @@ pub async fn serve_boot_asset(arch: &str, asset: &str, state: &AppState) -> Resp
             .into_response();
     }
 
-    // Read file and serve
-    match tokio::fs::read(&file_path).await {
-        Ok(content) => {
-            info!(
-                "200 /boot/{}/{}: Serving {} bytes from {:?}",
-                arch,
-                asset,
-                content.len(),
-                file_path
-            );
-            let content_type = match asset {
-                "apkovl.tar.gz" => "application/gzip",
-                _ => "application/octet-stream",
-            };
-            (
-                StatusCode::OK,
-                [(axum::http::header::CONTENT_TYPE, content_type)],
-                content,
-            )
-                .into_response()
-        }
-        Err(e) => {
-            error!(
-                "500 /boot/{}/{}: Failed to read {:?}: {}",
-                arch, asset, file_path, e
-            );
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to read boot asset: {}", e),
-            )
-                .into_response()
-        }
-    }
+    // Stream the artifact in 64 KiB chunks (constant memory, with Range
+    // support) instead of buffering the whole file into a Vec. initramfs/modloop
+    // can be hundreds of MB and a boot storm pulls them from many machines at
+    // once; full-buffer reads contend the blocking pool + disk and stall
+    // transfers partway. See `stream_artifact`.
+    let content_type = match asset {
+        "apkovl.tar.gz" => "application/gzip",
+        _ => "application/octet-stream",
+    };
+    info!("200 /boot/{}/{}: streaming {:?}", arch, asset, file_path);
+    stream_artifact(&file_path, content_type, range, Some(state), None).await
 }
 
 // ============================================================================
@@ -5414,9 +5443,10 @@ pub async fn serve_boot_asset(arch: &str, asset: &str, state: &AppState) -> Resp
 
 /// Handler for /boot-debian/{arch}/{asset} routes — serves Debian Mage artifacts
 pub async fn serve_debian_boot_asset_handler(
+    headers: HeaderMap,
     axum::extract::Path((arch, asset)): axum::extract::Path<(String, String)>,
 ) -> Response {
-    serve_debian_boot_asset(&arch, &asset).await
+    serve_debian_boot_asset(&arch, &asset, headers.get(axum::http::header::RANGE)).await
 }
 
 /// Serve Debian Mage boot assets (kernel, initramfs) for a specific architecture
@@ -5427,7 +5457,11 @@ pub async fn serve_debian_boot_asset_handler(
 ///
 /// Unlike Alpine Mage, Debian Mage has no modloop or apkovl — the agent is
 /// baked into the initramfs and all packages are pre-installed.
-pub async fn serve_debian_boot_asset(arch: &str, asset: &str) -> Response {
+pub async fn serve_debian_boot_asset(
+    arch: &str,
+    asset: &str,
+    range: Option<&HeaderValue>,
+) -> Response {
     // Normalize architecture names
     let normalized_arch = match arch {
         "x86_64" | "i386" => "x86_64",
@@ -5481,35 +5515,13 @@ pub async fn serve_debian_boot_asset(arch: &str, asset: &str) -> Response {
             .into_response();
     }
 
-    // Read file and serve
-    match tokio::fs::read(&file_path).await {
-        Ok(content) => {
-            info!(
-                "200 /boot-debian/{}/{}: Serving {} bytes from {:?}",
-                arch,
-                asset,
-                content.len(),
-                file_path
-            );
-            (
-                StatusCode::OK,
-                [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
-                content,
-            )
-                .into_response()
-        }
-        Err(e) => {
-            error!(
-                "500 /boot-debian/{}/{}: Failed to read {:?}: {}",
-                arch, asset, file_path, e
-            );
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to read Debian Mage boot asset: {}", e),
-            )
-                .into_response()
-        }
-    }
+    // Stream in 64 KiB chunks (constant memory + Range) instead of buffering
+    // the whole initramfs/kernel. See `stream_artifact` and serve_boot_asset.
+    info!(
+        "200 /boot-debian/{}/{}: streaming {:?}",
+        arch, asset, file_path
+    );
+    stream_artifact(&file_path, "application/octet-stream", range, None, None).await
 }
 
 /// Verify that Debian Mage boot artifacts exist for the given architectures
@@ -10477,5 +10489,148 @@ mod admin_create_tests {
         apply_admin_create_config(&mut machine, &request("bc:24:11:22:33:44", None));
         assert_eq!(machine.config.network_mode, NetworkMode::Dhcp);
         assert!(machine.config.static_ipv4.is_none());
+    }
+}
+
+#[cfg(test)]
+mod stream_artifact_tests {
+    use super::*;
+    use axum::body::to_bytes;
+
+    /// Write `data` to a temp file; returns its path and the `TempDir` (kept
+    /// alive for the test so the file isn't unlinked mid-read).
+    fn write_temp_file(data: &[u8]) -> (std::path::PathBuf, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("artifact.bin");
+        std::fs::write(&path, data).expect("write temp file");
+        (path, dir)
+    }
+
+    fn two_hundred_kb() -> Vec<u8> {
+        (0..200_000u32).map(|i| (i % 256) as u8).collect()
+    }
+
+    #[tokio::test]
+    async fn full_file_serves_200_with_headers_and_body() {
+        let data = two_hundred_kb();
+        let (path, _dir) = write_temp_file(&data);
+
+        let resp = stream_artifact(&path, "application/octet-stream", None, None, None).await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::ACCEPT_RANGES)
+                .unwrap(),
+            "bytes"
+        );
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CONTENT_LENGTH)
+                .unwrap(),
+            "200000"
+        );
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CONTENT_ENCODING)
+                .unwrap(),
+            "identity"
+        );
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .unwrap(),
+            "application/octet-stream"
+        );
+
+        let body = to_bytes(resp.into_body(), 300_000)
+            .await
+            .expect("read streaming body");
+        assert_eq!(body.as_ref(), data.as_slice());
+    }
+
+    #[tokio::test]
+    async fn closed_range_returns_206_with_correct_slice() {
+        let data = two_hundred_kb();
+        let (path, _dir) = write_temp_file(&data);
+        let range = HeaderValue::from_static("bytes=1000-2999");
+
+        let resp =
+            stream_artifact(&path, "application/octet-stream", Some(&range), None, None).await;
+
+        assert_eq!(resp.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CONTENT_RANGE)
+                .unwrap(),
+            "bytes 1000-2999/200000"
+        );
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CONTENT_LENGTH)
+                .unwrap(),
+            "2000"
+        );
+
+        let body = to_bytes(resp.into_body(), 4096)
+            .await
+            .expect("read streaming body");
+        assert_eq!(body.as_ref(), &data[1000..3000]);
+    }
+
+    #[tokio::test]
+    async fn open_end_range_serves_tail() {
+        let data = two_hundred_kb();
+        let (path, _dir) = write_temp_file(&data);
+        let range = HeaderValue::from_static("bytes=199990-");
+
+        let resp =
+            stream_artifact(&path, "application/octet-stream", Some(&range), None, None).await;
+
+        assert_eq!(resp.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CONTENT_RANGE)
+                .unwrap(),
+            "bytes 199990-199999/200000"
+        );
+
+        let body = to_bytes(resp.into_body(), 64)
+            .await
+            .expect("read streaming body");
+        assert_eq!(body.as_ref(), &data[199990..200000]);
+    }
+
+    #[tokio::test]
+    async fn suffix_range_serves_last_n_bytes() {
+        let data = two_hundred_kb();
+        let (path, _dir) = write_temp_file(&data);
+        let range = HeaderValue::from_static("bytes=-50");
+
+        let resp =
+            stream_artifact(&path, "application/octet-stream", Some(&range), None, None).await;
+
+        assert_eq!(resp.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CONTENT_RANGE)
+                .unwrap(),
+            "bytes 199950-199999/200000"
+        );
+
+        let body = to_bytes(resp.into_body(), 128)
+            .await
+            .expect("read streaming body");
+        assert_eq!(body.as_ref(), &data[199950..200000]);
+    }
+
+    #[tokio::test]
+    async fn missing_file_returns_500_without_panicking() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("does-not-exist.bin");
+
+        let resp = stream_artifact(&path, "application/octet-stream", None, None, None).await;
+
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 }
