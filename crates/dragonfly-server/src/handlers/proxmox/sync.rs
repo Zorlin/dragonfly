@@ -400,20 +400,8 @@ async fn sync_proxmox_machines(
                     };
                     let mut changed = false;
 
-                    // Status sync
-                    let new_state = match api_status.as_str() {
-                        "running" => MachineState::Installed,
-                        "stopped" => MachineState::Offline,
-                        _ => MachineState::ExistingOs {
-                            os_name: "Proxmox VM".to_string(),
-                        },
-                    };
-                    if machine.status.state != new_state {
-                        info!(
-                            "Sync: VM {} status {:?} → {:?}",
-                            vmid, machine.status.state, new_state
-                        );
-                        machine.status.state = new_state;
+                    // Status sync + complete the Installed mark for a running VM (#26)
+                    if apply_proxmox_vm_state(&mut machine, api_status) {
                         changed = true;
                     }
 
@@ -692,6 +680,104 @@ async fn sync_proxmox_machines(
     );
 
     Ok(())
+}
+
+/// Apply a Proxmox QEMU VM's API status to a machine, returning whether
+/// anything changed. A `running` VM is marked `Installed` and — if it wasn't
+/// already — the install is *completed* (`os_installed` set from `os_choice`,
+/// `os_choice` cleared, progress 100) so the mark is whole and
+/// `reimage_machine`'s OS fallback has something to work with (#26). Without
+/// this, a VM marked `Installed` only by the sync daemon (the pre-reboot
+/// workflow-event notification was lost) had `os_installed = None`, so Jetpack's
+/// `is_installed()` and the reimage OS-resolution both missed it.
+fn apply_proxmox_vm_state(machine: &mut dragonfly_common::Machine, api_status: &str) -> bool {
+    use dragonfly_common::MachineState;
+    let new_state = match api_status {
+        "running" => MachineState::Installed,
+        "stopped" => MachineState::Offline,
+        _ => MachineState::ExistingOs {
+            os_name: "Proxmox VM".to_string(),
+        },
+    };
+    let becoming_installed = matches!(new_state, MachineState::Installed);
+    let mut changed = false;
+    if machine.status.state != new_state {
+        info!(
+            "Sync: machine {} status {:?} → {:?}",
+            machine.id, machine.status.state, new_state
+        );
+        machine.status.state = new_state;
+        changed = true;
+    }
+    // Complete the Installed mark: a running VM has finished booting its
+    // (installed) OS, so record what we installed if we haven't yet.
+    if becoming_installed {
+        if machine.config.os_installed.is_none() && machine.config.os_choice.is_some() {
+            machine.config.os_installed = machine.config.os_choice.take();
+            info!(
+                "Sync: machine {} completed Installed mark (os_installed={})",
+                machine.id,
+                machine.config.os_installed.as_deref().unwrap_or("?")
+            );
+            changed = true;
+        }
+        if machine.config.installation_progress != 100 {
+            machine.config.installation_progress = 100;
+            changed = true;
+        }
+    }
+    changed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dragonfly_common::{Machine, MachineIdentity, MachineState};
+
+    fn vm(state: MachineState, os_choice: Option<&str>) -> Machine {
+        let mut m = Machine::new(MachineIdentity::from_mac("bc:24:11:22:33:44"));
+        m.status.state = state;
+        m.config.os_choice = os_choice.map(str::to_string);
+        m
+    }
+
+    #[test]
+    fn running_vm_completes_the_installed_mark() {
+        let mut m = vm(MachineState::Initializing, Some("debian-13"));
+        assert!(apply_proxmox_vm_state(&mut m, "running"));
+        assert_eq!(m.status.state, MachineState::Installed);
+        assert_eq!(m.config.os_installed.as_deref(), Some("debian-13"));
+        assert_eq!(m.config.os_choice, None);
+        assert_eq!(m.config.installation_progress, 100);
+    }
+
+    #[test]
+    fn already_installed_running_vm_is_idempotent() {
+        let mut m = vm(MachineState::Installed, None);
+        m.config.os_installed = Some("ubuntu-2404".into());
+        m.config.installation_progress = 100;
+        assert!(!apply_proxmox_vm_state(&mut m, "running"));
+        assert_eq!(m.config.os_installed.as_deref(), Some("ubuntu-2404"));
+        assert_eq!(m.config.installation_progress, 100);
+    }
+
+    #[test]
+    fn running_vm_without_os_choice_is_marked_installed_anyway() {
+        let mut m = vm(MachineState::Discovered, None);
+        assert!(apply_proxmox_vm_state(&mut m, "running"));
+        assert_eq!(m.status.state, MachineState::Installed);
+        assert_eq!(m.config.os_installed, None);
+        assert_eq!(m.config.installation_progress, 100);
+    }
+
+    #[test]
+    fn stopped_vm_is_marked_offline_without_completing_install() {
+        let mut m = vm(MachineState::Installed, Some("debian-13"));
+        assert!(apply_proxmox_vm_state(&mut m, "stopped"));
+        assert_eq!(m.status.state, MachineState::Offline);
+        assert_eq!(m.config.os_installed, None);
+        assert_eq!(m.config.installation_progress, 0);
+    }
 }
 
 /// Starts the background Proxmox sync task.
