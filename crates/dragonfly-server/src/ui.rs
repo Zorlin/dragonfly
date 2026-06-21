@@ -1042,7 +1042,7 @@ pub async fn settings_page(
         };
         info!("Current directory: {}", current_dir);
 
-        match fs::read_to_string("/var/lib/dragonfly/initial_password.txt") {
+        match tokio::fs::read_to_string("/var/lib/dragonfly/initial_password.txt").await {
             Ok(password) => {
                 info!("Found initial password file, will display to admin");
                 (true, password.trim().to_string())
@@ -1175,7 +1175,7 @@ pub async fn settings_page_section(
     };
 
     let (has_initial_password, rendered_password) = if is_authenticated {
-        match std::fs::read_to_string("/var/lib/dragonfly/initial_password.txt") {
+        match tokio::fs::read_to_string("/var/lib/dragonfly/initial_password.txt").await {
             Ok(password) => (true, password.trim().to_string()),
             Err(_) => (false, String::new()),
         }
@@ -1522,11 +1522,14 @@ pub async fn update_settings(
                                 .into_response();
                         } else {
                             // Password updated successfully, delete initial password file if it exists
-                            if std::path::Path::new("/var/lib/dragonfly/initial_password.txt")
-                                .exists()
+                            if tokio::fs::try_exists("/var/lib/dragonfly/initial_password.txt")
+                                .await
+                                .unwrap_or(false)
                             {
-                                if let Err(e) =
-                                    std::fs::remove_file("/var/lib/dragonfly/initial_password.txt")
+                                if let Err(e) = tokio::fs::remove_file(
+                                    "/var/lib/dragonfly/initial_password.txt",
+                                )
+                                .await
                                 {
                                     warn!("Failed to remove initial_password.txt: {}", e);
                                 }

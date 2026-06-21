@@ -575,7 +575,10 @@ pub async fn generate_default_credentials(
     store: &std::sync::Arc<dyn crate::store::v1::Store>,
 ) -> anyhow::Result<Credentials> {
     // Check if an initial password file already exists
-    if StdPath::new(INITIAL_PASSWORD_FILE).exists() {
+    if tokio::fs::try_exists(StdPath::new(INITIAL_PASSWORD_FILE))
+        .await
+        .unwrap_or(false)
+    {
         info!("Initial password file exists - attempting to load existing credentials from store");
         // Try to load credentials from store first
         if let Ok(Some(user)) = store.get_user_by_username("admin").await {
