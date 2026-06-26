@@ -1,5 +1,6 @@
 use anyhow::{Context, anyhow};
 use axum::extract::{MatchedPath, Path};
+use axum::middleware::from_fn;
 use axum::{Router, extract::Extension, http::StatusCode, response::IntoResponse, routing::get};
 use axum_login::AuthManagerLayerBuilder;
 use listenfd::ListenFd;
@@ -50,6 +51,7 @@ mod filters; // Uncomment unused module
 pub mod ha;
 pub mod handlers;
 pub mod image_cache;
+pub mod metrics_mw;
 pub mod mode;
 pub mod network_detect;
 pub mod os_templates;
@@ -794,6 +796,10 @@ pub async fn run() -> anyhow::Result<()> {
         .with(fmt::layer());
     // --- Logging Initialized ---
 
+    // Install the Prometheus recorder (global default) before serving traffic so
+    // /metrics and the request middleware have somewhere to record from the start.
+    metrics_mw::install().context("install prometheus recorder")?;
+
     // Determine modes SECOND (after logging is set up)
     let is_installation_server = std::env::var("DRAGONFLY_INSTALL_SERVER_MODE").is_ok();
     let is_explicit_demo_mode = std::env::var("DRAGONFLY_DEMO_MODE").is_ok();
@@ -1325,6 +1331,8 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(auth_router())
         .merge(ui::ui_router())
         .route("/favicon.ico", get(handle_favicon))
+        // Prometheus metrics for the HTTP serving pipeline (see metrics_mw).
+        .route("/metrics", get(metrics_mw::serve_metrics))
         // Boot endpoints - /boot/{mac} for iPXE scripts, /boot/{arch}/{asset} for kernel/initramfs
         .route("/boot/{mac}", get(api::ipxe_script))
         // Spark ELF - bare metal discovery agent (loaded by GRUB via multiboot2)
@@ -1402,6 +1410,8 @@ pub async fn run() -> anyhow::Result<()> {
                     tracing::error!(parent: span, latency = ?latency, error = ?error, "Request failed");
                 })
         )
+        // Per-request Prometheus metrics: count, latency, in-flight (see metrics_mw).
+        .layer(from_fn(metrics_mw::middleware))
         .with_state(app_state.clone()); // State applied here
 
     // Start handoff listener and network services
