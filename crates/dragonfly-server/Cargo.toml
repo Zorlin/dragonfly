@@ -149,6 +149,8 @@ http = "1"
 # Embed static assets in release builds
 rust-embed = { version = "8", features = ["interpolate-folder-path"] }
 mime_guess = "2"
+metrics = "0.24.6"
+metrics-exporter-prometheus = "0.18.3"
 
 [build-dependencies]
 minijinja-embed = "2.3.0"
