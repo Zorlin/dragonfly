@@ -2697,6 +2697,35 @@ async fn stream_artifact(
     }
 }
 
+/// Resolve a Range header against a known total size into
+/// `(start, end, response_length, content_range_header)`. Whole file when the
+/// header is absent or invalid. Used by the in-memory cache path (which knows
+/// the size from the cached buffer, without a disk `metadata` call).
+async fn resolve_byte_range(
+    range_header: Option<&HeaderValue>,
+    total_size: u64,
+) -> (u64, u64, u64, Option<String>) {
+    let whole = (0, total_size.saturating_sub(1), total_size, None);
+    let Some(rv) = range_header else {
+        return whole;
+    };
+    let Ok(range_str) = rv.to_str() else {
+        return whole;
+    };
+    match parse_range_header(range_str, total_size, None, None).await {
+        Some((start, end)) => {
+            let length = end - start + 1;
+            (
+                start,
+                end,
+                length,
+                Some(format!("bytes {}-{}/{}", start, end, total_size)),
+            )
+        }
+        None => whole,
+    }
+}
+
 async fn read_file_as_stream(
     path: &StdPath,
     range_header: Option<&HeaderValue>, // Add parameter for Range header
@@ -2717,6 +2746,45 @@ async fn read_file_as_stream(
         range_header.map(|h| h.to_str().unwrap_or("invalid")),
         machine_id
     );
+
+    // Zero-copy in-memory cache: one disk read per file, N concurrent clients
+    // stream `Bytes::slice` views of a single shared allocation (refcounted —
+    // no copy, no per-request disk read). Falls through to the disk path below
+    // for files larger than the cache cap (`TooLarge`) or if the load fails.
+    if let Some(app) = state {
+        match app.artifact_cache.get_or_load(path).await {
+            Ok(crate::artifact_cache::GetResult::Cached(bytes)) => {
+                let total_size = bytes.len() as u64;
+                let (start, end, response_length, content_range_header) =
+                    resolve_byte_range(range_header, total_size).await;
+                let slice = if total_size == 0 {
+                    bytes.slice(0..0)
+                } else {
+                    bytes.slice(start as usize..(end as usize + 1))
+                };
+                let (tx, rx) = mpsc::channel::<Result<Bytes, Error>>(32);
+                crate::artifact_cache::spawn_zero_copy_stream(slice, tx);
+                return Ok((
+                    tokio_stream::wrappers::ReceiverStream::new(rx),
+                    Some(response_length),
+                    content_range_header,
+                ));
+            }
+            Ok(crate::artifact_cache::GetResult::TooLarge(_)) => {
+                info!(
+                    "[STREAM_READ] {} exceeds cache cap; streaming from disk",
+                    path.display()
+                );
+            }
+            Err(e) => {
+                warn!(
+                    "[STREAM_READ] cache load failed for {}: {}; streaming from disk",
+                    path.display(),
+                    e
+                );
+            }
+        }
+    }
 
     let mut file = fs::File::open(path)
         .await
@@ -5661,7 +5729,12 @@ pub async fn download_ipxe_binaries() -> anyhow::Result<()> {
 const OS_IMAGES_DIR: &str = "/var/lib/dragonfly/os-images";
 
 /// Serve OS image file
-pub async fn serve_os_image(os: &str, arch: &str, range: Option<&HeaderValue>) -> Response {
+pub async fn serve_os_image(
+    os: &str,
+    arch: &str,
+    range: Option<&HeaderValue>,
+    state: &AppState,
+) -> Response {
     let path = match os {
         "debian-13" => {
             let filename = format!("debian-13-generic-{}.tar.xz", arch);
@@ -5683,7 +5756,7 @@ pub async fn serve_os_image(os: &str, arch: &str, range: Option<&HeaderValue>) -
     // OS images are multi-GB and every imaging machine pulls one concurrently;
     // stream in 64 KiB chunks (constant memory + Range) instead of buffering
     // the whole file. See `stream_artifact`.
-    stream_artifact(&path, "application/x-xz", range, None, None).await
+    stream_artifact(&path, "application/x-xz", range, Some(state), None).await
 }
 
 /// Serve cached image file (JIT-converted QCOW2 to raw)
@@ -5713,7 +5786,7 @@ pub async fn serve_cached_image(
                 &canonical,
                 content_type,
                 headers.get(axum::http::header::RANGE),
-                None,
+                Some(&state),
                 None,
             )
             .await

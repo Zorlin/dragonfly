@@ -63,6 +63,7 @@ pub async fn create_test_app_state() -> AppState {
         store_proxy,
         network_services_started: Arc::new(AtomicBool::new(false)),
         image_cache,
+        artifact_cache: Arc::new(crate::artifact_cache::ArtifactCache::new(1024 * 1024)),
         services_shutdown_tx: Arc::new(Mutex::new(None)),
         dhcp_lease_table: Arc::new(tokio::sync::RwLock::new(dragonfly_dhcp::LeaseTable::new())),
         ha_manager: Arc::new(ha::HaManager::new("test-node".to_string())),

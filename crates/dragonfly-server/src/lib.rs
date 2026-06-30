@@ -1,7 +1,10 @@
 use anyhow::{Context, anyhow};
 use axum::extract::{MatchedPath, Path};
 use axum::middleware::from_fn;
-use axum::{Router, extract::Extension, http::StatusCode, response::IntoResponse, routing::get};
+use axum::{
+    Router, extract::Extension, extract::State, http::StatusCode, response::IntoResponse,
+    routing::get,
+};
 use axum_login::AuthManagerLayerBuilder;
 use listenfd::ListenFd;
 use std::net::SocketAddr;
@@ -42,6 +45,7 @@ use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt};
 pub mod agent_ws;
 mod api;
 pub mod api_token;
+pub mod artifact_cache;
 mod auth;
 pub mod cluster;
 pub mod dns_sync;
@@ -339,6 +343,9 @@ pub struct AppState {
     pub network_services_started: Arc<AtomicBool>,
     // Image cache for JIT QCOW2 conversion
     pub image_cache: Arc<image_cache::ImageCache>,
+    // Zero-copy in-memory cache of served artifacts (boot assets, OS/cached
+    // images): one disk read per file, N clients stream zero-copy slices.
+    pub artifact_cache: Arc<artifact_cache::ArtifactCache>,
     // Shutdown sender for network services (allows independent restart)
     pub services_shutdown_tx: Arc<Mutex<Option<watch::Sender<bool>>>>,
     // Shared DHCP lease table — survives service restarts, queryable from API
@@ -1284,6 +1291,9 @@ pub async fn run() -> anyhow::Result<()> {
         network_services_started: Arc::new(AtomicBool::new(false)),
         // Image cache for JIT QCOW2 conversion
         image_cache: image_cache.clone(),
+        artifact_cache: Arc::new(artifact_cache::ArtifactCache::new(
+            artifact_cache::ArtifactCache::max_bytes_from_env(),
+        )),
         // Services shutdown sender for independent restart
         services_shutdown_tx: Arc::new(Mutex::new(None)),
         // Shared DHCP lease table
@@ -1356,16 +1366,26 @@ pub async fn run() -> anyhow::Result<()> {
         // OS images (served during provisioning)
         .route(
             "/os/debian-13/amd64",
-            get(|headers: axum::http::HeaderMap| async move {
-                api::serve_os_image("debian-13", "amd64", headers.get(axum::http::header::RANGE))
-                    .await
+            get(|State(app_state): State<AppState>, headers: axum::http::HeaderMap| async move {
+                api::serve_os_image(
+                    "debian-13",
+                    "amd64",
+                    headers.get(axum::http::header::RANGE),
+                    &app_state,
+                )
+                .await
             }),
         )
         .route(
             "/os/debian-13/arm64",
-            get(|headers: axum::http::HeaderMap| async move {
-                api::serve_os_image("debian-13", "arm64", headers.get(axum::http::header::RANGE))
-                    .await
+            get(|State(app_state): State<AppState>, headers: axum::http::HeaderMap| async move {
+                api::serve_os_image(
+                    "debian-13",
+                    "arm64",
+                    headers.get(axum::http::header::RANGE),
+                    &app_state,
+                )
+                .await
             }),
         )
         // Cached images (JIT-converted QCOW2 to raw)
